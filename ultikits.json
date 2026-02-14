@@ -1,0 +1,6 @@
+{
+  "identifyString": "ultilogin",
+  "name": "UltiLogin",
+  "shortDescription": "安全的玩家登录认证系统，支持GUI和命令两种模式、SHA-256加盐加密、会话保持和暴力破解防护。",
+  "categoryId": 5
+}
