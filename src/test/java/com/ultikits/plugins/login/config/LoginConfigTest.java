@@ -610,6 +610,36 @@ class LoginConfigTest {
     }
 
     @Nested
+    @DisplayName("UltiCloud Settings")
+    class UltiCloudSettings {
+
+        @Test
+        @DisplayName("Should have ulticloud disabled by default")
+        void ulticloudDisabledByDefault() {
+            LoginConfig config = createRealConfig();
+            assertThat(config.isUlticloudEnabled()).isFalse();
+        }
+
+        @Test
+        @DisplayName("Should update ulticloud enabled")
+        void setUlticloudEnabled() {
+            LoginConfig config = createRealConfig();
+            config.setUlticloudEnabled(true);
+            assertThat(config.isUlticloudEnabled()).isTrue();
+        }
+
+        @Test
+        @DisplayName("Should toggle ulticloud enabled back to false")
+        void toggleUlticloudEnabled() {
+            LoginConfig config = createRealConfig();
+            config.setUlticloudEnabled(true);
+            assertThat(config.isUlticloudEnabled()).isTrue();
+            config.setUlticloudEnabled(false);
+            assertThat(config.isUlticloudEnabled()).isFalse();
+        }
+    }
+
+    @Nested
     @DisplayName("Config File Path")
     class ConfigFilePath {
 

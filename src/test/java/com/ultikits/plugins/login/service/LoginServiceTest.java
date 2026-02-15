@@ -7,12 +7,18 @@ import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.Query;
 
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.Server;
+import org.bukkit.World;
 import org.bukkit.entity.Player;
+import org.bukkit.potion.PotionEffect;
+import org.bukkit.potion.PotionEffectType;
+import org.bukkit.scheduler.BukkitTask;
 import org.junit.jupiter.api.*;
 
 import java.lang.reflect.Field;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -1215,6 +1221,995 @@ class LoginServiceTest {
             LoginService.LoginResult result = new LoginService.LoginResult(false, "Failed!");
             assertThat(result.isSuccess()).isFalse();
             assertThat(result.getMessage()).isEqualTo("Failed!");
+        }
+    }
+
+    // ==================== onPlayerJoin ====================
+
+    @Nested
+    @DisplayName("onPlayerJoin")
+    class OnPlayerJoin {
+
+        @Test
+        @DisplayName("Should mark player as not logged in")
+        void markNotLoggedIn() {
+            // Mock player location for clone
+            Location mockLoc = mock(Location.class);
+            when(mockLoc.clone()).thenReturn(mockLoc);
+            when(player.getLocation()).thenReturn(mockLoc);
+            when(config.isSessionEnabled()).thenReturn(false);
+            when(config.isBlindEffect()).thenReturn(false);
+            when(config.isSpawnLocationEnabled()).thenReturn(false);
+            when(mockQuery.list()).thenReturn(Collections.emptyList());
+
+            service.onPlayerJoin(player);
+
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+        }
+
+        @Test
+        @DisplayName("Should auto-login when session is valid")
+        void autoLoginWithSession() throws Exception {
+            // Set up a valid session
+            when(config.isSessionEnabled()).thenReturn(true);
+            when(config.getSessionTimeout()).thenReturn(30);
+
+            @SuppressWarnings("unchecked")
+            Map<String, Long> sessions = (Map<String, Long>) getFieldValue(service, "sessions");
+            sessions.put("127.0.0.1:" + playerUuid, System.currentTimeMillis());
+
+            Location mockLoc = mock(Location.class);
+            when(mockLoc.clone()).thenReturn(mockLoc);
+            when(player.getLocation()).thenReturn(mockLoc);
+
+            service.onPlayerJoin(player);
+
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+            verify(player).sendMessage(contains("会话有效"));
+        }
+
+        @Test
+        @DisplayName("Should apply blind effect when enabled and no session")
+        void applyBlindEffect() {
+            Location mockLoc = mock(Location.class);
+            when(mockLoc.clone()).thenReturn(mockLoc);
+            when(player.getLocation()).thenReturn(mockLoc);
+            when(config.isSessionEnabled()).thenReturn(false);
+            when(config.isBlindEffect()).thenReturn(true);
+            when(config.isSpawnLocationEnabled()).thenReturn(false);
+            when(mockQuery.list()).thenReturn(Collections.emptyList());
+
+            service.onPlayerJoin(player);
+
+            verify(player).addPotionEffect(any(PotionEffect.class));
+        }
+
+        @Test
+        @DisplayName("Should not apply blind effect when disabled")
+        void noBlindEffect() {
+            Location mockLoc = mock(Location.class);
+            when(mockLoc.clone()).thenReturn(mockLoc);
+            when(player.getLocation()).thenReturn(mockLoc);
+            when(config.isSessionEnabled()).thenReturn(false);
+            when(config.isBlindEffect()).thenReturn(false);
+            when(config.isSpawnLocationEnabled()).thenReturn(false);
+            when(mockQuery.list()).thenReturn(Collections.emptyList());
+
+            service.onPlayerJoin(player);
+
+            verify(player, never()).addPotionEffect(any(PotionEffect.class));
+        }
+
+        @Test
+        @DisplayName("Should teleport to spawn when spawn location enabled and world exists")
+        void teleportToSpawn() {
+            Location mockLoc = mock(Location.class);
+            when(mockLoc.clone()).thenReturn(mockLoc);
+            when(player.getLocation()).thenReturn(mockLoc);
+            when(config.isSessionEnabled()).thenReturn(false);
+            when(config.isBlindEffect()).thenReturn(false);
+            when(config.isSpawnLocationEnabled()).thenReturn(true);
+            when(config.getSpawnWorld()).thenReturn("world");
+            when(config.getSpawnX()).thenReturn(100.0);
+            when(config.getSpawnY()).thenReturn(64.0);
+            when(config.getSpawnZ()).thenReturn(200.0);
+
+            // Mock Bukkit.getWorld via the server field
+            try {
+                Field serverField = Bukkit.class.getDeclaredField("server");
+                serverField.setAccessible(true);
+                Server server = (Server) serverField.get(null);
+                World mockWorld = mock(World.class);
+                when(server.getWorld("world")).thenReturn(mockWorld);
+            } catch (Exception e) {
+                // Skip if can't mock
+            }
+
+            when(mockQuery.list()).thenReturn(Collections.emptyList());
+
+            service.onPlayerJoin(player);
+
+            verify(player).teleport(any(Location.class));
+        }
+
+        @Test
+        @DisplayName("Should not teleport when spawn location enabled but world is null")
+        void noTeleportNullWorld() {
+            Location mockLoc = mock(Location.class);
+            when(mockLoc.clone()).thenReturn(mockLoc);
+            when(player.getLocation()).thenReturn(mockLoc);
+            when(config.isSessionEnabled()).thenReturn(false);
+            when(config.isBlindEffect()).thenReturn(false);
+            when(config.isSpawnLocationEnabled()).thenReturn(true);
+            when(config.getSpawnWorld()).thenReturn("nonexistent_world");
+
+            try {
+                Field serverField = Bukkit.class.getDeclaredField("server");
+                serverField.setAccessible(true);
+                Server server = (Server) serverField.get(null);
+                when(server.getWorld("nonexistent_world")).thenReturn(null);
+            } catch (Exception e) {
+                // Skip if can't mock
+            }
+
+            when(mockQuery.list()).thenReturn(Collections.emptyList());
+
+            service.onPlayerJoin(player);
+
+            verify(player, never()).teleport(any(Location.class));
+        }
+
+        @Test
+        @DisplayName("Should send login prompt for registered player in command mode")
+        void loginPromptCommandMode() {
+            Location mockLoc = mock(Location.class);
+            when(mockLoc.clone()).thenReturn(mockLoc);
+            when(player.getLocation()).thenReturn(mockLoc);
+            when(config.isSessionEnabled()).thenReturn(false);
+            when(config.isBlindEffect()).thenReturn(false);
+            when(config.isSpawnLocationEnabled()).thenReturn(false);
+            when(config.isGuiModeEnabled()).thenReturn(false);
+            when(config.getLoginPrompt()).thenReturn("&eLogin with /login");
+
+            // Player IS registered
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.onPlayerJoin(player);
+
+            verify(player).sendMessage(contains("Login with /login"));
+        }
+
+        @Test
+        @DisplayName("Should send login prompt for registered player in GUI mode")
+        void loginPromptGuiMode() {
+            Location mockLoc = mock(Location.class);
+            when(mockLoc.clone()).thenReturn(mockLoc);
+            when(player.getLocation()).thenReturn(mockLoc);
+            when(config.isSessionEnabled()).thenReturn(false);
+            when(config.isBlindEffect()).thenReturn(false);
+            when(config.isSpawnLocationEnabled()).thenReturn(false);
+            when(config.isGuiModeEnabled()).thenReturn(true);
+            when(config.getLoginPromptGui()).thenReturn("&eUse GUI to login");
+
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.onPlayerJoin(player);
+
+            verify(player).sendMessage(contains("Use GUI to login"));
+        }
+
+        @Test
+        @DisplayName("Should send register prompt for unregistered player in command mode")
+        void registerPromptCommandMode() {
+            Location mockLoc = mock(Location.class);
+            when(mockLoc.clone()).thenReturn(mockLoc);
+            when(player.getLocation()).thenReturn(mockLoc);
+            when(config.isSessionEnabled()).thenReturn(false);
+            when(config.isBlindEffect()).thenReturn(false);
+            when(config.isSpawnLocationEnabled()).thenReturn(false);
+            when(config.isGuiModeEnabled()).thenReturn(false);
+            when(config.getRegisterPrompt()).thenReturn("&eRegister with /register");
+
+            when(mockQuery.list()).thenReturn(Collections.emptyList());
+
+            service.onPlayerJoin(player);
+
+            verify(player).sendMessage(contains("Register with /register"));
+        }
+
+        @Test
+        @DisplayName("Should send register prompt for unregistered player in GUI mode")
+        void registerPromptGuiMode() {
+            Location mockLoc = mock(Location.class);
+            when(mockLoc.clone()).thenReturn(mockLoc);
+            when(player.getLocation()).thenReturn(mockLoc);
+            when(config.isSessionEnabled()).thenReturn(false);
+            when(config.isBlindEffect()).thenReturn(false);
+            when(config.isSpawnLocationEnabled()).thenReturn(false);
+            when(config.isGuiModeEnabled()).thenReturn(true);
+            when(config.getRegisterPromptGui()).thenReturn("&eUse GUI to register");
+
+            when(mockQuery.list()).thenReturn(Collections.emptyList());
+
+            service.onPlayerJoin(player);
+
+            verify(player).sendMessage(contains("Use GUI to register"));
+        }
+
+        @Test
+        @DisplayName("Should store original location on join")
+        void storeOriginalLocation() throws Exception {
+            Location mockLoc = mock(Location.class);
+            Location clonedLoc = mock(Location.class);
+            when(mockLoc.clone()).thenReturn(clonedLoc);
+            when(player.getLocation()).thenReturn(mockLoc);
+            when(config.isSessionEnabled()).thenReturn(false);
+            when(config.isBlindEffect()).thenReturn(false);
+            when(config.isSpawnLocationEnabled()).thenReturn(false);
+            when(mockQuery.list()).thenReturn(Collections.emptyList());
+
+            service.onPlayerJoin(player);
+
+            @SuppressWarnings("unchecked")
+            Map<UUID, Location> originalLocations =
+                    (Map<UUID, Location>) getFieldValue(service, "originalLocations");
+            assertThat(originalLocations).containsKey(playerUuid);
+            assertThat(originalLocations.get(playerUuid)).isSameAs(clonedLoc);
+        }
+
+        @Test
+        @DisplayName("Should track join time")
+        void trackJoinTime() throws Exception {
+            Location mockLoc = mock(Location.class);
+            when(mockLoc.clone()).thenReturn(mockLoc);
+            when(player.getLocation()).thenReturn(mockLoc);
+            when(config.isSessionEnabled()).thenReturn(false);
+            when(config.isBlindEffect()).thenReturn(false);
+            when(config.isSpawnLocationEnabled()).thenReturn(false);
+            when(mockQuery.list()).thenReturn(Collections.emptyList());
+
+            long before = System.currentTimeMillis();
+            service.onPlayerJoin(player);
+
+            @SuppressWarnings("unchecked")
+            Map<UUID, Long> joinTimes = (Map<UUID, Long>) getFieldValue(service, "joinTimes");
+            assertThat(joinTimes).containsKey(playerUuid);
+            assertThat(joinTimes.get(playerUuid)).isGreaterThanOrEqualTo(before);
+        }
+    }
+
+    // ==================== onPlayerQuit with polling task ====================
+
+    @Nested
+    @DisplayName("onPlayerQuit with polling task")
+    class OnPlayerQuitWithPolling {
+
+        @Test
+        @DisplayName("Should cancel polling task on quit")
+        void cancelPollingTask() throws Exception {
+            @SuppressWarnings("unchecked")
+            Map<UUID, BukkitTask> pollingTasks =
+                    (Map<UUID, BukkitTask>) getFieldValue(service, "pollingTasks");
+
+            BukkitTask mockTask = mock(BukkitTask.class);
+            pollingTasks.put(playerUuid, mockTask);
+
+            service.onPlayerQuit(player);
+
+            verify(mockTask).cancel();
+            assertThat(pollingTasks).doesNotContainKey(playerUuid);
+        }
+
+        @Test
+        @DisplayName("Should handle quit when no polling task exists")
+        void noPollingTask() {
+            // Should not throw
+            service.onPlayerQuit(player);
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+        }
+    }
+
+    // ==================== checkTimeouts ====================
+
+    @Nested
+    @DisplayName("checkTimeouts")
+    class CheckTimeouts {
+
+        @Test
+        @DisplayName("Should kick timed-out players")
+        void kickTimedOut() throws Exception {
+            when(config.getLoginTimeout()).thenReturn(60);
+            when(config.getTimeoutKick()).thenReturn("&cLogin timeout!");
+
+            // Inject join time in the past (2 minutes ago)
+            @SuppressWarnings("unchecked")
+            Map<UUID, Long> joinTimes = (Map<UUID, Long>) getFieldValue(service, "joinTimes");
+            joinTimes.put(playerUuid, System.currentTimeMillis() - 120000);
+
+            // Mock Bukkit.getPlayer
+            try {
+                Field serverField = Bukkit.class.getDeclaredField("server");
+                serverField.setAccessible(true);
+                Server server = (Server) serverField.get(null);
+                when(server.getPlayer(playerUuid)).thenReturn(player);
+            } catch (Exception e) {
+                // Skip
+            }
+
+            service.checkTimeouts();
+
+            verify(player).kickPlayer(contains("Login timeout"));
+        }
+
+        @Test
+        @DisplayName("Should not kick players within timeout period")
+        void noKickWithinTimeout() throws Exception {
+            when(config.getLoginTimeout()).thenReturn(60);
+
+            // Inject recent join time (just now)
+            @SuppressWarnings("unchecked")
+            Map<UUID, Long> joinTimes = (Map<UUID, Long>) getFieldValue(service, "joinTimes");
+            joinTimes.put(playerUuid, System.currentTimeMillis());
+
+            service.checkTimeouts();
+
+            verify(player, never()).kickPlayer(anyString());
+        }
+
+        @Test
+        @DisplayName("Should handle offline player in timeout check")
+        void offlinePlayerTimeout() throws Exception {
+            when(config.getLoginTimeout()).thenReturn(60);
+
+            @SuppressWarnings("unchecked")
+            Map<UUID, Long> joinTimes = (Map<UUID, Long>) getFieldValue(service, "joinTimes");
+            UUID offlineUuid = UUID.randomUUID();
+            joinTimes.put(offlineUuid, System.currentTimeMillis() - 120000);
+
+            // Bukkit.getPlayer returns null for offline
+            try {
+                Field serverField = Bukkit.class.getDeclaredField("server");
+                serverField.setAccessible(true);
+                Server server = (Server) serverField.get(null);
+                when(server.getPlayer(offlineUuid)).thenReturn(null);
+            } catch (Exception e) {
+                // Skip
+            }
+
+            // Should not throw
+            service.checkTimeouts();
+
+            verify(player, never()).kickPlayer(anyString());
+        }
+
+        @Test
+        @DisplayName("Should handle player online check returning false")
+        void playerNotOnline() throws Exception {
+            when(config.getLoginTimeout()).thenReturn(60);
+
+            @SuppressWarnings("unchecked")
+            Map<UUID, Long> joinTimes = (Map<UUID, Long>) getFieldValue(service, "joinTimes");
+            joinTimes.put(playerUuid, System.currentTimeMillis() - 120000);
+
+            Player offlinePlayer = mock(Player.class);
+            when(offlinePlayer.isOnline()).thenReturn(false);
+
+            try {
+                Field serverField = Bukkit.class.getDeclaredField("server");
+                serverField.setAccessible(true);
+                Server server = (Server) serverField.get(null);
+                when(server.getPlayer(playerUuid)).thenReturn(offlinePlayer);
+            } catch (Exception e) {
+                // Skip
+            }
+
+            service.checkTimeouts();
+
+            verify(offlinePlayer, never()).kickPlayer(anyString());
+        }
+    }
+
+    // ==================== Panel Methods ====================
+
+    @Nested
+    @DisplayName("isPanelEnabled")
+    class IsPanelEnabled {
+
+        @Test
+        @DisplayName("Should return true when ulticloud enabled")
+        void enabled() {
+            when(config.isUlticloudEnabled()).thenReturn(true);
+            assertThat(service.isPanelEnabled()).isTrue();
+        }
+
+        @Test
+        @DisplayName("Should return false when ulticloud disabled")
+        void disabled() {
+            when(config.isUlticloudEnabled()).thenReturn(false);
+            assertThat(service.isPanelEnabled()).isFalse();
+        }
+    }
+
+    @Nested
+    @DisplayName("generateVerificationCode")
+    class GenerateVerificationCode {
+
+        @Test
+        @DisplayName("Should generate 6-digit code")
+        void sixDigits() {
+            String code = service.generateVerificationCode();
+
+            assertThat(code).hasSize(6);
+            assertThat(code).matches("\\d{6}");
+        }
+
+        @Test
+        @DisplayName("Should generate codes >= 100000")
+        void minValue() {
+            // Generate multiple codes to verify range
+            for (int i = 0; i < 20; i++) {
+                String code = service.generateVerificationCode();
+                int value = Integer.parseInt(code);
+                assertThat(value).isGreaterThanOrEqualTo(100000);
+                assertThat(value).isLessThanOrEqualTo(999999);
+            }
+        }
+
+        @Test
+        @DisplayName("Should generate different codes")
+        void differentCodes() {
+            Set<String> codes = new HashSet<>();
+            for (int i = 0; i < 10; i++) {
+                codes.add(service.generateVerificationCode());
+            }
+            // With 10 random 6-digit codes, duplicates are extremely unlikely
+            assertThat(codes.size()).isGreaterThan(1);
+        }
+    }
+
+    @Nested
+    @DisplayName("requestPanelLink")
+    class RequestPanelLink {
+
+        @Test
+        @DisplayName("Should return failure when panel not enabled")
+        void panelNotEnabled() {
+            when(config.isUlticloudEnabled()).thenReturn(false);
+
+            LoginService.PanelLinkResult result = service.requestPanelLink(player);
+
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(result.getUrl()).isNull();
+            assertThat(result.getError()).contains("not enabled");
+        }
+
+        @Test
+        @DisplayName("Should not have pending request when panel not enabled")
+        void noPendingRequestWhenDisabled() {
+            when(config.isUlticloudEnabled()).thenReturn(false);
+
+            service.requestPanelLink(player);
+
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+        }
+    }
+
+    @Nested
+    @DisplayName("completePanelLogin")
+    class CompletePanelLogin {
+
+        @Test
+        @DisplayName("Should return false for unknown request ID")
+        void unknownRequestId() {
+            boolean result = service.completePanelLogin("nonexistent-id");
+            assertThat(result).isFalse();
+        }
+
+        @Test
+        @DisplayName("Should return false for unknown request ID with role")
+        void unknownRequestIdWithRole() {
+            boolean result = service.completePanelLogin("nonexistent-id", true);
+            assertThat(result).isFalse();
+        }
+
+        @Test
+        @DisplayName("Should complete login for valid pending request")
+        void validRequest() throws Exception {
+            // Inject pending request
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            @SuppressWarnings("unchecked")
+            Map<String, Long> pendingPanelTimestamps =
+                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
+
+            String requestId = "test-request-123";
+            pendingPanelRequests.put(requestId, playerUuid);
+            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
+
+            // Mock Bukkit.getPlayer to return our player
+            try {
+                Field serverField = Bukkit.class.getDeclaredField("server");
+                serverField.setAccessible(true);
+                Server server = (Server) serverField.get(null);
+                when(server.getPlayer(playerUuid)).thenReturn(player);
+            } catch (Exception e) {
+                // Skip
+            }
+
+            // Return account for update
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            boolean result = service.completePanelLogin(requestId, false);
+
+            assertThat(result).isTrue();
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+            // Request should be cleaned up
+            assertThat(pendingPanelRequests).doesNotContainKey(requestId);
+            assertThat(pendingPanelTimestamps).doesNotContainKey(requestId);
+        }
+
+        @Test
+        @DisplayName("Should send owner message when isServerOwner true")
+        void ownerMessage() throws Exception {
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            @SuppressWarnings("unchecked")
+            Map<String, Long> pendingPanelTimestamps =
+                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
+
+            String requestId = "test-owner-request";
+            pendingPanelRequests.put(requestId, playerUuid);
+            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
+
+            try {
+                Field serverField = Bukkit.class.getDeclaredField("server");
+                serverField.setAccessible(true);
+                Server server = (Server) serverField.get(null);
+                when(server.getPlayer(playerUuid)).thenReturn(player);
+            } catch (Exception e) {
+                // Skip
+            }
+
+            when(mockQuery.list()).thenReturn(Collections.singletonList(
+                    UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt")));
+
+            boolean result = service.completePanelLogin(requestId, true);
+
+            assertThat(result).isTrue();
+            // Verify i18n was called with owner key
+            verify(UltiLoginTestHelper.getMockPlugin()).i18n("panel_auth_success_owner");
+        }
+
+        @Test
+        @DisplayName("Should send player message when isServerOwner false")
+        void playerMessage() throws Exception {
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            @SuppressWarnings("unchecked")
+            Map<String, Long> pendingPanelTimestamps =
+                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
+
+            String requestId = "test-player-request";
+            pendingPanelRequests.put(requestId, playerUuid);
+            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
+
+            try {
+                Field serverField = Bukkit.class.getDeclaredField("server");
+                serverField.setAccessible(true);
+                Server server = (Server) serverField.get(null);
+                when(server.getPlayer(playerUuid)).thenReturn(player);
+            } catch (Exception e) {
+                // Skip
+            }
+
+            when(mockQuery.list()).thenReturn(Collections.singletonList(
+                    UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt")));
+
+            boolean result = service.completePanelLogin(requestId, false);
+
+            assertThat(result).isTrue();
+            verify(UltiLoginTestHelper.getMockPlugin()).i18n("panel_auth_success_player");
+        }
+
+        @Test
+        @DisplayName("Should return false when player is offline")
+        void playerOffline() throws Exception {
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            @SuppressWarnings("unchecked")
+            Map<String, Long> pendingPanelTimestamps =
+                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
+
+            String requestId = "test-offline-request";
+            pendingPanelRequests.put(requestId, playerUuid);
+            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
+
+            // Bukkit.getPlayer returns null (offline)
+            try {
+                Field serverField = Bukkit.class.getDeclaredField("server");
+                serverField.setAccessible(true);
+                Server server = (Server) serverField.get(null);
+                when(server.getPlayer(playerUuid)).thenReturn(null);
+            } catch (Exception e) {
+                // Skip
+            }
+
+            boolean result = service.completePanelLogin(requestId);
+
+            assertThat(result).isFalse();
+        }
+
+        @Test
+        @DisplayName("Should create session after panel login when enabled")
+        void createSessionAfterPanelLogin() throws Exception {
+            when(config.isSessionEnabled()).thenReturn(true);
+
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            @SuppressWarnings("unchecked")
+            Map<String, Long> pendingPanelTimestamps =
+                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
+
+            String requestId = "test-session-request";
+            pendingPanelRequests.put(requestId, playerUuid);
+            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
+
+            try {
+                Field serverField = Bukkit.class.getDeclaredField("server");
+                serverField.setAccessible(true);
+                Server server = (Server) serverField.get(null);
+                when(server.getPlayer(playerUuid)).thenReturn(player);
+            } catch (Exception e) {
+                // Skip
+            }
+
+            when(mockQuery.list()).thenReturn(Collections.singletonList(
+                    UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt")));
+
+            service.completePanelLogin(requestId, false);
+
+            assertThat(service.hasValidSession(player)).isTrue();
+        }
+
+        @Test
+        @DisplayName("Should update account on panel login")
+        void updateAccountOnPanelLogin() throws Exception {
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            @SuppressWarnings("unchecked")
+            Map<String, Long> pendingPanelTimestamps =
+                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
+
+            String requestId = "test-update-request";
+            pendingPanelRequests.put(requestId, playerUuid);
+            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
+
+            try {
+                Field serverField = Bukkit.class.getDeclaredField("server");
+                serverField.setAccessible(true);
+                Server server = (Server) serverField.get(null);
+                when(server.getPlayer(playerUuid)).thenReturn(player);
+            } catch (Exception e) {
+                // Skip
+            }
+
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.completePanelLogin(requestId, false);
+
+            verify(dataOperator).update(any(AccountData.class));
+        }
+
+        @Test
+        @DisplayName("Should handle update exception during panel login")
+        void updateExceptionOnPanelLogin() throws Exception {
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            @SuppressWarnings("unchecked")
+            Map<String, Long> pendingPanelTimestamps =
+                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
+
+            String requestId = "test-exception-request";
+            pendingPanelRequests.put(requestId, playerUuid);
+            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
+
+            try {
+                Field serverField = Bukkit.class.getDeclaredField("server");
+                serverField.setAccessible(true);
+                Server server = (Server) serverField.get(null);
+                when(server.getPlayer(playerUuid)).thenReturn(player);
+            } catch (Exception e) {
+                // Skip
+            }
+
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+            doThrow(new IllegalAccessException("update failed")).when(dataOperator).update(any());
+
+            // Should still return true (login succeeds, update failure is logged)
+            boolean result = service.completePanelLogin(requestId, false);
+            assertThat(result).isTrue();
+        }
+
+        @Test
+        @DisplayName("Should handle null account during panel login")
+        void nullAccountPanelLogin() throws Exception {
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            @SuppressWarnings("unchecked")
+            Map<String, Long> pendingPanelTimestamps =
+                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
+
+            String requestId = "test-null-account-request";
+            pendingPanelRequests.put(requestId, playerUuid);
+            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
+
+            try {
+                Field serverField = Bukkit.class.getDeclaredField("server");
+                serverField.setAccessible(true);
+                Server server = (Server) serverField.get(null);
+                when(server.getPlayer(playerUuid)).thenReturn(player);
+            } catch (Exception e) {
+                // Skip
+            }
+
+            // No account exists
+            when(mockQuery.list()).thenReturn(Collections.emptyList());
+
+            boolean result = service.completePanelLogin(requestId, false);
+
+            // Should still complete login (account update is optional)
+            assertThat(result).isTrue();
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+            // update should NOT be called since account is null
+            verify(dataOperator, never()).update(any());
+        }
+
+        @Test
+        @DisplayName("Single-arg completePanelLogin delegates to two-arg with isServerOwner=false")
+        void singleArgDelegatesToTwoArg() throws Exception {
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            @SuppressWarnings("unchecked")
+            Map<String, Long> pendingPanelTimestamps =
+                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
+
+            String requestId = "test-delegate-request";
+            pendingPanelRequests.put(requestId, playerUuid);
+            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
+
+            try {
+                Field serverField = Bukkit.class.getDeclaredField("server");
+                serverField.setAccessible(true);
+                Server server = (Server) serverField.get(null);
+                when(server.getPlayer(playerUuid)).thenReturn(player);
+            } catch (Exception e) {
+                // Skip
+            }
+
+            when(mockQuery.list()).thenReturn(Collections.singletonList(
+                    UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt")));
+
+            boolean result = service.completePanelLogin(requestId);
+
+            assertThat(result).isTrue();
+            // Should use player message key (not owner)
+            verify(UltiLoginTestHelper.getMockPlugin()).i18n("panel_auth_success_player");
+        }
+    }
+
+    // ==================== hasPendingPanelRequest ====================
+
+    @Nested
+    @DisplayName("hasPendingPanelRequest")
+    class HasPendingPanelRequest {
+
+        @Test
+        @DisplayName("Should return false when no pending requests")
+        void noPendingRequests() {
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+        }
+
+        @Test
+        @DisplayName("Should return true when player has pending request")
+        void hasPendingRequest() throws Exception {
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            pendingPanelRequests.put("some-request-id", playerUuid);
+
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isTrue();
+        }
+
+        @Test
+        @DisplayName("Should return false for different player UUID")
+        void differentPlayer() throws Exception {
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            pendingPanelRequests.put("some-request-id", UUID.randomUUID());
+
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+        }
+    }
+
+    // ==================== cleanupExpiredPanelRequests ====================
+
+    @Nested
+    @DisplayName("cleanupExpiredPanelRequests")
+    class CleanupExpiredPanelRequests {
+
+        @Test
+        @DisplayName("Should remove expired requests")
+        void removeExpired() throws Exception {
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            @SuppressWarnings("unchecked")
+            Map<String, Long> pendingPanelTimestamps =
+                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
+
+            // Add an expired request (6 minutes ago)
+            pendingPanelRequests.put("expired-id", UUID.randomUUID());
+            pendingPanelTimestamps.put("expired-id", System.currentTimeMillis() - 6 * 60 * 1000L);
+
+            service.cleanupExpiredPanelRequests();
+
+            assertThat(pendingPanelRequests).doesNotContainKey("expired-id");
+            assertThat(pendingPanelTimestamps).doesNotContainKey("expired-id");
+        }
+
+        @Test
+        @DisplayName("Should keep non-expired requests")
+        void keepNonExpired() throws Exception {
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            @SuppressWarnings("unchecked")
+            Map<String, Long> pendingPanelTimestamps =
+                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
+
+            UUID someUuid = UUID.randomUUID();
+            pendingPanelRequests.put("fresh-id", someUuid);
+            pendingPanelTimestamps.put("fresh-id", System.currentTimeMillis());
+
+            service.cleanupExpiredPanelRequests();
+
+            assertThat(pendingPanelRequests).containsKey("fresh-id");
+            assertThat(pendingPanelTimestamps).containsKey("fresh-id");
+        }
+
+        @Test
+        @DisplayName("Should remove only expired requests when mixed")
+        void mixedRequests() throws Exception {
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            @SuppressWarnings("unchecked")
+            Map<String, Long> pendingPanelTimestamps =
+                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
+
+            UUID expired1Uuid = UUID.randomUUID();
+            UUID freshUuid = UUID.randomUUID();
+            UUID expired2Uuid = UUID.randomUUID();
+
+            pendingPanelRequests.put("expired-1", expired1Uuid);
+            pendingPanelTimestamps.put("expired-1", System.currentTimeMillis() - 10 * 60 * 1000L);
+
+            pendingPanelRequests.put("fresh-1", freshUuid);
+            pendingPanelTimestamps.put("fresh-1", System.currentTimeMillis());
+
+            pendingPanelRequests.put("expired-2", expired2Uuid);
+            pendingPanelTimestamps.put("expired-2", System.currentTimeMillis() - 7 * 60 * 1000L);
+
+            service.cleanupExpiredPanelRequests();
+
+            assertThat(pendingPanelRequests).hasSize(1);
+            assertThat(pendingPanelRequests).containsKey("fresh-1");
+            assertThat(pendingPanelTimestamps).hasSize(1);
+            assertThat(pendingPanelTimestamps).containsKey("fresh-1");
+        }
+
+        @Test
+        @DisplayName("Should handle empty maps")
+        void emptyMaps() {
+            // Should not throw
+            service.cleanupExpiredPanelRequests();
+        }
+    }
+
+    // ==================== PanelLinkResult ====================
+
+    @Nested
+    @DisplayName("PanelLinkResult")
+    class PanelLinkResultTest {
+
+        @Test
+        @DisplayName("Should store success result with URL")
+        void successResult() {
+            LoginService.PanelLinkResult result = new LoginService.PanelLinkResult(true, "https://panel.example.com/login", null);
+
+            assertThat(result.isSuccess()).isTrue();
+            assertThat(result.getUrl()).isEqualTo("https://panel.example.com/login");
+            assertThat(result.getError()).isNull();
+        }
+
+        @Test
+        @DisplayName("Should store failure result with error")
+        void failureResult() {
+            LoginService.PanelLinkResult result = new LoginService.PanelLinkResult(false, null, "API error");
+
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(result.getUrl()).isNull();
+            assertThat(result.getError()).isEqualTo("API error");
+        }
+
+        @Test
+        @DisplayName("Should handle null URL and null error")
+        void nullValues() {
+            LoginService.PanelLinkResult result = new LoginService.PanelLinkResult(false, null, null);
+
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(result.getUrl()).isNull();
+            assertThat(result.getError()).isNull();
+        }
+    }
+
+    // ==================== shutdown with polling tasks ====================
+
+    @Nested
+    @DisplayName("shutdown with polling tasks")
+    class ShutdownWithPolling {
+
+        @Test
+        @DisplayName("Should cancel all polling tasks on shutdown")
+        void cancelAllPollingTasks() throws Exception {
+            @SuppressWarnings("unchecked")
+            Map<UUID, BukkitTask> pollingTasks =
+                    (Map<UUID, BukkitTask>) getFieldValue(service, "pollingTasks");
+
+            BukkitTask task1 = mock(BukkitTask.class);
+            BukkitTask task2 = mock(BukkitTask.class);
+            pollingTasks.put(UUID.randomUUID(), task1);
+            pollingTasks.put(UUID.randomUUID(), task2);
+
+            service.shutdown();
+
+            verify(task1).cancel();
+            verify(task2).cancel();
+            assertThat(pollingTasks).isEmpty();
+        }
+
+        @Test
+        @DisplayName("Should clear pending panel requests on shutdown")
+        void clearPendingRequests() throws Exception {
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            @SuppressWarnings("unchecked")
+            Map<String, Long> pendingPanelTimestamps =
+                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
+
+            pendingPanelRequests.put("req-1", UUID.randomUUID());
+            pendingPanelTimestamps.put("req-1", System.currentTimeMillis());
+
+            service.shutdown();
+
+            assertThat(pendingPanelRequests).isEmpty();
+            assertThat(pendingPanelTimestamps).isEmpty();
         }
     }
 
