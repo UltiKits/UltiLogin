@@ -152,20 +152,22 @@ public class LoginService {
         String lockoutType = config.getLockoutType().toUpperCase();
         
         // Check IP lock
-        if (("IP".equals(lockoutType) || "BOTH".equals(lockoutType)) && lockedIps.containsKey(ip)) {
-            if (now < lockedIps.get(ip)) {
+        if ("IP".equals(lockoutType) || "BOTH".equals(lockoutType)) {
+            Long ipLockEnd = lockedIps.get(ip);
+            if (ipLockEnd != null && now < ipLockEnd) {
                 return true;
-            } else {
+            } else if (ipLockEnd != null) {
                 lockedIps.remove(ip);
                 failedAttempts.remove(ip);
             }
         }
-        
+
         // Check UUID lock
-        if (("UUID".equals(lockoutType) || "BOTH".equals(lockoutType)) && lockedUuids.containsKey(uuid)) {
-            if (now < lockedUuids.get(uuid)) {
+        if ("UUID".equals(lockoutType) || "BOTH".equals(lockoutType)) {
+            Long uuidLockEnd = lockedUuids.get(uuid);
+            if (uuidLockEnd != null && now < uuidLockEnd) {
                 return true;
-            } else {
+            } else if (uuidLockEnd != null) {
                 lockedUuids.remove(uuid);
             }
         }
@@ -182,11 +184,13 @@ public class LoginService {
         long now = System.currentTimeMillis();
         long remaining = 0;
         
-        if (lockedIps.containsKey(ip)) {
-            remaining = Math.max(remaining, (lockedIps.get(ip) - now) / 1000);
+        Long ipEnd = lockedIps.get(ip);
+        if (ipEnd != null) {
+            remaining = Math.max(remaining, (ipEnd - now) / 1000);
         }
-        if (lockedUuids.containsKey(uuid)) {
-            remaining = Math.max(remaining, (lockedUuids.get(uuid) - now) / 1000);
+        Long uuidEnd = lockedUuids.get(uuid);
+        if (uuidEnd != null) {
+            remaining = Math.max(remaining, (uuidEnd - now) / 1000);
         }
         
         return remaining;
