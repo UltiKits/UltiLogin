@@ -15,7 +15,7 @@
     <properties>
         <java.version>1.8</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <ultitools.version>6.2.0</ultitools.version>
+        <ultitools.version>6.2.1</ultitools.version>
     </properties>
 
     <repositories>
