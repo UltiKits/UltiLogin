@@ -16,7 +16,7 @@ import lombok.EqualsAndHashCode;
 @Data
 @EqualsAndHashCode(callSuper = true)
 @Table("login_accounts")
-public class AccountData extends BaseDataEntity<Integer> {
+public class AccountData extends BaseDataEntity<String> {
     
     @Column("player_uuid")
     private String playerUuid;
