@@ -154,7 +154,7 @@ public final class UltiLoginTestHelper {
         account.setLastLogin(System.currentTimeMillis());
         account.setLoginCount(5);
         account.setFailedAttempts(0);
-        account.setId(playerUuid.hashCode());
+        account.setId(String.valueOf(playerUuid.hashCode()));
         return account;
     }
 
