@@ -24,6 +24,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.Base64;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -605,7 +606,13 @@ public class LoginService {
         List<AccountData> accounts = dataOperator.query()
             .where("player_uuid").eq(playerUuid.toString())
             .list();
-        return accounts.isEmpty() ? null : accounts.get(0);
+        return accounts.isEmpty() ? null : selectCanonicalAccount(accounts);
+    }
+
+    private AccountData selectCanonicalAccount(List<AccountData> accounts) {
+        return accounts.stream()
+            .min(Comparator.comparing(AccountData::getId, Comparator.nullsLast(String::compareTo)))
+            .orElse(accounts.get(0));
     }
     
     /**
