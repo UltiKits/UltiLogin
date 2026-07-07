@@ -551,6 +551,21 @@ class LoginServiceTest {
         }
 
         @Test
+        @DisplayName("Should select canonical lowest-id account when duplicate player UUID rows exist")
+        void duplicatePlayerUuidRowsSelectLowestIdAccount() {
+            AccountData newer = UltiLoginTestHelper.createSampleAccount(playerUuid, "Newer", "hash2", "salt2");
+            newer.setId("account-200");
+            AccountData canonical = UltiLoginTestHelper.createSampleAccount(playerUuid, "Canonical", "hash1", "salt1");
+            canonical.setId("account-100");
+            when(mockQuery.list())
+                    .thenReturn(Arrays.asList(newer, canonical));
+
+            AccountData result = service.getAccount(playerUuid);
+
+            assertThat(result).isSameAs(canonical);
+        }
+
+        @Test
         @DisplayName("Should return null when doesn't exist")
         void noAccount() {
             when(mockQuery.list())
