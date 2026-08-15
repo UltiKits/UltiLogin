@@ -163,7 +163,7 @@ blind-effect: true          # 未登录时失明效果
 
 ## 依赖
 
-- **UltiTools-API** >= 6.2.0
+- **UltiTools-API** >= 6.2.1
 
 ## 版本历史
 
