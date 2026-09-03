@@ -15,6 +15,7 @@ import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scheduler.BukkitTask;
 import org.junit.jupiter.api.*;
+import org.mockito.MockedStatic;
 
 import java.lang.reflect.Field;
 import java.util.*;
@@ -417,6 +418,31 @@ class LoginServiceTest {
 
             assertThat(result).isTrue();
             verify(dataOperator).delById(any());
+        }
+
+        @Test
+        @DisplayName("Should force logout an online player when unregistering their account")
+        void forceLogoutOnlinePlayerOnUnregister() {
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list())
+                    .thenReturn(Collections.singletonList(account));
+
+            Location mockLocation = mock(Location.class);
+            when(mockLocation.clone()).thenReturn(mockLocation);
+            when(player.getLocation()).thenReturn(mockLocation);
+
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+
+                boolean result = service.unregister(playerUuid);
+
+                assertThat(result).isTrue();
+                assertThat(service.isLoggedIn(playerUuid)).isFalse();
+                // onPlayerJoin(player) re-runs the join flow as part of the forced logout;
+                // this player is registered so it sends the (re-)login prompt, which is
+                // otherwise observable only as a side effect of that call actually happening.
+                verify(player).sendMessage(anyString());
+            }
         }
     }
 

@@ -2,6 +2,8 @@ package com.ultikits.plugins.login.listener;
 
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.config.LoginConfig;
+import com.ultikits.plugins.login.gui.LoginGUIPage;
+import com.ultikits.plugins.login.gui.RegisterGUIPage;
 import com.ultikits.plugins.login.service.LoginService;
 
 import org.bukkit.Server;
@@ -10,7 +12,10 @@ import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.player.*;
+import org.bukkit.scheduler.BukkitScheduler;
 import org.junit.jupiter.api.*;
+import org.mockito.ArgumentCaptor;
+import org.mockito.MockedStatic;
 
 import java.util.UUID;
 
@@ -26,6 +31,7 @@ class LoginProtectionListenerTest {
     private LoginConfig config;
     private Player player;
     private UUID playerUuid;
+    private BukkitScheduler mockScheduler;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -36,20 +42,21 @@ class LoginProtectionListenerTest {
         config = UltiLoginTestHelper.createDefaultConfig();
         lenient().when(loginService.getConfig()).thenReturn(config);
 
-        // Mock Bukkit.server before LoginProtectionListener constructor (it calls Bukkit.getPluginManager())
-        try {
-            java.lang.reflect.Field serverField = org.bukkit.Bukkit.class.getDeclaredField("server");
-            serverField.setAccessible(true);
-            if (serverField.get(null) == null) {
-                Server mockServer = mock(Server.class);
-                org.bukkit.plugin.PluginManager mockPm = mock(org.bukkit.plugin.PluginManager.class);
-                lenient().when(mockServer.getPluginManager()).thenReturn(mockPm);
-                lenient().when(mockPm.getPlugin("UltiTools")).thenReturn(mock(org.bukkit.plugin.Plugin.class));
-                serverField.set(null, mockServer);
-            }
-        } catch (Exception ignored) {
-            // Server may already be set
-        }
+        // Always install a fresh Bukkit.server mock before the LoginProtectionListener
+        // constructor runs (it calls Bukkit.getPluginManager()). Unlike the older
+        // conditional-install pattern elsewhere in this suite, this class always needs
+        // its own BukkitScheduler stub so the GUI-mode scheduler-callback tests below can
+        // capture the exact Runnable that was scheduled, regardless of what a previously
+        // run test class already installed into the shared static field.
+        java.lang.reflect.Field serverField = org.bukkit.Bukkit.class.getDeclaredField("server");
+        serverField.setAccessible(true);
+        Server mockServer = mock(Server.class);
+        org.bukkit.plugin.PluginManager mockPm = mock(org.bukkit.plugin.PluginManager.class);
+        mockScheduler = mock(BukkitScheduler.class);
+        lenient().when(mockServer.getPluginManager()).thenReturn(mockPm);
+        lenient().when(mockPm.getPlugin("UltiTools")).thenReturn(mock(org.bukkit.plugin.Plugin.class));
+        lenient().when(mockServer.getScheduler()).thenReturn(mockScheduler);
+        serverField.set(null, mockServer);
 
         listener = new LoginProtectionListener(UltiLoginTestHelper.getMockPlugin(), loginService);
 
@@ -829,6 +836,207 @@ class LoginProtectionListenerTest {
 
             assertThat(event.isCancelled()).isTrue();
             verify(player).sendMessage(anyString());
+        }
+    }
+
+    @Nested
+    @DisplayName("onPlayerJoin GUI-mode delayed callback (refusal path: unauthenticated join popup)")
+    class OnPlayerJoinGuiModeCallback {
+
+        /**
+         * Triggers onPlayerJoin with GUI mode enabled, captures the Runnable scheduled via
+         * runTaskLater without invoking it, so each test below can choose which tick's state
+         * (online/offline, logged-in/not, session valid/not) the delayed task observes when it
+         * finally runs -- the ArgumentCaptor<Runnable> capture-and-invoke idiom documented in
+         * 09-PATTERNS.md / 09-15-SUMMARY.md for this ecosystem's anonymous BukkitRunnable
+         * scheduler callbacks.
+         */
+        private Runnable captureDelayedTask() {
+            when(config.isGuiModeEnabled()).thenReturn(true);
+
+            listener.onPlayerJoin(new PlayerJoinEvent(player, "join message"));
+
+            ArgumentCaptor<Runnable> captor = ArgumentCaptor.forClass(Runnable.class);
+            verify(mockScheduler).runTaskLater(any(), captor.capture(), eq(20L));
+            return captor.getValue();
+        }
+
+        @Test
+        @DisplayName("Should schedule the GUI-open task with a 1-second (20-tick) delay when GUI mode is enabled")
+        void schedulesDelayedTaskWithOneSecondDelay() {
+            Runnable task = captureDelayedTask();
+
+            assertThat(task).isNotNull();
+        }
+
+        @Test
+        @DisplayName("Should not open a GUI when the player went offline before the delayed task ran")
+        void skipsWhenOffline() {
+            Runnable task = captureDelayedTask();
+            when(player.isOnline()).thenReturn(false);
+
+            try (MockedStatic<LoginGUIPage> loginGui = mockStatic(LoginGUIPage.class);
+                 MockedStatic<RegisterGUIPage> registerGui = mockStatic(RegisterGUIPage.class)) {
+                task.run();
+
+                loginGui.verifyNoInteractions();
+                registerGui.verifyNoInteractions();
+            }
+        }
+
+        @Test
+        @DisplayName("Should not reopen a GUI when the player already logged in before the delayed task ran")
+        void skipsWhenAlreadyLoggedIn() {
+            Runnable task = captureDelayedTask();
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(true);
+
+            try (MockedStatic<LoginGUIPage> loginGui = mockStatic(LoginGUIPage.class);
+                 MockedStatic<RegisterGUIPage> registerGui = mockStatic(RegisterGUIPage.class)) {
+                task.run();
+
+                loginGui.verifyNoInteractions();
+                registerGui.verifyNoInteractions();
+            }
+        }
+
+        @Test
+        @DisplayName("Should not open a GUI when the player already gained a valid session before the delayed task ran")
+        void skipsWhenSessionValid() {
+            Runnable task = captureDelayedTask();
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+            when(loginService.hasValidSession(player)).thenReturn(true);
+
+            try (MockedStatic<LoginGUIPage> loginGui = mockStatic(LoginGUIPage.class);
+                 MockedStatic<RegisterGUIPage> registerGui = mockStatic(RegisterGUIPage.class)) {
+                task.run();
+
+                loginGui.verifyNoInteractions();
+                registerGui.verifyNoInteractions();
+            }
+        }
+
+        @Test
+        @DisplayName("Should open the login GUI for a registered player once the delayed task runs")
+        void opensLoginGuiForRegistered() {
+            Runnable task = captureDelayedTask();
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+            when(loginService.hasValidSession(player)).thenReturn(false);
+            when(loginService.isRegistered(playerUuid)).thenReturn(true);
+
+            try (MockedStatic<LoginGUIPage> loginGui = mockStatic(LoginGUIPage.class);
+                 MockedStatic<RegisterGUIPage> registerGui = mockStatic(RegisterGUIPage.class)) {
+                task.run();
+
+                loginGui.verify(() -> LoginGUIPage.open(player, UltiLoginTestHelper.getMockPlugin(), loginService));
+                registerGui.verifyNoInteractions();
+            }
+        }
+
+        @Test
+        @DisplayName("Should open the register GUI for an unregistered player once the delayed task runs")
+        void opensRegisterGuiForUnregistered() {
+            Runnable task = captureDelayedTask();
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+            when(loginService.hasValidSession(player)).thenReturn(false);
+            when(loginService.isRegistered(playerUuid)).thenReturn(false);
+
+            try (MockedStatic<LoginGUIPage> loginGui = mockStatic(LoginGUIPage.class);
+                 MockedStatic<RegisterGUIPage> registerGui = mockStatic(RegisterGUIPage.class)) {
+                task.run();
+
+                registerGui.verify(() -> RegisterGUIPage.open(player, UltiLoginTestHelper.getMockPlugin(), loginService));
+                loginGui.verifyNoInteractions();
+            }
+        }
+    }
+
+    @Nested
+    @DisplayName("sendLoginPrompt GUI-mode reopen callback (refusal path: reprompt after a blocked action)")
+    class SendLoginPromptGuiModeCallback {
+
+        /**
+         * Blocks a chat message while GUI mode is enabled (which routes through the private
+         * sendLoginPrompt -> Bukkit.getScheduler().runTask(...) reopen path) and captures the
+         * scheduled Runnable without invoking it.
+         */
+        private Runnable captureReopenTask() {
+            when(config.isGuiModeEnabled()).thenReturn(true);
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+
+            AsyncPlayerChatEvent event = new AsyncPlayerChatEvent(false, player, "message", java.util.Collections.emptySet());
+            listener.onPlayerChat(event);
+
+            ArgumentCaptor<Runnable> captor = ArgumentCaptor.forClass(Runnable.class);
+            verify(mockScheduler).runTask(any(), captor.capture());
+            return captor.getValue();
+        }
+
+        @Test
+        @DisplayName("Should schedule an immediate GUI reopen task when chat is blocked in GUI mode")
+        void schedulesReopenTask() {
+            Runnable task = captureReopenTask();
+
+            assertThat(task).isNotNull();
+        }
+
+        @Test
+        @DisplayName("Should not reopen the GUI if the player went offline before the reopen task ran")
+        void skipsWhenOffline() {
+            Runnable task = captureReopenTask();
+            when(player.isOnline()).thenReturn(false);
+
+            try (MockedStatic<LoginGUIPage> loginGui = mockStatic(LoginGUIPage.class);
+                 MockedStatic<RegisterGUIPage> registerGui = mockStatic(RegisterGUIPage.class)) {
+                task.run();
+
+                loginGui.verifyNoInteractions();
+                registerGui.verifyNoInteractions();
+            }
+        }
+
+        @Test
+        @DisplayName("Should not reopen the GUI if the player became logged in before the reopen task ran")
+        void skipsWhenLoggedInByRunTime() {
+            Runnable task = captureReopenTask();
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(true);
+
+            try (MockedStatic<LoginGUIPage> loginGui = mockStatic(LoginGUIPage.class);
+                 MockedStatic<RegisterGUIPage> registerGui = mockStatic(RegisterGUIPage.class)) {
+                task.run();
+
+                loginGui.verifyNoInteractions();
+                registerGui.verifyNoInteractions();
+            }
+        }
+
+        @Test
+        @DisplayName("Should reopen the login GUI for a registered player when the reopen task runs")
+        void reopensLoginGuiForRegistered() {
+            Runnable task = captureReopenTask();
+            when(loginService.isRegistered(playerUuid)).thenReturn(true);
+
+            try (MockedStatic<LoginGUIPage> loginGui = mockStatic(LoginGUIPage.class);
+                 MockedStatic<RegisterGUIPage> registerGui = mockStatic(RegisterGUIPage.class)) {
+                task.run();
+
+                loginGui.verify(() -> LoginGUIPage.open(player, UltiLoginTestHelper.getMockPlugin(), loginService));
+                registerGui.verifyNoInteractions();
+            }
+        }
+
+        @Test
+        @DisplayName("Should reopen the register GUI for an unregistered player when the reopen task runs")
+        void reopensRegisterGuiForUnregistered() {
+            Runnable task = captureReopenTask();
+            when(loginService.isRegistered(playerUuid)).thenReturn(false);
+
+            try (MockedStatic<LoginGUIPage> loginGui = mockStatic(LoginGUIPage.class);
+                 MockedStatic<RegisterGUIPage> registerGui = mockStatic(RegisterGUIPage.class)) {
+                task.run();
+
+                registerGui.verify(() -> RegisterGUIPage.open(player, UltiLoginTestHelper.getMockPlugin(), loginService));
+                loginGui.verifyNoInteractions();
+            }
         }
     }
 }
