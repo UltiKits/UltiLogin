@@ -4,11 +4,15 @@ import com.ultikits.plugins.login.UltiLogin;
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.service.LoginService;
 
+import net.md_5.bungee.api.chat.BaseComponent;
+
 import org.bukkit.Bukkit;
 import org.bukkit.Server;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.bukkit.scheduler.BukkitScheduler;
 import org.junit.jupiter.api.*;
+import org.mockito.ArgumentCaptor;
 
 import java.lang.reflect.Field;
 import java.util.UUID;
@@ -24,24 +28,26 @@ class PanelCommandTest {
     private LoginService loginService;
     private Player player;
     private UUID playerUuid;
+    private BukkitScheduler mockScheduler;
 
     @BeforeEach
     void setUp() throws Exception {
         UltiLoginTestHelper.setUp();
 
-        // Set up Bukkit.server
-        try {
-            Field serverField = Bukkit.class.getDeclaredField("server");
-            serverField.setAccessible(true);
-            if (serverField.get(null) == null) {
-                Server mockServer = mock(Server.class);
-                org.bukkit.plugin.PluginManager mockPm = mock(org.bukkit.plugin.PluginManager.class);
-                when(mockServer.getPluginManager()).thenReturn(mockPm);
-                when(mockPm.getPlugin("UltiTools")).thenReturn(mock(org.bukkit.plugin.Plugin.class));
-                serverField.set(null, mockServer);
-            }
-        } catch (Exception ignored) {
-        }
+        // Always install a fresh Bukkit.server mock with its own BukkitScheduler stub -- this
+        // class needs to capture the exact Runnables PanelCommand schedules (the outer async
+        // HTTP-request task, then the inner sync result-delivery task), which requires a
+        // scheduler this test controls rather than whatever a previously run test class left
+        // installed on the shared static field.
+        Field serverField = Bukkit.class.getDeclaredField("server");
+        serverField.setAccessible(true);
+        Server mockServer = mock(Server.class);
+        org.bukkit.plugin.PluginManager mockPm = mock(org.bukkit.plugin.PluginManager.class);
+        mockScheduler = mock(BukkitScheduler.class);
+        when(mockServer.getPluginManager()).thenReturn(mockPm);
+        when(mockPm.getPlugin("UltiTools")).thenReturn(mock(org.bukkit.plugin.Plugin.class));
+        when(mockServer.getScheduler()).thenReturn(mockScheduler);
+        serverField.set(null, mockServer);
 
         loginService = mock(LoginService.class);
         command = new PanelCommand(UltiLoginTestHelper.getMockPlugin(), loginService);
@@ -68,6 +74,81 @@ class PanelCommandTest {
 
             verify(player).sendMessage(anyString());
             verify(loginService, never()).requestPanelLink(any());
+        }
+
+        @Test
+        @DisplayName("Should send a generating message and schedule an async panel-link request when enabled")
+        void schedulesAsyncLinkRequestWhenEnabled() {
+            when(loginService.isPanelEnabled()).thenReturn(true);
+
+            command.openPanel(player);
+
+            verify(player).sendMessage(anyString());
+            verify(mockScheduler).runTaskAsynchronously(any(), any(Runnable.class));
+        }
+
+        /**
+         * Drives openPanel through to the point where the sync result-delivery task has been
+         * captured (without running it), given a stubbed requestPanelLink outcome. Two scheduler
+         * hops are involved -- runTaskAsynchronously (the HTTP call) then runTask (delivering the
+         * result back on the main thread) -- so both Runnables are captured and the outer one is
+         * run first to produce the inner one, per the capture-and-invoke idiom for this
+         * ecosystem's anonymous BukkitRunnable scheduler callbacks (09-PATTERNS.md).
+         */
+        private Runnable captureResultDeliveryTask(LoginService.PanelLinkResult result) {
+            when(loginService.isPanelEnabled()).thenReturn(true);
+            when(loginService.requestPanelLink(player)).thenReturn(result);
+
+            command.openPanel(player);
+
+            ArgumentCaptor<Runnable> asyncCaptor = ArgumentCaptor.forClass(Runnable.class);
+            verify(mockScheduler).runTaskAsynchronously(any(), asyncCaptor.capture());
+            asyncCaptor.getValue().run();
+
+            ArgumentCaptor<Runnable> syncCaptor = ArgumentCaptor.forClass(Runnable.class);
+            verify(mockScheduler).runTask(any(), syncCaptor.capture());
+            return syncCaptor.getValue();
+        }
+
+        @Test
+        @DisplayName("Should not deliver the panel-link result if the player went offline before the async request completed")
+        void skipsDeliveryWhenOffline() {
+            Runnable task = captureResultDeliveryTask(
+                    new LoginService.PanelLinkResult(true, "https://panel.example/link", null));
+            when(player.isOnline()).thenReturn(false);
+
+            task.run();
+
+            verify(player, never()).spigot();
+            verify(loginService, never()).startAuthPolling(anyString(), any());
+        }
+
+        @Test
+        @DisplayName("Should send a clickable panel link and start auth polling when the link request succeeds")
+        void sendsClickableLinkAndStartsPollingOnSuccess() {
+            Runnable task = captureResultDeliveryTask(
+                    new LoginService.PanelLinkResult(true, "https://panel.example/link", null));
+
+            Player.Spigot spigot = mock(Player.Spigot.class);
+            when(player.spigot()).thenReturn(spigot);
+
+            task.run();
+
+            verify(spigot).sendMessage(any(BaseComponent.class));
+            verify(loginService).startAuthPolling(playerUuid.toString(), player);
+        }
+
+        @Test
+        @DisplayName("Should send an error message when the link request fails")
+        void sendsErrorMessageOnFailure() {
+            Runnable task = captureResultDeliveryTask(
+                    new LoginService.PanelLinkResult(false, null, "API returned status 500"));
+
+            task.run();
+
+            verify(player, times(2)).sendMessage(anyString());
+            verify(player, never()).spigot();
+            verify(loginService, never()).startAuthPolling(anyString(), any());
         }
     }
 
