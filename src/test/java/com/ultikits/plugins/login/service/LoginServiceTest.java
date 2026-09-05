@@ -15,6 +15,7 @@ import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scheduler.BukkitTask;
 import org.junit.jupiter.api.*;
+import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockito.MockedStatic;
 
 import java.lang.reflect.Field;
@@ -40,6 +41,29 @@ class LoginServiceTest {
 
     @BeforeEach
     void setUp() throws Exception {
+        // Bootstrap a live test-time server so PotionEffectType (used by
+        // completeLogin()/onPlayerJoin() in the production code under test) resolves through
+        // mockbukkit-v1.21's real RegistryAccess instead of failing at static initialization.
+        // The live server is wrapped in a Mockito spy and installed as Bukkit.server, because a
+        // bare MockBukkit.mock() server is not itself a Mockito mock/spy and this class's
+        // existing per-test doReturn(...).when(server).method(...) stubs (below) need one.
+        // Reconciliation pattern per 14-LEDGER-UltiTrade.md, the phase's canary module, which hit
+        // the identical "test helper already touches Bukkit.server" shape.
+        //
+        // Defensive cleanup first: sibling classes in this module (LoginProtectionListenerTest,
+        // EmailVerificationServiceTest, PanelCommandTest) set Bukkit.server via reflection and
+        // never clear it, so if one of them runs earlier in the same Surefire fork,
+        // MockBukkit.mock() throws UnsupportedOperationException("Cannot redefine singleton
+        // Server"). Null the field unconditionally first so this class's own bootstrap is never
+        // order-dependent on what ran before it.
+        Field bukkitServerField = Bukkit.class.getDeclaredField("server");
+        bukkitServerField.setAccessible(true);
+        bukkitServerField.set(null, null);
+
+        MockBukkit.mock();
+        Server liveServer = spy(Bukkit.getServer());
+        bukkitServerField.set(null, liveServer);
+
         UltiLoginTestHelper.setUp();
 
         config = UltiLoginTestHelper.createDefaultConfig();
@@ -95,6 +119,7 @@ class LoginServiceTest {
     @AfterEach
     void tearDown() throws Exception {
         UltiLoginTestHelper.tearDown();
+        MockBukkit.unmock();
     }
 
     // ==================== isRegistered ====================
@@ -1361,7 +1386,7 @@ class LoginServiceTest {
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
                 World mockWorld = mock(World.class);
-                when(server.getWorld("world")).thenReturn(mockWorld);
+                doReturn(mockWorld).when(server).getWorld("world");
             } catch (Exception e) {
                 // Skip if can't mock
             }
@@ -1388,7 +1413,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getWorld("nonexistent_world")).thenReturn(null);
+                doReturn(null).when(server).getWorld("nonexistent_world");
             } catch (Exception e) {
                 // Skip if can't mock
             }
@@ -1574,7 +1599,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(playerUuid)).thenReturn(player);
+                doReturn(player).when(server).getPlayer(playerUuid);
             } catch (Exception e) {
                 // Skip
             }
@@ -1614,7 +1639,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(offlineUuid)).thenReturn(null);
+                doReturn(null).when(server).getPlayer(offlineUuid);
             } catch (Exception e) {
                 // Skip
             }
@@ -1641,7 +1666,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(playerUuid)).thenReturn(offlinePlayer);
+                doReturn(offlinePlayer).when(server).getPlayer(playerUuid);
             } catch (Exception e) {
                 // Skip
             }
@@ -1775,7 +1800,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(playerUuid)).thenReturn(player);
+                doReturn(player).when(server).getPlayer(playerUuid);
             } catch (Exception e) {
                 // Skip
             }
@@ -1811,7 +1836,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(playerUuid)).thenReturn(player);
+                doReturn(player).when(server).getPlayer(playerUuid);
             } catch (Exception e) {
                 // Skip
             }
@@ -1844,7 +1869,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(playerUuid)).thenReturn(player);
+                doReturn(player).when(server).getPlayer(playerUuid);
             } catch (Exception e) {
                 // Skip
             }
@@ -1877,7 +1902,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(playerUuid)).thenReturn(null);
+                doReturn(null).when(server).getPlayer(playerUuid);
             } catch (Exception e) {
                 // Skip
             }
@@ -1907,7 +1932,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(playerUuid)).thenReturn(player);
+                doReturn(player).when(server).getPlayer(playerUuid);
             } catch (Exception e) {
                 // Skip
             }
@@ -1938,7 +1963,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(playerUuid)).thenReturn(player);
+                doReturn(player).when(server).getPlayer(playerUuid);
             } catch (Exception e) {
                 // Skip
             }
@@ -1969,7 +1994,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(playerUuid)).thenReturn(player);
+                doReturn(player).when(server).getPlayer(playerUuid);
             } catch (Exception e) {
                 // Skip
             }
@@ -2001,7 +2026,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(playerUuid)).thenReturn(player);
+                doReturn(player).when(server).getPlayer(playerUuid);
             } catch (Exception e) {
                 // Skip
             }
@@ -2036,7 +2061,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(playerUuid)).thenReturn(player);
+                doReturn(player).when(server).getPlayer(playerUuid);
             } catch (Exception e) {
                 // Skip
             }
