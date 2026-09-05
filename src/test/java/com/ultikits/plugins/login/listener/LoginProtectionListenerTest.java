@@ -121,6 +121,11 @@ class LoginProtectionListenerTest {
             when(loc.getBlockY()).thenReturn(y);
             when(loc.getBlockZ()).thenReturn(z);
             when(loc.getWorld()).thenReturn(mockWorld);
+            // Paper 1.21's PlayerMoveEvent#setTo/#setFrom now call Location#clone() on the
+            // argument before storing it (spigot-api 1.20 stored the reference directly). An
+            // unstubbed mock's clone() returns null by default, which made every assertion that
+            // reads the location back after the listener resets it see null instead of the mock.
+            when(loc.clone()).thenReturn(loc);
             return loc;
         }
 
@@ -784,6 +789,11 @@ class LoginProtectionListenerTest {
             when(loc.getBlockY()).thenReturn(y);
             when(loc.getBlockZ()).thenReturn(z);
             when(loc.getWorld()).thenReturn(mockWorld);
+            // Paper 1.21's PlayerMoveEvent#setTo/#setFrom now call Location#clone() on the
+            // argument before storing it (spigot-api 1.20 stored the reference directly). An
+            // unstubbed mock's clone() returns null by default, which made every assertion that
+            // reads the location back after the listener resets it see null instead of the mock.
+            when(loc.clone()).thenReturn(loc);
             return loc;
         }
 
