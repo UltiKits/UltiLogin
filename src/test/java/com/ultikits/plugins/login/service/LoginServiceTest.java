@@ -595,6 +595,44 @@ class LoginServiceTest {
         }
 
         @Test
+        @DisplayName("invalidateSession also ends a session opened from a different address than the caller's own")
+        void invalidatesSessionFromAnotherAddress() throws Exception {
+            when(config.isSessionEnabled()).thenReturn(true);
+
+            String salt = "testSalt";
+            String password = "password123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            // Log in once from the player's normal (mocked) address.
+            service.login(player, password);
+            assertThat(service.hasValidSession(player)).isTrue();
+
+            // Seed a second session for the same player from a different address directly into
+            // the session map -- simulating exactly the case an administrator ending someone
+            // else's session needs: a session the actor is not connected from. This is why
+            // invalidation matches by the player-identifier suffix of the key, not by the
+            // caller's own current address.
+            Field sessionsField = LoginService.class.getDeclaredField("sessions");
+            sessionsField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<String, Long> sessions = (Map<String, Long>) sessionsField.get(service);
+            String otherAddressKey = "10.0.0.99:" + playerUuid;
+            sessions.put(otherAddressKey, System.currentTimeMillis());
+            assertThat(sessions).containsKey(otherAddressKey);
+
+            service.invalidateSession(playerUuid);
+
+            assertThat(sessions)
+                    .as("a session opened from a different address must also be removed")
+                    .doesNotContainKey(otherAddressKey);
+            assertThat(service.hasValidSession(player))
+                    .as("the player's own session must also be gone")
+                    .isFalse();
+        }
+
+        @Test
         @DisplayName("Administrator reset (resetPassword(UUID)) invalidates the session")
         void adminResetInvalidatesSession() throws Exception {
             when(config.isSessionEnabled()).thenReturn(true);
