@@ -722,6 +722,13 @@ class LoginProtectionListenerTest {
             listener.onPlayerChat(event);
 
             assertThat(event.isCancelled()).isTrue();
+            // Round 5 (13-REVIEW-UltiLogin.md, own deep review of bcadfb5, Info finding): the
+            // text-prompt branch is now dispatched via Bukkit.getScheduler().runTask(...), the
+            // same as the GUI branch already was, so this must capture and run that task rather
+            // than expect player.sendMessage(...) synchronously.
+            ArgumentCaptor<Runnable> captor = ArgumentCaptor.forClass(Runnable.class);
+            verify(mockScheduler).runTask(any(), captor.capture());
+            captor.getValue().run();
             verify(player).sendMessage(anyString());
         }
 
@@ -737,6 +744,12 @@ class LoginProtectionListenerTest {
             listener.onPlayerChat(event);
 
             assertThat(event.isCancelled()).isTrue();
+            // Round 5 (13-REVIEW-UltiLogin.md, own deep review of bcadfb5, Info finding): see
+            // sendPromptRegistered() above -- the text-prompt branch now schedules onto the main
+            // thread the same way the GUI branch already did.
+            ArgumentCaptor<Runnable> captor = ArgumentCaptor.forClass(Runnable.class);
+            verify(mockScheduler).runTask(any(), captor.capture());
+            captor.getValue().run();
             verify(player).sendMessage(anyString());
         }
     }
@@ -850,6 +863,12 @@ class LoginProtectionListenerTest {
             listener.onPlayerCommand(event);
 
             assertThat(event.isCancelled()).isTrue();
+            // Round 5 (13-REVIEW-UltiLogin.md, own deep review of bcadfb5, Info finding): see
+            // OnPlayerChatExtended#sendPromptRegistered() above -- the text-prompt branch now
+            // schedules onto the main thread the same way the GUI branch already did.
+            ArgumentCaptor<Runnable> captor = ArgumentCaptor.forClass(Runnable.class);
+            verify(mockScheduler).runTask(any(), captor.capture());
+            captor.getValue().run();
             verify(player).sendMessage(anyString());
         }
     }

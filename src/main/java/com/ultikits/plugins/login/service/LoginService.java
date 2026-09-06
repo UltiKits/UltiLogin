@@ -437,15 +437,32 @@ public class LoginService {
      * has nothing for the cancellation to find. The generation bump is what {@code
      * requestPanelLink} checks to refuse publishing that now-stale request when its worker
      * finally runs.
+     * <p>
+     * Round 5 (13-REVIEW-UltiLogin.md, own deep review of bcadfb5): the generation bump and the
+     * cancellation below run inside a {@code synchronized} block keyed on this player's own
+     * {@link AtomicLong} generation cell -- the same cell {@link #requestPanelLink(Player, long)}
+     * synchronizes on around its own check-then-insert. That is what closes the narrow window a
+     * plain read-then-write left open: without a shared lock, an invalidation landing between
+     * {@code requestPanelLink}'s generation read and its {@code pendingPanelRequests} insert
+     * would find nothing to cancel (nothing had been inserted yet) while the generation had
+     * already been read as matching, so the stale request would still get published. With both
+     * sides synchronized on the same per-player cell, either this method's bump-and-cancel runs
+     * completely before {@code requestPanelLink}'s check-and-insert (so the check then sees the
+     * bumped generation and refuses), or it runs completely after (so the cancellation finds the
+     * entry {@code requestPanelLink} just inserted and removes it) -- there is no interleaving
+     * that lets a stale request survive either path.
      *
      * @param playerUuid the player whose sessions should end, and whose active login state
      *                   should be revoked if they are online
      */
     public void invalidateSession(UUID playerUuid) {
-        invalidationGenerations.computeIfAbsent(playerUuid, k -> new AtomicLong()).incrementAndGet();
-        String suffix = ":" + playerUuid;
-        sessions.keySet().removeIf(key -> key.endsWith(suffix));
-        cancelPendingPanelRequest(playerUuid);
+        AtomicLong generationCell = invalidationGenerations.computeIfAbsent(playerUuid, k -> new AtomicLong());
+        synchronized (generationCell) {
+            generationCell.incrementAndGet();
+            String suffix = ":" + playerUuid;
+            sessions.keySet().removeIf(key -> key.endsWith(suffix));
+            cancelPendingPanelRequest(playerUuid);
+        }
         forceReauthenticationIfOnline(playerUuid);
     }
 
@@ -947,11 +964,20 @@ public class LoginService {
      * uninterrupted call stack as the eventual publish (e.g. tests). {@code /panel}'s own
      * worker uses the two-argument overload instead, capturing the generation before it
      * schedules any asynchronous work. See {@link #requestPanelLink(Player, long)}.
+     * <p>
+     * Round 5 (13-REVIEW-UltiLogin.md, own deep review of bcadfb5, Info finding): package-private
+     * rather than {@code public} -- its safety depends entirely on the caller staying on the
+     * same, uninterrupted call stack as the eventual publish, and nothing in the signature
+     * enforces that. A future caller wrapping this overload in its own asynchronous scheduling
+     * (as {@code PanelCommand} used to do before this fence existed) would silently reintroduce
+     * the very race {@link #requestPanelLink(Player, long)} exists to close, because the
+     * generation would then be captured inside the async worker instead of before it was
+     * scheduled. No caller outside this class needs it -- only this package's tests do.
      *
      * @param player the player requesting the link
      * @return PanelLinkResult with the URL or error message
      */
-    public PanelLinkResult requestPanelLink(Player player) {
+    PanelLinkResult requestPanelLink(Player player) {
         return requestPanelLink(player, getInvalidationGeneration(player.getUniqueId()));
     }
 
@@ -960,8 +986,8 @@ public class LoginService {
      * generation the caller captured before starting no longer matches the player's current
      * one.
      * <p>
-     * Codex PR #18 thread 3945030000 (round 4), {@code LoginService.java:429}: {@code /panel}
-     * (see {@code PanelCommand}) captures {@link #getInvalidationGeneration(UUID)} before
+     * Codex PR #18 thread 3945030000 (round 4), see {@link #invalidateSession(UUID)}: {@code
+     * /panel} (see {@code PanelCommand}) captures {@link #getInvalidationGeneration(UUID)} before
      * scheduling its asynchronous worker; this method runs later, on that worker thread, after a
      * blocking HTTP call. An administrator's reset/unregister landing in the gap between those
      * two points calls {@link #invalidateSession(UUID)}, which bumps the generation and calls
@@ -976,6 +1002,19 @@ public class LoginService {
      * poll already in flight past that point, by {@link #handlePanelPollCompleted(Player,
      * boolean)}'s fresh main-thread lookup (round 2, comment 3944418953) -- so this is the one
      * remaining fence, not a duplicate of either.
+     * <p>
+     * Round 5 (13-REVIEW-UltiLogin.md, own deep review of bcadfb5): the generation check and the
+     * {@code pendingPanelRequests} insert below now run inside a {@code synchronized} block keyed
+     * on the same per-player {@link AtomicLong} generation cell {@link #invalidateSession(UUID)}
+     * synchronizes on. This closes the narrow window a plain read-then-insert left open: the
+     * check and the insert are now one atomic step from {@code invalidateSession}'s point of
+     * view, so an invalidation landing "in between" is impossible -- it either happens
+     * completely before this block (and the check sees it) or completely after (and {@code
+     * invalidateSession}'s own cancellation finds the entry this block just inserted). Only the
+     * publish decision and the map insert are inside the lock; the blocking HTTP call and
+     * everything after it run outside it, so an invalidation racing an in-flight publish is still
+     * handled the same way as before, by {@link #cancelPendingPanelRequest(UUID)} and {@link
+     * #handlePanelPollCompleted(Player, boolean)}.
      *
      * @param player the player requesting the link
      * @param expectedGeneration the invalidation generation the caller captured before issuing
@@ -988,19 +1027,23 @@ public class LoginService {
         }
 
         UUID playerUuidRaw = player.getUniqueId();
-        if (getInvalidationGeneration(playerUuidRaw) != expectedGeneration) {
-            return new PanelLinkResult(false, null,
-                    "Session was invalidated before the request completed");
+        String requestId = UUID.randomUUID().toString();
+
+        AtomicLong generationCell = invalidationGenerations.computeIfAbsent(playerUuidRaw, k -> new AtomicLong());
+        synchronized (generationCell) {
+            if (generationCell.get() != expectedGeneration) {
+                return new PanelLinkResult(false, null,
+                        "Session was invalidated before the request completed");
+            }
+            // Track the pending request -- this insert and the generation check above must stay
+            // atomic with each other (see javadoc above); nothing else belongs inside this lock.
+            pendingPanelRequests.put(requestId, playerUuidRaw);
+            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
         }
 
-        String requestId = UUID.randomUUID().toString();
         String code = generateVerificationCode();
-        String playerUuid = player.getUniqueId().toString();
+        String playerUuid = playerUuidRaw.toString();
         String playerName = player.getName();
-
-        // Track the pending request
-        pendingPanelRequests.put(requestId, player.getUniqueId());
-        pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
 
         // Build API request
         String apiUrl;

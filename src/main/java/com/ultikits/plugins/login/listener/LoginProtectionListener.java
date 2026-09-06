@@ -216,10 +216,15 @@ public class LoginProtectionListener implements Listener {
      * mock-based unit tests are unaffected: {@link #sendLoginPrompt(Player)} still exercises the
      * identical branching with the identical field values, just via this extracted method.
      * <p>
-     * The GUI branch is scheduled onto the main thread via {@link Bukkit#getScheduler()}:
+     * Both branches are scheduled onto the main thread via {@link Bukkit#getScheduler()}:
      * inventory APIs are not thread-safe, and a caller revoking a session (e.g. an admin
-     * command) is not guaranteed to already be on the main thread. The text branch is sent
-     * synchronously, matching this method's pre-existing behaviour before extraction.
+     * command) is not guaranteed to already be on the main thread. Round 5 (13-REVIEW-UltiLogin
+     * .md, own deep review of bcadfb5, Info finding): the text branch used to send synchronously
+     * on whatever thread the caller was on, safe only because every current caller of {@code
+     * LoginService.invalidateSession(UUID)} happens to be a synchronous command body. Dispatching
+     * it the same way as the GUI branch removes that latent assumption, so a future async caller
+     * (e.g. a WebSocket-driven remote admin action) cannot call a Bukkit player API off-thread
+     * through this path.
      *
      * @param player the player to prompt; must be online
      * @param plugin the UltiTools plugin instance, passed through to the GUI pages
@@ -241,13 +246,15 @@ public class LoginProtectionListener implements Listener {
             });
         } else {
             // Send text prompt
-            if (loginService.isRegistered(player.getUniqueId())) {
-                player.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                    loginService.getConfig().getLoginPrompt()));
-            } else {
-                player.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                    loginService.getConfig().getRegisterPrompt()));
-            }
+            Bukkit.getScheduler().runTask(bukkitPlugin, () -> {
+                if (loginService.isRegistered(player.getUniqueId())) {
+                    player.sendMessage(ChatColor.translateAlternateColorCodes('&',
+                        loginService.getConfig().getLoginPrompt()));
+                } else {
+                    player.sendMessage(ChatColor.translateAlternateColorCodes('&',
+                        loginService.getConfig().getRegisterPrompt()));
+                }
+            });
         }
     }
 }

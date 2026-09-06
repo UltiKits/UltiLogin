@@ -10,6 +10,7 @@ import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.Query;
 import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 import com.ultikits.ultitools.manager.ConfigManager;
+import com.ultikits.ultitools.utils.CommonUtils;
 import com.ultikits.ultitools.utils.SimpleHttpClient;
 
 import org.bukkit.Bukkit;
@@ -413,6 +414,7 @@ class LoginServiceTest {
             boolean result;
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+                stubSchedulerToRunSynchronously(bukkitMock);
 
                 result = service.changePassword(playerUuid, oldPassword, "newPass123");
             }
@@ -490,6 +492,7 @@ class LoginServiceTest {
             String newPassword;
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+                stubSchedulerToRunSynchronously(bukkitMock);
 
                 newPassword = service.resetPassword(playerUuid);
             }
@@ -516,6 +519,7 @@ class LoginServiceTest {
             boolean result;
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+                stubSchedulerToRunSynchronously(bukkitMock);
 
                 result = service.resetPassword(playerUuid, "newPassword123");
             }
@@ -538,7 +542,7 @@ class LoginServiceTest {
         @DisplayName("Presents the GUI credential prompt after an online player's password is"
                 + " reset in GUI mode, without replaying session auto-login")
         void presentsGuiPromptAfterResetPasswordInGuiMode() throws Exception {
-            // Codex PR #18 thread 3945030004 (round 4), LoginService.java:481:
+            // Codex PR #18 thread 3945030004 (round 4), see forceReauthenticationIfOnline():
             // forceReauthenticationIfOnline only flipped the login flag and started the
             // timeout -- with GUI mode enabled, LoginProtectionListener only ever opens the
             // login/register GUI from PlayerJoinEvent or a blocked action, neither of which
@@ -630,6 +634,7 @@ class LoginServiceTest {
 
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+                stubSchedulerToRunSynchronously(bukkitMock);
 
                 boolean result = service.unregister(playerUuid);
 
@@ -665,6 +670,7 @@ class LoginServiceTest {
 
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+                stubSchedulerToRunSynchronously(bukkitMock);
 
                 boolean result = service.unregister(playerUuid);
 
@@ -984,6 +990,7 @@ class LoginServiceTest {
 
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+                stubSchedulerToRunSynchronously(bukkitMock);
 
                 boolean result = service.unregister(playerUuid);
 
@@ -2444,9 +2451,9 @@ class LoginServiceTest {
         @DisplayName("Should refuse to publish a request captured before an invalidation that landed"
                 + " before the worker inserted it")
         void refusesRequestCapturedBeforeInvalidation() {
-            // Codex PR #18 thread 3945030000 (round 4), LoginService.java:429: /panel captures
-            // the invalidation generation before scheduling its asynchronous worker;
-            // requestPanelLink() runs later, on that worker thread. An administrator's
+            // Codex PR #18 thread 3945030000 (round 4), see requestPanelLink(Player, long):
+            // /panel captures the invalidation generation before scheduling its asynchronous
+            // worker; requestPanelLink() runs later, on that worker thread. An administrator's
             // reset/unregister landing in the gap between those two points calls
             // invalidateSession(), which increments the generation and calls
             // cancelPendingPanelRequest() -- but that cancellation finds nothing yet, since this
@@ -2455,6 +2462,22 @@ class LoginServiceTest {
             // link, and start polling; since a reset/change does not remove the account,
             // completePanelLogin()'s registration check would later pass and re-authenticate the
             // revoked connection.
+            //
+            // Round 5 (13-REVIEW-UltiLogin.md, own deep review of bcadfb5): the previous version
+            // of this test passed for the wrong reason. UltiTools.getInstance() is null in this
+            // unit test, so requestPanelLink's own try/catch around UltiTools.getEnv() refused
+            // the request via the unrelated "API URL not configured" branch regardless of
+            // whether the fence check above it existed at all -- removing the fence entirely
+            // left this test passing unchanged. Stubbing UltiTools.getEnv(), CommonUtils
+            // .getUltiToolsUUID(), and SimpleHttpClient.post() below makes the rest of the
+            // publish path succeed, so that with the fence removed this request WOULD be
+            // published; the assertions then pin the fence-specific outcome instead of a
+            // coincidental one. Verified locally: disabling the "if (generationCell.get() !=
+            // expectedGeneration)" check in requestPanelLink() turns the isSuccess() assertion
+            // below red -- org.opentest4j.AssertionFailedError: [a panel link request captured
+            // before an invalidation must not be published] Expecting value to be false but was
+            // true -- since the (fence-free) request then reaches the stubbed HTTP call and
+            // succeeds.
             when(config.isUlticloudEnabled()).thenReturn(true);
 
             long capturedGeneration = service.getInvalidationGeneration(playerUuid);
@@ -2463,14 +2486,35 @@ class LoginServiceTest {
             // requestPanelLink() with the generation it captured above.
             service.invalidateSession(playerUuid);
 
-            LoginService.PanelLinkResult result = service.requestPanelLink(player, capturedGeneration);
+            YamlConfiguration env = mock(YamlConfiguration.class);
+            when(env.getString("api-url")).thenReturn("http://ulticloud.test");
+            SimpleHttpClient.Response okResponse =
+                    new SimpleHttpClient.Response(200, "{\"data\":{\"url\":\"http://panel.test/link\"}}");
 
-            assertThat(result.isSuccess())
-                    .as("a panel link request captured before an invalidation must not be published")
-                    .isFalse();
-            assertThat(service.hasPendingPanelRequest(playerUuid))
-                    .as("a refused request must never be inserted into pendingPanelRequests")
-                    .isFalse();
+            try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
+                 MockedStatic<CommonUtils> commonUtils = mockStatic(CommonUtils.class);
+                 MockedStatic<SimpleHttpClient> http = mockStatic(SimpleHttpClient.class)) {
+                ultiTools.when(UltiTools::getEnv).thenReturn(env);
+                commonUtils.when(CommonUtils::getUltiToolsUUID).thenReturn("server-uuid");
+                http.when(() -> SimpleHttpClient.post(anyString(), anyMap(), anyString()))
+                        .thenReturn(okResponse);
+
+                LoginService.PanelLinkResult result = service.requestPanelLink(player, capturedGeneration);
+
+                assertThat(result.isSuccess())
+                        .as("a panel link request captured before an invalidation must not be published")
+                        .isFalse();
+                assertThat(result.getError())
+                        .as("the fence's own refusal must be distinguishable from any other"
+                                + " failure path -- this test's stubs make every other failure"
+                                + " path (e.g. \"API URL not configured\") unreachable, so only"
+                                + " the fence itself can produce this message")
+                        .contains("invalidated");
+                assertThat(service.hasPendingPanelRequest(playerUuid))
+                        .as("a refused request must never be inserted into pendingPanelRequests")
+                        .isFalse();
+                http.verifyNoInteractions();
+            }
         }
 
         @Test
@@ -3192,6 +3236,29 @@ class LoginServiceTest {
     }
 
     // ==================== Helper methods ====================
+
+    /**
+     * Stubs {@code Bukkit.getScheduler()} under an already-open {@code mockStatic(Bukkit.class)}
+     * block to run {@code runTask(...)} synchronously on the calling thread, and returns the
+     * fake scheduler so callers can add further stubs if needed.
+     * <p>
+     * Round 5 (13-REVIEW-UltiLogin.md, own deep review of bcadfb5, Info finding): {@link
+     * LoginProtectionListener#presentCredentialPrompt} now dispatches its text-prompt branch
+     * through {@code Bukkit.getScheduler().runTask(...)} the same way its GUI branch already
+     * did, so every test that fully mocks {@code Bukkit} (which otherwise makes {@code
+     * Bukkit.getScheduler()} return {@code null}) and then exercises a credential-invalidating
+     * path against an online player must stub the scheduler too, or the text branch NPEs.
+     */
+    private BukkitScheduler stubSchedulerToRunSynchronously(MockedStatic<Bukkit> bukkitMock) {
+        BukkitScheduler fakeScheduler = mock(BukkitScheduler.class);
+        doAnswer(invocation -> {
+            Runnable runnable = invocation.getArgument(1);
+            runnable.run();
+            return mock(BukkitTask.class);
+        }).when(fakeScheduler).runTask(any(Plugin.class), any(Runnable.class));
+        bukkitMock.when(Bukkit::getScheduler).thenReturn(fakeScheduler);
+        return fakeScheduler;
+    }
 
     private String hashPasswordForTest(String password, String salt) {
         try {
