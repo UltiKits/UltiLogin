@@ -343,7 +343,7 @@ public class LoginService {
         
         // Verify password
         String hash = hashPassword(password, account.getSalt());
-        if (!hash.equals(account.getPasswordHash())) {
+        if (!hashesMatch(hash, account.getPasswordHash())) {
             recordFailedAttempt(player);
             int remaining = getRemainingAttempts(player);
             if (remaining > 0) {
@@ -685,7 +685,7 @@ public class LoginService {
         
         // Verify old password
         String oldHash = hashPassword(oldPassword, account.getSalt());
-        if (!oldHash.equals(account.getPasswordHash())) {
+        if (!hashesMatch(oldHash, account.getPasswordHash())) {
             return false;
         }
         
@@ -772,6 +772,28 @@ public class LoginService {
         } catch (NoSuchAlgorithmException e) {
             throw new RuntimeException("SHA-256 not available", e);
         }
+    }
+
+    /**
+     * Compare two Base64-encoded password hashes in constant time. WR-03
+     * (13-REVIEW-UltiLogin.md): {@code String.equals} short-circuits on the first mismatched
+     * character, which is a textbook timing side-channel for a stored-hash comparison. Decodes
+     * both to bytes and defers to {@link MessageDigest#isEqual(byte[], byte[])}, which always
+     * compares the full length of the shorter input regardless of where the first difference is.
+     */
+    private boolean hashesMatch(String computedHash, String storedHash) {
+        if (computedHash == null || storedHash == null) {
+            return false;
+        }
+        byte[] computedBytes;
+        byte[] storedBytes;
+        try {
+            computedBytes = Base64.getDecoder().decode(computedHash);
+            storedBytes = Base64.getDecoder().decode(storedHash);
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+        return MessageDigest.isEqual(computedBytes, storedBytes);
     }
     
     /**
