@@ -642,6 +642,43 @@ class LoginServiceTest {
         }
 
         @Test
+        @DisplayName("invalidateSession cancels a pending panel magic-link request and its polling task")
+        void invalidateSessionCancelsPendingPanelRequest() throws Exception {
+            // CR-01 (13-REVIEW-UltiLogin.md): unregister() ends `sessions` entries but, before
+            // this fix, left an in-flight /panel magic-link request live. Since invalidateSession
+            // is the single entry point every credential-changing path already routes through
+            // (13-06/D-08), the cancellation belongs here rather than duplicated at each call
+            // site -- covering unregister and both resetPassword overloads and changePassword in
+            // one place.
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            @SuppressWarnings("unchecked")
+            Map<String, Long> pendingPanelTimestamps =
+                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
+            @SuppressWarnings("unchecked")
+            Map<UUID, BukkitTask> pollingTasks =
+                    (Map<UUID, BukkitTask>) getFieldValue(service, "pollingTasks");
+
+            String requestId = "pending-panel-request";
+            pendingPanelRequests.put(requestId, playerUuid);
+            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
+            BukkitTask mockTask = mock(BukkitTask.class);
+            pollingTasks.put(playerUuid, mockTask);
+
+            service.invalidateSession(playerUuid);
+
+            assertThat(pendingPanelRequests)
+                    .as("a pending panel magic-link request for the invalidated player must be cancelled")
+                    .doesNotContainKey(requestId);
+            assertThat(pendingPanelTimestamps).doesNotContainKey(requestId);
+            assertThat(pollingTasks)
+                    .as("the polling task backing the cancelled request must be removed")
+                    .doesNotContainKey(playerUuid);
+            verify(mockTask).cancel();
+        }
+
+        @Test
         @DisplayName("Administrator reset (resetPassword(UUID)) invalidates the session")
         void adminResetInvalidatesSession() throws Exception {
             when(config.isSessionEnabled()).thenReturn(true);
@@ -2339,6 +2376,46 @@ class LoginServiceTest {
             boolean result = service.completePanelLogin(requestId);
 
             assertThat(result).isFalse();
+        }
+
+        @Test
+        @DisplayName("Should refuse to complete login when the account is no longer registered")
+        void refusesLoginForDeletedAccount() throws Exception {
+            // CR-01 (13-REVIEW-UltiLogin.md): a second, independent layer of defense alongside
+            // invalidateSession's cancellation. If a magic-link request survives account deletion
+            // for any reason (e.g. it was created after the account row was already gone, or the
+            // cancellation path itself regresses), completePanelLogin must still refuse to mark a
+            // non-existent account as logged in.
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            @SuppressWarnings("unchecked")
+            Map<String, Long> pendingPanelTimestamps =
+                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
+
+            String requestId = "test-deleted-account-request";
+            pendingPanelRequests.put(requestId, playerUuid);
+            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
+
+            try {
+                Field serverField = Bukkit.class.getDeclaredField("server");
+                serverField.setAccessible(true);
+                Server server = (Server) serverField.get(null);
+                doReturn(player).when(server).getPlayer(playerUuid);
+            } catch (Exception e) {
+                // Skip
+            }
+
+            // No account for this UUID -- the account row was deleted (unregister) while the
+            // magic-link request was still pending.
+            when(mockQuery.list()).thenReturn(Collections.emptyList());
+
+            boolean result = service.completePanelLogin(requestId, false);
+
+            assertThat(result)
+                    .as("completePanelLogin must not log in a player whose account no longer exists")
+                    .isFalse();
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
         }
 
         @Test
