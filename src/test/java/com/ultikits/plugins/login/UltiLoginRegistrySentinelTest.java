@@ -8,6 +8,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockbukkit.mockbukkit.MockBukkit;
 
+import java.lang.reflect.Field;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -25,7 +26,21 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 class UltiLoginRegistrySentinelTest {
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
+        // Defensive cleanup first: sibling classes in this module (LoginProtectionListenerTest,
+        // EmailVerificationServiceTest, PanelCommandTest) set Bukkit.server via reflection and
+        // never clear it, so if one of them runs earlier in the same Surefire fork,
+        // MockBukkit.mock() throws UnsupportedOperationException("Cannot redefine singleton
+        // Server"). Null the field unconditionally first so this class's own bootstrap is never
+        // order-dependent on what ran before it. Pattern per LoginServiceTest.setUp() — the
+        // reopen-guard hazard is the same one that pattern was written to close, just tripped
+        // here by a different sibling ordering (surefire's default runOrder=filesystem is not
+        // stable across machines, so a class order that is safe locally can still be unsafe in
+        // CI; see this task's ledger entry for the measured local repro).
+        Field bukkitServerField = Bukkit.class.getDeclaredField("server");
+        bukkitServerField.setAccessible(true);
+        bukkitServerField.set(null, null);
+
         MockBukkit.mock();
     }
 
