@@ -398,7 +398,26 @@ public class LoginService {
         long sessionTimeout = config.getSessionTimeout() * 60 * 1000L;
         return System.currentTimeMillis() - lastLogin < sessionTimeout;
     }
-    
+
+    /**
+     * End every session belonging to a player, regardless of which address it was opened from.
+     * <p>
+     * Called from every path that changes or removes a player's credentials: account deletion,
+     * both password-reset overloads, and password change. Matches by the player-identifier
+     * suffix of the session key ({@code ip:uuid}), not by the caller's own current address --
+     * that distinction is the point, since an administrator deleting an account, or a recovery
+     * flow, specifically needs to end a session the actor is not connected from. No separate
+     * identifier-to-keys index is kept: the session map holds one entry per authenticated
+     * address per player, so a scan over its key set is bounded and small, and a second
+     * structure would itself need invalidating.
+     *
+     * @param playerUuid the player whose sessions should end
+     */
+    public void invalidateSession(UUID playerUuid) {
+        String suffix = ":" + playerUuid;
+        sessions.keySet().removeIf(key -> key.endsWith(suffix));
+    }
+
     /**
      * Handle player join.
      */
@@ -517,7 +536,10 @@ public class LoginService {
             plugin.getLogger().error("Failed to reset password", e);
             return null;
         }
-        
+
+        // Only on the success branch -- a failed update must not log the player out.
+        invalidateSession(playerUuid);
+
         return newPassword;
     }
     
@@ -541,10 +563,16 @@ public class LoginService {
             plugin.getLogger().error("Failed to reset password", e);
             return false;
         }
-        
+
+        // Only on the success branch -- a failed update must not log the player out. This
+        // overload is also what the email-recovery flow delegates to
+        // (EmailVerificationService.resetPasswordAfterRecovery), so recovery inherits the
+        // invalidation without a second call site.
+        invalidateSession(playerUuid);
+
         return true;
     }
-    
+
     /**
      * Unregister a player (admin command).
      */
@@ -553,16 +581,22 @@ public class LoginService {
         if (account == null) {
             return false;
         }
-        
+
         dataOperator.delById(account.getId());
-        
-        // Force logout if online
+
+        // End every session before touching the online player at all -- the account no longer
+        // exists, so nothing should be able to authenticate as it again.
+        invalidateSession(playerUuid);
+
+        // Force logout if online. No onPlayerJoin() replay: that replay was the defect --
+        // it re-ran the join flow, whose first act is the session check, so it found a session
+        // that had never been cleared and logged the just-deleted account straight back in.
+        // The player is simply left in the normal unauthenticated state.
         Player player = Bukkit.getPlayer(playerUuid);
         if (player != null && player.isOnline()) {
             loggedInPlayers.put(playerUuid, false);
-            onPlayerJoin(player);
         }
-        
+
         return true;
     }
     
@@ -642,10 +676,14 @@ public class LoginService {
             plugin.getLogger().error("Failed to update account", e);
             return false;
         }
-        
+
+        // Only on the success branch -- a rejected password change (wrong old password, or a
+        // failed persist above) must not log the player out.
+        invalidateSession(playerUuid);
+
         return true;
     }
-    
+
     /**
      * Count registrations by IP.
      */
