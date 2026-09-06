@@ -2,6 +2,7 @@ package com.ultikits.plugins.login.service;
 
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.entity.AccountData;
+import com.ultikits.plugins.login.listener.LoginProtectionListener;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.PreDestroy;
@@ -30,6 +31,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -70,6 +72,12 @@ public class LoginService {
 
     // Locked UUIDs (UUID -> unlock time)
     private final Map<UUID, Long> lockedUuids = new ConcurrentHashMap<>();
+
+    // Invalidation generation per player -- incremented by invalidateSession(UUID), used to
+    // fence panel-link requests captured before an invalidation that landed before the request
+    // was actually published. See Codex PR #18 thread 3945030000 (round 4) and
+    // requestPanelLink(Player, long)'s javadoc.
+    private final Map<UUID, AtomicLong> invalidationGenerations = new ConcurrentHashMap<>();
 
     // Random generator for password generation
     private final SecureRandom random = new SecureRandom();
@@ -113,6 +121,7 @@ public class LoginService {
         lockedUuids.clear();
         pendingPanelRequests.clear();
         pendingPanelTimestamps.clear();
+        invalidationGenerations.clear();
     }
     
     /**
@@ -419,15 +428,44 @@ public class LoginService {
      * resetPassword paths separately called {@link #forceReauthenticationIfOnline(UUID)}. This is
      * now the single entry point every credential-changing path must be sufficient by calling
      * alone: it forces re-authentication itself, so no caller can forget the step.
+     * <p>
+     * Also advances this player's invalidation generation ({@link #getInvalidationGeneration
+     * (UUID)}), first -- before {@link #cancelPendingPanelRequest(UUID)}, which can only cancel
+     * a panel request that has already been inserted into {@code pendingPanelRequests}. Codex PR
+     * #18 thread 3945030000 (round 4): a {@code /panel} request captured before this call, but
+     * not yet published by {@link #requestPanelLink(Player, long)} at the time this call runs,
+     * has nothing for the cancellation to find. The generation bump is what {@code
+     * requestPanelLink} checks to refuse publishing that now-stale request when its worker
+     * finally runs.
      *
      * @param playerUuid the player whose sessions should end, and whose active login state
      *                   should be revoked if they are online
      */
     public void invalidateSession(UUID playerUuid) {
+        invalidationGenerations.computeIfAbsent(playerUuid, k -> new AtomicLong()).incrementAndGet();
         String suffix = ":" + playerUuid;
         sessions.keySet().removeIf(key -> key.endsWith(suffix));
         cancelPendingPanelRequest(playerUuid);
         forceReauthenticationIfOnline(playerUuid);
+    }
+
+    /**
+     * Get the current invalidation generation for a player -- a counter {@link
+     * #invalidateSession(UUID)} increments every time it runs for that player, defaulting to
+     * {@code 0} for a player who has never been invalidated.
+     * <p>
+     * Callers that schedule work asynchronously after a player-facing action (e.g. {@code
+     * /panel}'s worker, which makes a blocking HTTP call before {@link #requestPanelLink(Player,
+     * long)} actually publishes anything) should capture this value up front, before scheduling,
+     * and pass it back in so the eventual publish can refuse itself if an invalidation landed in
+     * the gap. See Codex PR #18 thread 3945030000 (round 4).
+     *
+     * @param playerUuid the player to check
+     * @return the current invalidation generation, {@code 0} if never invalidated
+     */
+    public long getInvalidationGeneration(UUID playerUuid) {
+        AtomicLong generation = invalidationGenerations.get(playerUuid);
+        return generation == null ? 0L : generation.get();
     }
 
     /**
@@ -471,6 +509,13 @@ public class LoginService {
      * longer needs a separate call from every credential-changing path -- kept {@code private}
      * since {@code invalidateSession} is the only remaining caller and the sole intended entry
      * point.
+     * <p>
+     * Codex PR #18 thread 3945030004 (round 4): flipping the flag alone left a revoked online
+     * player with no way back to the credential screen -- {@code LoginProtectionListener} only
+     * ever opens the login/register GUI from {@code PlayerJoinEvent} or a blocked action,
+     * neither of which fires again on its own after this silent flag flip, so the player sat
+     * frozen by the action guards until {@link #checkTimeouts()} eventually kicked them. Now
+     * also calls {@link #presentCredentialPrompt(Player)} to show the same prompt immediately.
      *
      * @param playerUuid the player to force back into the unauthenticated state, if online
      */
@@ -479,7 +524,29 @@ public class LoginService {
         if (player != null && player.isOnline()) {
             loggedInPlayers.put(playerUuid, false);
             joinTimes.put(playerUuid, System.currentTimeMillis());
+            presentCredentialPrompt(player);
         }
+    }
+
+    /**
+     * Present the login or register credential prompt -- the GUI page or a plain chat message,
+     * chosen by {@link LoginConfig#isGuiModeEnabled()} and the player's current registration
+     * state -- exactly as {@link LoginProtectionListener} already does when re-prompting a
+     * player after a blocked action.
+     * <p>
+     * Delegates to {@link LoginProtectionListener#presentCredentialPrompt(Player,
+     * UltiToolsPlugin, LoginService, Plugin)} so {@link #forceReauthenticationIfOnline(UUID)}
+     * can show the same prompt after an administrative credential change (Codex PR #18 thread
+     * 3945030004, round 4) without duplicating the GUI-vs-text branching a second time.
+     * <p>
+     * Deliberately does not consult {@link #hasValidSession(Player)}: unlike {@link
+     * #onPlayerJoin(Player)}, this must never silently re-authenticate the player through a
+     * remembered session -- it only ever shows the credential entry screen.
+     *
+     * @param player the player to prompt; must be online
+     */
+    public void presentCredentialPrompt(Player player) {
+        LoginProtectionListener.presentCredentialPrompt(player, plugin, this, bukkitPlugin);
     }
 
     /**
@@ -871,15 +938,59 @@ public class LoginService {
     }
 
     /**
-     * Request a panel magic link for a player.
-     * Calls the API Worker to create a magic link and returns the URL.
+     * Request a panel magic link for a player, without fencing against an invalidation racing
+     * the request itself.
+     * <p>
+     * Equivalent to {@link #requestPanelLink(Player, long)} called with the player's
+     * <em>current</em> invalidation generation, captured at the start of this call -- which
+     * means it can never observe itself as stale. Suitable only for a caller on the same,
+     * uninterrupted call stack as the eventual publish (e.g. tests). {@code /panel}'s own
+     * worker uses the two-argument overload instead, capturing the generation before it
+     * schedules any asynchronous work. See {@link #requestPanelLink(Player, long)}.
      *
      * @param player the player requesting the link
      * @return PanelLinkResult with the URL or error message
      */
     public PanelLinkResult requestPanelLink(Player player) {
+        return requestPanelLink(player, getInvalidationGeneration(player.getUniqueId()));
+    }
+
+    /**
+     * Request a panel magic link for a player, refusing to publish it if the invalidation
+     * generation the caller captured before starting no longer matches the player's current
+     * one.
+     * <p>
+     * Codex PR #18 thread 3945030000 (round 4), {@code LoginService.java:429}: {@code /panel}
+     * (see {@code PanelCommand}) captures {@link #getInvalidationGeneration(UUID)} before
+     * scheduling its asynchronous worker; this method runs later, on that worker thread, after a
+     * blocking HTTP call. An administrator's reset/unregister landing in the gap between those
+     * two points calls {@link #invalidateSession(UUID)}, which bumps the generation and calls
+     * {@link #cancelPendingPanelRequest(UUID)} -- but that cancellation finds nothing yet, since
+     * this request has not been inserted into {@code pendingPanelRequests} at that point.
+     * Without this check, the worker would go on to publish the (already-stale) request, send
+     * the link, and start polling; since a password reset or change does not remove the
+     * account, {@link #completePanelLogin(String, boolean)}'s registration check would later
+     * pass and re-authenticate the revoked connection. Checking the generation immediately
+     * before publishing closes that gap; once a request has been inserted, any subsequent
+     * invalidation is already covered by {@link #cancelPendingPanelRequest(UUID)} and, for a
+     * poll already in flight past that point, by {@link #handlePanelPollCompleted(Player,
+     * boolean)}'s fresh main-thread lookup (round 2, comment 3944418953) -- so this is the one
+     * remaining fence, not a duplicate of either.
+     *
+     * @param player the player requesting the link
+     * @param expectedGeneration the invalidation generation the caller captured before issuing
+     *                           this request, from {@link #getInvalidationGeneration(UUID)}
+     * @return PanelLinkResult with the URL or error message
+     */
+    public PanelLinkResult requestPanelLink(Player player, long expectedGeneration) {
         if (!isPanelEnabled()) {
             return new PanelLinkResult(false, null, "Panel integration not enabled");
+        }
+
+        UUID playerUuidRaw = player.getUniqueId();
+        if (getInvalidationGeneration(playerUuidRaw) != expectedGeneration) {
+            return new PanelLinkResult(false, null,
+                    "Session was invalidated before the request completed");
         }
 
         String requestId = UUID.randomUUID().toString();

@@ -78,7 +78,7 @@ class PanelCommandTest {
             command.openPanel(player);
 
             verify(player).sendMessage(anyString());
-            verify(loginService, never()).requestPanelLink(any());
+            verify(loginService, never()).requestPanelLink(any(), anyLong());
         }
 
         @Test
@@ -102,7 +102,14 @@ class PanelCommandTest {
          */
         private Runnable captureResultDeliveryTask(LoginService.PanelLinkResult result) {
             when(loginService.isPanelEnabled()).thenReturn(true);
-            when(loginService.requestPanelLink(player)).thenReturn(result);
+            // Round 4 (Codex PR #18 thread 3945030000): openPanel() now captures the player's
+            // invalidation generation via getInvalidationGeneration() before scheduling the
+            // async worker, and passes it into the two-argument requestPanelLink() overload so
+            // the worker can refuse to publish a request that went stale in the gap. The
+            // captured value itself does not matter to this fixture (loginService is a plain
+            // mock, so getInvalidationGeneration() already returns 0 by default) -- only that
+            // the two-argument overload is the one stubbed and invoked.
+            when(loginService.requestPanelLink(eq(player), anyLong())).thenReturn(result);
 
             command.openPanel(player);
 

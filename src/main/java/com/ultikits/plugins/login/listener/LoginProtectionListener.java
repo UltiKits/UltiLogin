@@ -199,6 +199,35 @@ public class LoginProtectionListener implements Listener {
      * Send login prompt to player.
      */
     private void sendLoginPrompt(Player player) {
+        presentCredentialPrompt(player, plugin, loginService, bukkitPlugin);
+    }
+
+    /**
+     * Present the login or register credential prompt -- the GUI page or a plain chat message,
+     * chosen by {@code loginService}'s config and the player's current registration state.
+     * <p>
+     * {@code static} and package-visible via a full parameter list (rather than an instance
+     * method reached through a bean reference) so {@link LoginService#presentCredentialPrompt
+     * (Player)} can call this exact same branching after an administrative credential change
+     * (Codex PR #18 thread 3945030004, round 4) without duplicating it a second time, and
+     * without introducing a circular bean dependency between the listener and the service --
+     * {@code LoginService} already has {@code plugin} and {@code bukkitPlugin} as constructor-
+     * injected fields, so it can call this like any other static utility. This class's own
+     * mock-based unit tests are unaffected: {@link #sendLoginPrompt(Player)} still exercises the
+     * identical branching with the identical field values, just via this extracted method.
+     * <p>
+     * The GUI branch is scheduled onto the main thread via {@link Bukkit#getScheduler()}:
+     * inventory APIs are not thread-safe, and a caller revoking a session (e.g. an admin
+     * command) is not guaranteed to already be on the main thread. The text branch is sent
+     * synchronously, matching this method's pre-existing behaviour before extraction.
+     *
+     * @param player the player to prompt; must be online
+     * @param plugin the UltiTools plugin instance, passed through to the GUI pages
+     * @param loginService the login service to read registration/login state and config from
+     * @param bukkitPlugin the framework plugin instance the scheduler task is registered under
+     */
+    public static void presentCredentialPrompt(Player player, UltiToolsPlugin plugin,
+            LoginService loginService, Plugin bukkitPlugin) {
         if (loginService.getConfig().isGuiModeEnabled()) {
             // Reopen GUI
             Bukkit.getScheduler().runTask(bukkitPlugin, () -> {
@@ -213,10 +242,10 @@ public class LoginProtectionListener implements Listener {
         } else {
             // Send text prompt
             if (loginService.isRegistered(player.getUniqueId())) {
-                player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
+                player.sendMessage(ChatColor.translateAlternateColorCodes('&',
                     loginService.getConfig().getLoginPrompt()));
             } else {
-                player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
+                player.sendMessage(ChatColor.translateAlternateColorCodes('&',
                     loginService.getConfig().getRegisterPrompt()));
             }
         }

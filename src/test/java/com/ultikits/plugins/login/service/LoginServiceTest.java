@@ -528,6 +528,71 @@ class LoginServiceTest {
         }
     }
 
+    // ==================== forceReauthenticationIfOnline credential prompt ====================
+
+    @Nested
+    @DisplayName("forceReauthenticationIfOnline credential prompt")
+    class ForceReauthenticationCredentialPrompt {
+
+        @Test
+        @DisplayName("Presents the GUI credential prompt after an online player's password is"
+                + " reset in GUI mode, without replaying session auto-login")
+        void presentsGuiPromptAfterResetPasswordInGuiMode() throws Exception {
+            // Codex PR #18 thread 3945030004 (round 4), LoginService.java:481:
+            // forceReauthenticationIfOnline only flipped the login flag and started the
+            // timeout -- with GUI mode enabled, LoginProtectionListener only ever opens the
+            // login/register GUI from PlayerJoinEvent or a blocked action, neither of which
+            // fires again on its own after a silent flag flip, so a revoked online player was
+            // frozen by the action guards and eventually kicked by the timeout without ever
+            // seeing the credential screen again.
+            when(config.isGuiModeEnabled()).thenReturn(true);
+
+            String salt = "testSalt";
+            String password = "password123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, password);
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+            doReturn(player).when(server).getPlayer(playerUuid);
+
+            // Force the scheduled main-thread task to run synchronously, same pattern as
+            // StartAuthPollingRace#makeSchedulerRunTasksSynchronously below.
+            BukkitScheduler fakeScheduler = spy(server.getScheduler());
+            doAnswer(invocation -> {
+                Runnable runnable = invocation.getArgument(1);
+                runnable.run();
+                return mock(BukkitTask.class);
+            }).when(fakeScheduler).runTask(any(Plugin.class), any(Runnable.class));
+            doReturn(fakeScheduler).when(server).getScheduler();
+
+            String newPassword;
+            try (MockedStatic<com.ultikits.plugins.login.gui.LoginGUIPage> loginGui =
+                         mockStatic(com.ultikits.plugins.login.gui.LoginGUIPage.class);
+                 MockedStatic<com.ultikits.plugins.login.gui.RegisterGUIPage> registerGui =
+                         mockStatic(com.ultikits.plugins.login.gui.RegisterGUIPage.class)) {
+
+                newPassword = service.resetPassword(playerUuid);
+
+                assertThat(newPassword).isNotNull();
+                loginGui.verify(() -> com.ultikits.plugins.login.gui.LoginGUIPage.open(
+                        player, UltiLoginTestHelper.getMockPlugin(), service));
+                registerGui.verifyNoInteractions();
+            }
+
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("presenting the credential prompt must not replay session auto-login --"
+                            + " the player must stay unauthenticated until they actually"
+                            + " re-enter a password")
+                    .isFalse();
+        }
+    }
+
     // ==================== unregister ====================
 
     @Nested
@@ -573,10 +638,14 @@ class LoginServiceTest {
                 // 13-06/D-08: unregister() no longer replays onPlayerJoin(player) to force a
                 // logout -- that replay is the defect (it re-runs the session check, which found
                 // the never-cleared session and logged the deleted account straight back in).
-                // No message is sent here any more; onPlayerJoin was this test's only observable
-                // side effect for "the join flow ran", so its absence is what proves the replay
-                // is gone, not merely that a message happens not to fire.
-                verify(player, never()).sendMessage(anyString());
+                // getLocation() (used by onPlayerJoin's original-location bookkeeping) is what
+                // proves the replay is still gone -- it is never called from this path.
+                //
+                // A message IS expected here as of round 4 (Codex PR #18 thread 3945030004):
+                // forceReauthenticationIfOnline() now also calls presentCredentialPrompt(), so
+                // the revoked player sees the login/register prompt immediately instead of being
+                // silently frozen by the action guards until checkTimeouts() kicks them.
+                verify(player).sendMessage(anyString());
                 verify(player, never()).getLocation();
             }
         }
@@ -2364,6 +2433,63 @@ class LoginServiceTest {
             service.requestPanelLink(player);
 
             assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+        }
+    }
+
+    @Nested
+    @DisplayName("requestPanelLink invalidation-generation fence")
+    class RequestPanelLinkGenerationFence {
+
+        @Test
+        @DisplayName("Should refuse to publish a request captured before an invalidation that landed"
+                + " before the worker inserted it")
+        void refusesRequestCapturedBeforeInvalidation() {
+            // Codex PR #18 thread 3945030000 (round 4), LoginService.java:429: /panel captures
+            // the invalidation generation before scheduling its asynchronous worker;
+            // requestPanelLink() runs later, on that worker thread. An administrator's
+            // reset/unregister landing in the gap between those two points calls
+            // invalidateSession(), which increments the generation and calls
+            // cancelPendingPanelRequest() -- but that cancellation finds nothing yet, since this
+            // request has not been inserted into pendingPanelRequests at that point. Without the
+            // fence, the worker would go on to publish the (already-stale) request, send the
+            // link, and start polling; since a reset/change does not remove the account,
+            // completePanelLogin()'s registration check would later pass and re-authenticate the
+            // revoked connection.
+            when(config.isUlticloudEnabled()).thenReturn(true);
+
+            long capturedGeneration = service.getInvalidationGeneration(playerUuid);
+
+            // Simulates the admin action landing in the gap before the worker calls
+            // requestPanelLink() with the generation it captured above.
+            service.invalidateSession(playerUuid);
+
+            LoginService.PanelLinkResult result = service.requestPanelLink(player, capturedGeneration);
+
+            assertThat(result.isSuccess())
+                    .as("a panel link request captured before an invalidation must not be published")
+                    .isFalse();
+            assertThat(service.hasPendingPanelRequest(playerUuid))
+                    .as("a refused request must never be inserted into pendingPanelRequests")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("Should still attempt to publish when the captured generation matches the current one")
+        void publishesWhenGenerationMatches() {
+            // Regression guard: an uncontested request (no invalidation in the gap) must keep
+            // working through the new two-argument overload exactly like before. The API URL is
+            // deliberately left unconfigured so this test can tell the fence apart from the
+            // (unrelated) "API URL not configured" failure without mocking SimpleHttpClient.
+            when(config.isUlticloudEnabled()).thenReturn(true);
+
+            long capturedGeneration = service.getInvalidationGeneration(playerUuid);
+
+            LoginService.PanelLinkResult result = service.requestPanelLink(player, capturedGeneration);
+
+            assertThat(result.getError())
+                    .as("a request whose generation still matches must pass the fence and reach"
+                            + " the API-URL lookup, not be refused by the fence itself")
+                    .doesNotContain("invalidated");
         }
     }
 
