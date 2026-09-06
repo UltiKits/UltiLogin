@@ -1001,40 +1001,71 @@ public class LoginService {
                 boolean isServerOwner = data.has("is_server_owner")
                     && !data.get("is_server_owner").isJsonNull()
                     && data.get("is_server_owner").getAsBoolean();
-
-                // Find the requestId for this player so completePanelLogin can clean up
-                String requestId = null;
-                for (Map.Entry<String, UUID> entry : pendingPanelRequests.entrySet()) {
-                    if (entry.getValue().equals(uuid)) {
-                        requestId = entry.getKey();
-                        break;
-                    }
-                }
-
-                final String foundRequestId = requestId;
                 final boolean finalIsServerOwner = isServerOwner;
 
-                // Complete login on main thread
-                Bukkit.getScheduler().runTask(bukkitPlugin, () -> {
-                    if (!player.isOnline()) {
-                        return;
-                    }
-                    if (foundRequestId != null) {
-                        completePanelLogin(foundRequestId, finalIsServerOwner);
-                    } else {
-                        // No pending request found, just complete login directly
-                        completeLogin(player);
-                        String messageKey = finalIsServerOwner ? "panel_auth_success_owner" : "panel_auth_success_player";
-                        player.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                            plugin.i18n(messageKey)));
-                    }
-                });
+                // Complete login on main thread. The pending-request lookup itself moves onto
+                // the main thread too -- see handlePanelPollCompleted's javadoc for why.
+                Bukkit.getScheduler().runTask(bukkitPlugin, () -> handlePanelPollCompleted(player, finalIsServerOwner));
             } catch (Exception e) {
                 plugin.getLogger().debug("Auth poll error: " + e.getMessage());
             }
         }, 60L, 60L); // 60 ticks = 3 seconds
 
         pollingTasks.put(uuid, task);
+    }
+
+    /**
+     * Handle a poll's own observation that the panel magic-link request is "completed", on the
+     * main thread.
+     * <p>
+     * Looks up the pending request fresh, at the moment this actually runs, rather than trusting
+     * a decision made earlier alongside the async HTTP fetch. Every path that removes a pending
+     * request ({@link #cancelPendingPanelRequest(UUID)}, reached via {@link
+     * #invalidateSession(UUID)} from account deletion, both password-reset overloads, and
+     * password change; or {@link #completePanelLogin(String, boolean)}'s own cleanup) runs on
+     * this same main thread, so whichever removal happened first is guaranteed to be visible
+     * here.
+     * <p>
+     * Fixes a P1 Codex reported on PR #18 (review comment 3944418953, against the CR-01 fix
+     * commits): the previous implementation looked up the request ID once, on the same call
+     * stack as the async HTTP fetch, and treated "not found" as authorization to call {@link
+     * #completeLogin(Player)} directly -- bypassing {@link #completePanelLogin(String, boolean)}
+     * 's registration check entirely. {@link BukkitTask#cancel()} only prevents a scheduled
+     * task's future executions; it does not interrupt an invocation already inside its HTTP
+     * call. A poll that started before an admin reset or unregister could therefore still
+     * observe "completed" and re-authenticate an online player after their credentials were
+     * revoked or their account deleted -- undoing {@link #forceReauthenticationIfOnline(UUID)}
+     * in the same stroke. Absence of a pending request is no longer treated as authorization: it
+     * now means either the login was already completed through {@link #completePanelLogin(String,
+     * boolean)} by another path (nothing left to do) or the request was cancelled because the
+     * account changed (must not log in).
+     *
+     * @param player the online player the poll was running for
+     * @param isServerOwner whether the confirmed panel session reported server-owner status
+     */
+    private void handlePanelPollCompleted(Player player, boolean isServerOwner) {
+        if (!player.isOnline()) {
+            return;
+        }
+        String requestId = findPendingRequestId(player.getUniqueId());
+        if (requestId != null) {
+            completePanelLogin(requestId, isServerOwner);
+        }
+    }
+
+    /**
+     * Find the pending panel magic-link request tracked for a player, if any.
+     *
+     * @param uuid the player's UUID
+     * @return the request ID, or {@code null} if no request is currently pending for this player
+     */
+    private String findPendingRequestId(UUID uuid) {
+        for (Map.Entry<String, UUID> entry : pendingPanelRequests.entrySet()) {
+            if (entry.getValue().equals(uuid)) {
+                return entry.getKey();
+            }
+        }
+        return null;
     }
 
     /**
