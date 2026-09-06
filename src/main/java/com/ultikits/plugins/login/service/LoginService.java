@@ -416,6 +416,31 @@ public class LoginService {
     public void invalidateSession(UUID playerUuid) {
         String suffix = ":" + playerUuid;
         sessions.keySet().removeIf(key -> key.endsWith(suffix));
+        cancelPendingPanelRequest(playerUuid);
+    }
+
+    /**
+     * Cancel any in-flight UltiCloud panel magic-link request (and its polling task) for a
+     * player. This is a single entry point reached via invalidateSession, so every
+     * credential-changing path (unregister, both resetPassword overloads, changePassword)
+     * cancels a pending /panel request the same way -- rather than a deleted or credential-reset
+     * account being logged back in when the worker later confirms an authentication that was
+     * requested before the account changed. See 13-REVIEW-UltiLogin.md CR-01.
+     *
+     * @param playerUuid the player whose pending panel request should be cancelled
+     */
+    private void cancelPendingPanelRequest(UUID playerUuid) {
+        pendingPanelRequests.entrySet().removeIf(entry -> {
+            if (entry.getValue().equals(playerUuid)) {
+                pendingPanelTimestamps.remove(entry.getKey());
+                return true;
+            }
+            return false;
+        });
+        BukkitTask task = pollingTasks.remove(playerUuid);
+        if (task != null) {
+            task.cancel();
+        }
     }
 
     /**
@@ -991,6 +1016,15 @@ public class LoginService {
 
         Player player = Bukkit.getPlayer(playerUuid);
         if (player == null || !player.isOnline()) {
+            return false;
+        }
+
+        // Second, independent layer of defense against CR-01: the account may have been
+        // unregistered after this request was created but before invalidateSession's
+        // cancellation reached it (or, in the future, through some other path that never calls
+        // invalidateSession). Refuse to grant the login rather than trust that the account still
+        // exists just because a pending request for it does.
+        if (!isRegistered(playerUuid)) {
             return false;
         }
 

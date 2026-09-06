@@ -2515,8 +2515,12 @@ class LoginServiceTest {
         }
 
         @Test
-        @DisplayName("Should handle null account during panel login")
+        @DisplayName("Should refuse panel login when no account exists for the request")
         void nullAccountPanelLogin() throws Exception {
+            // CR-01 (13-REVIEW-UltiLogin.md): this test previously asserted the bug itself --
+            // that completePanelLogin "should still complete login" with no backing account.
+            // That is exactly the deleted-account-logs-back-in defect the phase closes, so the
+            // expectation is corrected here rather than left pinning the old behavior.
             @SuppressWarnings("unchecked")
             Map<String, UUID> pendingPanelRequests =
                     (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
@@ -2542,10 +2546,9 @@ class LoginServiceTest {
 
             boolean result = service.completePanelLogin(requestId, false);
 
-            // Should still complete login (account update is optional)
-            assertThat(result).isTrue();
-            assertThat(service.isLoggedIn(playerUuid)).isTrue();
-            // update should NOT be called since account is null
+            assertThat(result).isFalse();
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            // update should NOT be called since there is no account to log in or update
             verify(dataOperator, never()).update(any());
         }
 
