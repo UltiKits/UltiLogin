@@ -41,9 +41,12 @@ class LoginServiceTest {
     @BeforeEach
     void setUp() throws Exception {
         // Bootstrap a live test-time server, for the wiring rather than for the registry.
-        // ServerMock supplies getPluginManager()/getPlugin("UltiTools") -- LoginService's
-        // constructor calls Bukkit.getPluginManager().getPlugin("UltiTools") -- plus the scheduler,
-        // all of which this class used to hand-stub inline before the shared bootstrap replaced it.
+        // ServerMock supplies getPluginManager() and getScheduler(). It does NOT supply
+        // getPlugin("UltiTools"), though an earlier revision of this comment said so: a bare
+        // ServerMock has no plugins loaded, so that lookup returns null -- measured. LoginService's
+        // constructor calls Bukkit.getPluginManager().getPlugin("UltiTools") (LoginService.java:95),
+        // so bootstrapLiveServer() loads a plugin under that name itself. Together these replace
+        // what this class used to hand-stub inline before the shared bootstrap.
         //
         // It is NOT what makes PotionEffectType resolve, though an earlier revision of this comment
         // said so. Measured: with only mock(Server.class) installed -- or with no server installed
@@ -105,6 +108,22 @@ class LoginServiceTest {
     void tearDown() throws Exception {
         UltiLoginTestHelper.tearDown();
         UltiLoginTestHelper.tearDownLiveServer();
+    }
+
+    @Test
+    @DisplayName("Constructor resolves the UltiTools plugin its scheduler paths hand to Bukkit")
+    void constructorResolvesFrameworkPlugin() throws Exception {
+        // startAuthPolling passes this field to the scheduler as the task owner
+        // (LoginService.java:855 and :907). Nothing currently enabled in this class reaches that
+        // path, so a null here would sit latent -- and MockBukkit's scheduler accepts a null owner
+        // silently, so even a test that did reach it would not necessarily fail. Pin the field
+        // instead, so the fixture cannot drop the "UltiTools" plugin without something going red.
+        Field bukkitPluginField = LoginService.class.getDeclaredField("bukkitPlugin");
+        bukkitPluginField.setAccessible(true);
+
+        assertThat(bukkitPluginField.get(service))
+                .as("LoginService must resolve the framework plugin the scheduler paths require")
+                .isNotNull();
     }
 
     // ==================== isRegistered ====================

@@ -76,13 +76,34 @@ public final class UltiLoginTestHelper {
      * stubs installed by callers keep working exactly as before.
      * <p>
      * <b>What the live server is actually for.</b> {@code ServerMock} supplies the real
-     * {@code getPluginManager()} / {@code getPlugin("UltiTools")} / {@code getScheduler()} wiring
-     * that consumer tests would otherwise hand-stub — {@code LoginService}'s constructor calls
-     * {@code Bukkit.getPluginManager().getPlugin("UltiTools")} — and it is what makes item
-     * construction work: {@code new ItemStack(Material.DIAMOND)} routes through
+     * {@code getPluginManager()} and {@code getScheduler()} wiring that consumer tests would
+     * otherwise hand-stub, and it is what makes item construction work:
+     * {@code new ItemStack(Material.DIAMOND)} routes through
      * {@code Material.asItemType()} into mockbukkit's {@code RegistryMock.loadIfEmpty}, which
      * throws under a bare {@code mock(Server.class)} (where {@code Bukkit.getUnsafe()} is
      * {@code null}).
+     * <p>
+     * <b>Why this also loads a plugin named {@code UltiTools}.</b> {@code ServerMock} supplies a
+     * real {@code PluginManagerMock}, but that manager starts with <i>no plugins loaded</i>, so
+     * {@code Bukkit.getPluginManager().getPlugin("UltiTools")} returns {@code null} — measured
+     * directly against this module's test classpath, before and after. An earlier revision of this
+     * javadoc credited {@code ServerMock} with supplying that lookup; it does not, and six
+     * production sites in this module resolve their scheduler owner through it
+     * ({@code LoginService}, {@code PanelCommand}, {@code LoginProtectionListener},
+     * {@code EmailVerificationService}, {@code LoginGUIPage}, {@code RegisterGUIPage}).
+     * <p>
+     * Loading the plugin, rather than stubbing the single lookup a consumer happens to make, is
+     * what removes the class of defect: a fixture whose plugin manager actually has the framework
+     * plugin in it cannot go stale one consumer at a time. It also matters that the failure would
+     * be <i>silent</i> here — MockBukkit's scheduler accepts a {@code null} owner without
+     * complaint, whereas real Paper's {@code CraftScheduler.validate} rejects it with
+     * {@code IllegalArgumentException("Plugin cannot be null")} (verified by disassembling
+     * {@code org.bukkit.craftbukkit.scheduler.CraftScheduler} from a Paper 1.21.4 server jar), so
+     * the fixture would not surface the difference on its own.
+     * <p>
+     * The name must match the framework's {@code plugin.yml} {@code name: UltiTools} exactly. See
+     * UltiKits/UltiEssentials#15 for the same shape as a live production defect, where two files
+     * look up {@code "UltiTools-API"} and therefore always get {@code null}.
      * <p>
      * <b>What it is not for.</b> An earlier revision of this javadoc claimed
      * {@code PotionEffectType} "resolves through mockbukkit-v1.21's real {@code RegistryAccess},
@@ -143,6 +164,12 @@ public final class UltiLoginTestHelper {
         serverField.set(null, null);
 
         MockBukkit.mock();
+
+        // A bare ServerMock has no plugins loaded, so getPlugin("UltiTools") would return null and
+        // every production site that resolves its scheduler owner that way would hold null. See
+        // this method's javadoc for the measurement and for why loading beats stubbing.
+        MockBukkit.createMockPlugin("UltiTools");
+
         Server liveServer = spy(Bukkit.getServer());
         serverField.set(null, liveServer);
         return liveServer;
