@@ -40,24 +40,36 @@ class LoginServiceTest {
 
     @BeforeEach
     void setUp() throws Exception {
+        // Bootstrap a live test-time server, for the wiring rather than for the registry.
+        // ServerMock supplies getPluginManager() and getScheduler(). It does NOT supply
+        // getPlugin("UltiTools"), though an earlier revision of this comment said so: a bare
+        // ServerMock has no plugins loaded, so that lookup returns null -- measured. LoginService's
+        // constructor calls Bukkit.getPluginManager().getPlugin("UltiTools") (LoginService.java:95),
+        // so bootstrapLiveServer() loads a plugin under that name itself. Together these replace
+        // what this class used to hand-stub inline before the shared bootstrap.
+        //
+        // It is NOT what makes PotionEffectType resolve, though an earlier revision of this comment
+        // said so. Measured: with only mock(Server.class) installed -- or with no server installed
+        // at all -- PotionEffectType.BLINDNESS resolves and new PotionEffect(BLINDNESS, 100, 1)
+        // constructs; drop mockbukkit-v1.21-4.101.0.jar from the classpath and the same code throws
+        // ExceptionInInitializerError. That jar ships
+        // META-INF/services/io.papermc.paper.registry.RegistryAccess, so the classpath dependency
+        // is what fixes PotionEffectType. See UltiLoginTestHelper#bootstrapLiveServer() for the
+        // full constant-resolution vs. item-construction split.
+        //
+        // Routed through UltiLoginTestHelper.bootstrapLiveServer() (rather than calling
+        // MockBukkit.mock() inline here) so this class and UltiLoginRegistrySentinelTest share one
+        // bootstrap entry point -- breaking that entry point fails both, not just whichever
+        // consumer happens to still call it directly. Reconciliation pattern per
+        // 14-LEDGER-UltiTrade.md, the phase's canary module, which hit the identical "test helper
+        // already touches Bukkit.server" shape. The live server this returns is already installed
+        // as Bukkit.server and wrapped in a Mockito spy, so the existing per-test
+        // doReturn(...).when(server).method(...) stubs later in this class keep working unchanged.
+        UltiLoginTestHelper.bootstrapLiveServer();
+
         UltiLoginTestHelper.setUp();
 
         config = UltiLoginTestHelper.createDefaultConfig();
-
-        // Set up Bukkit.server before LoginService constructor (it calls Bukkit.getPluginManager())
-        try {
-            Field serverField = Bukkit.class.getDeclaredField("server");
-            serverField.setAccessible(true);
-            if (serverField.get(null) == null) {
-                Server mockServer = mock(Server.class);
-                org.bukkit.plugin.PluginManager mockPm = mock(org.bukkit.plugin.PluginManager.class);
-                when(mockServer.getPluginManager()).thenReturn(mockPm);
-                when(mockPm.getPlugin("UltiTools")).thenReturn(mock(org.bukkit.plugin.Plugin.class));
-                serverField.set(null, mockServer);
-            }
-        } catch (Exception ignored) {
-            // Server may already be set
-        }
 
         // Mock plugin.getDataOperator to return our mock
         when(UltiLoginTestHelper.getMockPlugin().getDataOperator(AccountData.class)).thenReturn(dataOperator);
@@ -95,6 +107,23 @@ class LoginServiceTest {
     @AfterEach
     void tearDown() throws Exception {
         UltiLoginTestHelper.tearDown();
+        UltiLoginTestHelper.tearDownLiveServer();
+    }
+
+    @Test
+    @DisplayName("Constructor resolves the UltiTools plugin its scheduler paths hand to Bukkit")
+    void constructorResolvesFrameworkPlugin() throws Exception {
+        // startAuthPolling passes this field to the scheduler as the task owner
+        // (LoginService.java:855 and :907). Nothing currently enabled in this class reaches that
+        // path, so a null here would sit latent -- and MockBukkit's scheduler accepts a null owner
+        // silently, so even a test that did reach it would not necessarily fail. Pin the field
+        // instead, so the fixture cannot drop the "UltiTools" plugin without something going red.
+        Field bukkitPluginField = LoginService.class.getDeclaredField("bukkitPlugin");
+        bukkitPluginField.setAccessible(true);
+
+        assertThat(bukkitPluginField.get(service))
+                .as("LoginService must resolve the framework plugin the scheduler paths require")
+                .isNotNull();
     }
 
     // ==================== isRegistered ====================
@@ -1361,7 +1390,7 @@ class LoginServiceTest {
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
                 World mockWorld = mock(World.class);
-                when(server.getWorld("world")).thenReturn(mockWorld);
+                doReturn(mockWorld).when(server).getWorld("world");
             } catch (Exception e) {
                 // Skip if can't mock
             }
@@ -1388,7 +1417,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getWorld("nonexistent_world")).thenReturn(null);
+                doReturn(null).when(server).getWorld("nonexistent_world");
             } catch (Exception e) {
                 // Skip if can't mock
             }
@@ -1574,7 +1603,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(playerUuid)).thenReturn(player);
+                doReturn(player).when(server).getPlayer(playerUuid);
             } catch (Exception e) {
                 // Skip
             }
@@ -1614,7 +1643,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(offlineUuid)).thenReturn(null);
+                doReturn(null).when(server).getPlayer(offlineUuid);
             } catch (Exception e) {
                 // Skip
             }
@@ -1641,7 +1670,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(playerUuid)).thenReturn(offlinePlayer);
+                doReturn(offlinePlayer).when(server).getPlayer(playerUuid);
             } catch (Exception e) {
                 // Skip
             }
@@ -1775,7 +1804,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(playerUuid)).thenReturn(player);
+                doReturn(player).when(server).getPlayer(playerUuid);
             } catch (Exception e) {
                 // Skip
             }
@@ -1811,7 +1840,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(playerUuid)).thenReturn(player);
+                doReturn(player).when(server).getPlayer(playerUuid);
             } catch (Exception e) {
                 // Skip
             }
@@ -1844,7 +1873,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(playerUuid)).thenReturn(player);
+                doReturn(player).when(server).getPlayer(playerUuid);
             } catch (Exception e) {
                 // Skip
             }
@@ -1877,7 +1906,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(playerUuid)).thenReturn(null);
+                doReturn(null).when(server).getPlayer(playerUuid);
             } catch (Exception e) {
                 // Skip
             }
@@ -1907,7 +1936,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(playerUuid)).thenReturn(player);
+                doReturn(player).when(server).getPlayer(playerUuid);
             } catch (Exception e) {
                 // Skip
             }
@@ -1938,7 +1967,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(playerUuid)).thenReturn(player);
+                doReturn(player).when(server).getPlayer(playerUuid);
             } catch (Exception e) {
                 // Skip
             }
@@ -1969,7 +1998,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(playerUuid)).thenReturn(player);
+                doReturn(player).when(server).getPlayer(playerUuid);
             } catch (Exception e) {
                 // Skip
             }
@@ -2001,7 +2030,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(playerUuid)).thenReturn(player);
+                doReturn(player).when(server).getPlayer(playerUuid);
             } catch (Exception e) {
                 // Skip
             }
@@ -2036,7 +2065,7 @@ class LoginServiceTest {
                 Field serverField = Bukkit.class.getDeclaredField("server");
                 serverField.setAccessible(true);
                 Server server = (Server) serverField.get(null);
-                when(server.getPlayer(playerUuid)).thenReturn(player);
+                doReturn(player).when(server).getPlayer(playerUuid);
             } catch (Exception e) {
                 // Skip
             }

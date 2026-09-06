@@ -72,6 +72,11 @@ class LoginProtectionListenerTest {
     @AfterEach
     void tearDown() throws Exception {
         UltiLoginTestHelper.tearDown();
+        // Root-cause fix (PR #17 review): this class installs its own Bukkit.server mock directly
+        // (see setUp() above) rather than going through UltiLoginTestHelper.bootstrapLiveServer(),
+        // so it must clear the field itself instead of leaving it for the next Surefire-fork class
+        // to inherit.
+        UltiLoginTestHelper.clearBukkitServer();
     }
 
     @Nested
