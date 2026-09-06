@@ -390,6 +390,42 @@ class LoginServiceTest {
             assertThat(result).isTrue();
             verify(dataOperator).update(any(AccountData.class));
         }
+
+        @Test
+        @DisplayName("Should revoke the online player's active login state after a successful change")
+        void forcesReauthenticationForOnlinePlayerOnChangePassword() throws Exception {
+            // Real-machine finding F-L1 (13-uat-results.md #14, Laojun 2026-09-06): a real
+            // /changepassword reported success while the player stayed authenticated --
+            // /mail inbox still worked, /recover and /login both said already logged in.
+            // invalidateSession only ended the remembered `sessions` entry; unlike unregister
+            // and resetPassword it never called forceReauthenticationIfOnline, so
+            // LoginProtectionListener (which authorizes actions through isLoggedIn, not
+            // hasValidSession) kept the connection fully authorized under the old credentials.
+            String salt = "testSalt";
+            String oldPassword = "oldPass123";
+            String hash = hashPasswordForTest(oldPassword, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, oldPassword);
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+
+            boolean result;
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+
+                result = service.changePassword(playerUuid, oldPassword, "newPass123");
+            }
+
+            assertThat(result).isTrue();
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("a successful password change must revoke the online player's active"
+                            + " login state, not only its remembered session")
+                    .isFalse();
+            assertThat(service.hasValidSession(player))
+                    .as("a successful password change must also end the persisted session")
+                    .isFalse();
+        }
     }
 
     // ==================== resetPassword ====================

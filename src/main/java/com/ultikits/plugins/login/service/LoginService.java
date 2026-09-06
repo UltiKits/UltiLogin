@@ -400,7 +400,8 @@ public class LoginService {
     }
 
     /**
-     * End every session belonging to a player, regardless of which address it was opened from.
+     * End every session belonging to a player, regardless of which address it was opened from,
+     * and -- if the player is currently online -- revoke their active login state too.
      * <p>
      * Called from every path that changes or removes a player's credentials: account deletion,
      * both password-reset overloads, and password change. Matches by the player-identifier
@@ -410,13 +411,23 @@ public class LoginService {
      * identifier-to-keys index is kept: the session map holds one entry per authenticated
      * address per player, so a scan over its key set is bounded and small, and a second
      * structure would itself need invalidating.
+     * <p>
+     * Real-machine finding F-L1 (13-uat-results.md #14, Laojun 2026-09-06): a real
+     * {@code /changepassword} called only this method and reported success while the player
+     * stayed authenticated -- {@code LoginProtectionListener} authorizes in-game actions through
+     * {@link #isLoggedIn(UUID)}, not {@link #hasValidSession(Player)}, and only the unregister and
+     * resetPassword paths separately called {@link #forceReauthenticationIfOnline(UUID)}. This is
+     * now the single entry point every credential-changing path must be sufficient by calling
+     * alone: it forces re-authentication itself, so no caller can forget the step.
      *
-     * @param playerUuid the player whose sessions should end
+     * @param playerUuid the player whose sessions should end, and whose active login state
+     *                   should be revoked if they are online
      */
     public void invalidateSession(UUID playerUuid) {
         String suffix = ":" + playerUuid;
         sessions.keySet().removeIf(key -> key.endsWith(suffix));
         cancelPendingPanelRequest(playerUuid);
+        forceReauthenticationIfOnline(playerUuid);
     }
 
     /**
@@ -447,14 +458,19 @@ public class LoginService {
      * Revoke a currently online player's active login state and let {@link #checkTimeouts()}
      * enforce the configured login timeout on them again, as if they had just joined.
      * <p>
-     * Reported by Codex on PR #18: {@link #invalidateSession(UUID)} only ends the remembered
-     * {@code sessions} entry, but {@code LoginProtectionListener} authorizes in-game actions
-     * through {@link #isLoggedIn(UUID)}, not {@link #hasValidSession(Player)} -- so an
+     * Reported by Codex on PR #18: {@link #invalidateSession(UUID)} used to only end the
+     * remembered {@code sessions} entry, but {@code LoginProtectionListener} authorizes in-game
+     * actions through {@link #isLoggedIn(UUID)}, not {@link #hasValidSession(Player)} -- so an
      * already-authenticated online connection stayed fully authorized with the old credentials
      * until it happened to disconnect, defeating an administrative password reset issued in
      * response to a compromised, currently-connected account. Deliberately does not replay
      * {@link #onPlayerJoin(Player)}: that replay is a separate, already-fixed defect (13-06/D-08)
      * because it re-runs the session auto-login check.
+     * <p>
+     * As of the F-L1 fix, {@link #invalidateSession(UUID)} calls this itself, so this method no
+     * longer needs a separate call from every credential-changing path -- kept {@code private}
+     * since {@code invalidateSession} is the only remaining caller and the sole intended entry
+     * point.
      *
      * @param playerUuid the player to force back into the unauthenticated state, if online
      */
@@ -586,8 +602,8 @@ public class LoginService {
         }
 
         // Only on the success branch -- a failed update must not log the player out.
+        // invalidateSession revokes the online player's active login state too (F-L1).
         invalidateSession(playerUuid);
-        forceReauthenticationIfOnline(playerUuid);
 
         return newPassword;
     }
@@ -616,9 +632,8 @@ public class LoginService {
         // Only on the success branch -- a failed update must not log the player out. This
         // overload is also what the email-recovery flow delegates to
         // (EmailVerificationService.resetPasswordAfterRecovery), so recovery inherits the
-        // invalidation without a second call site.
+        // invalidation (and the online re-authentication, F-L1) without a second call site.
         invalidateSession(playerUuid);
-        forceReauthenticationIfOnline(playerUuid);
 
         return true;
     }
@@ -634,19 +649,16 @@ public class LoginService {
 
         dataOperator.delById(account.getId());
 
-        // End every session before touching the online player at all -- the account no longer
-        // exists, so nothing should be able to authenticate as it again.
-        invalidateSession(playerUuid);
-
-        // Force logout if online and reinitialize their login timeout (Codex PR #18 comment
-        // 3944181260): completeLogin already removed their joinTimes entry when they originally
-        // logged in, so without re-adding one here checkTimeouts() would never see this
+        // End every session and, if online, force the player back into the unauthenticated
+        // state and reinitialize their login timeout (Codex PR #18 comment 3944181260):
+        // completeLogin already removed their joinTimes entry when they originally logged in,
+        // so without re-adding one here checkTimeouts() would never see this
         // newly-unauthenticated player, silently disabling the login timeout while they remain
         // connected. No onPlayerJoin() replay: that replay was the defect -- it re-ran the join
         // flow, whose first act is the session check, so it found a session that had never been
         // cleared and logged the just-deleted account straight back in. The player is simply
         // left in the normal unauthenticated state.
-        forceReauthenticationIfOnline(playerUuid);
+        invalidateSession(playerUuid);
 
         return true;
     }
@@ -729,7 +741,11 @@ public class LoginService {
         }
 
         // Only on the success branch -- a rejected password change (wrong old password, or a
-        // failed persist above) must not log the player out.
+        // failed persist above) must not log the player out. F-L1 (13-uat-results.md #14):
+        // invalidateSession now also revokes the online player's active login state, not just
+        // the persisted session -- previously this was the one credential-changing path that
+        // called invalidateSession without a matching forceReauthenticationIfOnline, so a real
+        // /changepassword reported success while the player stayed fully authenticated.
         invalidateSession(playerUuid);
 
         return true;
