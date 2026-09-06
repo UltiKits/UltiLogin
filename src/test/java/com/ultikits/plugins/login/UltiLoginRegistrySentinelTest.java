@@ -33,10 +33,11 @@ class UltiLoginRegistrySentinelTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        // UltiLoginTestHelper.bootstrapLiveServer() nulls Bukkit.server defensively before
-        // installing the live server, so this class's own bootstrap is never order-dependent on
-        // what a previous Surefire-fork class left behind (see that method's javadoc for why the
-        // null-out lives there instead of here now).
+        // UltiLoginTestHelper.bootstrapLiveServer() resets both MockBukkit's own static mock field
+        // and Bukkit.server before installing the live server, so this class's own bootstrap is
+        // never order-dependent on what a previous Surefire-fork class left behind (see that
+        // method's javadoc for the two independent guards, and for why the reset lives there
+        // instead of here now).
         UltiLoginTestHelper.bootstrapLiveServer();
     }
 

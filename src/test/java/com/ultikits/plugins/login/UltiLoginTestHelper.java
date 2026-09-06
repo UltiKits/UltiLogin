@@ -85,19 +85,36 @@ public final class UltiLoginTestHelper {
      * method's live-server behavior fails the sentinel too, not just whichever consumer test happens
      * to still call it directly (PR #17 review, "the guard does not guard the wiring").
      * <p>
-     * Defensive null-out first: {@code Bukkit.setServer()} throws {@code UnsupportedOperationException
-     * ("Cannot redefine singleton Server")} if the static field is already non-null, which would
-     * otherwise make this method — and therefore every caller — order-dependent on whatever the
-     * previous test class in the same Surefire fork happened to leave behind. Test classes that
-     * install their own {@code Server} mock directly (bypassing this method) are expected to clear
-     * the field back out in their own {@code @AfterEach} — see {@link #clearBukkitServer()} — but
-     * this null-out stays here too as a second line of defense: it costs one field write per call,
-     * and the alternative is a suite that goes flaky the next time an as-yet-unaudited test class
+     * Defensive reset first, and it takes <b>two</b> statements because MockBukkit has two
+     * independent guards, not one:
+     * <ul>
+     *   <li>{@code MockBukkit.mock(T)} throws {@code IllegalStateException("Already mocking")} when
+     *       MockBukkit's own static {@code mock} field is non-null. Only {@code MockBukkit.unmock()}
+     *       clears that field.</li>
+     *   <li>{@code Bukkit.setServer()}, which {@code MockBukkit.mock(T)} calls immediately
+     *       afterwards, throws {@code UnsupportedOperationException("Cannot redefine singleton
+     *       Server")} when the static {@code Bukkit.server} field is non-null.</li>
+     * </ul>
+     * Nulling {@code Bukkit.server} clears only the second, so it does not on its own deliver the
+     * order-independence this method exists to provide. Concretely: a class that bootstraps through
+     * this method and then tears down with {@link #clearBukkitServer()} — which that method's own
+     * javadoc invites — leaves {@code Bukkit.server} null but MockBukkit's {@code mock} field
+     * non-null, and the next {@code bootstrapLiveServer()} in a different Surefire-fork class dies
+     * in {@code @BeforeEach} with {@code Already mocking}. That is the same order-dependence
+     * reached through the other guard. {@code MockBukkit.unmock()} returns immediately when nothing
+     * is mocked, so calling it unconditionally is safe and costs nothing on the common path.
+     * <p>
+     * Test classes that install their own {@code Server} mock directly (bypassing this method) are
+     * still expected to clear the field back out in their own {@code @AfterEach} — see
+     * {@link #clearBukkitServer()} — but both resets stay here as a second line of defense, because
+     * the alternative is a suite that goes flaky the next time an as-yet-unaudited test class
      * reintroduces the same leak.
      *
      * @return the live server, wrapped in a Mockito spy, already installed as {@code Bukkit.server}
      */
     public static Server bootstrapLiveServer() throws Exception {
+        MockBukkit.unmock();
+
         Field serverField = Bukkit.class.getDeclaredField("server");
         serverField.setAccessible(true);
         serverField.set(null, null);
@@ -124,6 +141,11 @@ public final class UltiLoginTestHelper {
      * {@code EmailVerificationServiceTest}) — each now calls this from its own teardown instead of
      * relying on {@link #bootstrapLiveServer()}'s defensive null-out to paper over the leak on the
      * next class's behalf.
+     * <p>
+     * This is <b>not</b> the teardown for {@link #bootstrapLiveServer()}. Use
+     * {@link #tearDownLiveServer()} there: this method clears {@code Bukkit.server} only, leaving
+     * MockBukkit's own {@code mock} field set, which used to leave the next class's bootstrap
+     * throwing {@code IllegalStateException("Already mocking")}.
      */
     public static void clearBukkitServer() throws Exception {
         Field serverField = Bukkit.class.getDeclaredField("server");
