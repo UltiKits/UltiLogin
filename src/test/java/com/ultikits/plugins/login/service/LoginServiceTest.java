@@ -450,15 +450,11 @@ class LoginServiceTest {
         }
 
         @Test
-        @DisplayName("Should force logout an online player when unregistering their account")
+        @DisplayName("Should force logout an online player when unregistering their account, without replaying the join handler")
         void forceLogoutOnlinePlayerOnUnregister() {
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
             when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
-
-            Location mockLocation = mock(Location.class);
-            when(mockLocation.clone()).thenReturn(mockLocation);
-            when(player.getLocation()).thenReturn(mockLocation);
 
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
@@ -467,10 +463,14 @@ class LoginServiceTest {
 
                 assertThat(result).isTrue();
                 assertThat(service.isLoggedIn(playerUuid)).isFalse();
-                // onPlayerJoin(player) re-runs the join flow as part of the forced logout;
-                // this player is registered so it sends the (re-)login prompt, which is
-                // otherwise observable only as a side effect of that call actually happening.
-                verify(player).sendMessage(anyString());
+                // 13-06/D-08: unregister() no longer replays onPlayerJoin(player) to force a
+                // logout -- that replay is the defect (it re-runs the session check, which found
+                // the never-cleared session and logged the deleted account straight back in).
+                // No message is sent here any more; onPlayerJoin was this test's only observable
+                // side effect for "the join flow ran", so its absence is what proves the replay
+                // is gone, not merely that a message happens not to fire.
+                verify(player, never()).sendMessage(anyString());
+                verify(player, never()).getLocation();
             }
         }
     }
@@ -556,6 +556,216 @@ class LoginServiceTest {
             service.login(player, password);
 
             assertThat(service.hasValidSession(player)).isFalse();
+        }
+    }
+
+    // ==================== session invalidation (13-06 / D-08, D-09) ====================
+
+    @Nested
+    @DisplayName("Session Invalidation")
+    class SessionInvalidation {
+
+        @Test
+        @DisplayName("unregister invalidates the deleted account's session")
+        void unregisterInvalidatesSession() throws Exception {
+            when(config.isSessionEnabled()).thenReturn(true);
+
+            String salt = "testSalt";
+            String password = "password123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, password);
+            assertThat(service.hasValidSession(player)).isTrue();
+
+            // Player offline -- isolates this test to the invalidation call itself, not the
+            // separately-tested forced-logout-while-online branch.
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(null);
+
+                boolean result = service.unregister(playerUuid);
+
+                assertThat(result).isTrue();
+            }
+
+            assertThat(service.hasValidSession(player))
+                    .as("unregister must end the deleted account's session")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("Administrator reset (resetPassword(UUID)) invalidates the session")
+        void adminResetInvalidatesSession() throws Exception {
+            when(config.isSessionEnabled()).thenReturn(true);
+
+            String salt = "testSalt";
+            String password = "password123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, password);
+            assertThat(service.hasValidSession(player)).isTrue();
+
+            String newPassword = service.resetPassword(playerUuid);
+
+            assertThat(newPassword).isNotNull();
+            assertThat(service.hasValidSession(player))
+                    .as("An administrator password reset must end the player's existing session")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("Self-service reset (resetPassword(UUID, String)) invalidates the session")
+        void specificPasswordResetInvalidatesSession() throws Exception {
+            when(config.isSessionEnabled()).thenReturn(true);
+
+            String salt = "testSalt";
+            String password = "password123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, password);
+            assertThat(service.hasValidSession(player)).isTrue();
+
+            boolean result = service.resetPassword(playerUuid, "newPassword123");
+
+            assertThat(result).isTrue();
+            assertThat(service.hasValidSession(player))
+                    .as("Resetting to a specific password must end the player's existing session")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("changePassword invalidates the session on success")
+        void changePasswordInvalidatesSession() throws Exception {
+            when(config.isSessionEnabled()).thenReturn(true);
+
+            String salt = "testSalt";
+            String oldPassword = "oldPass123";
+            String hash = hashPasswordForTest(oldPassword, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, oldPassword);
+            assertThat(service.hasValidSession(player)).isTrue();
+
+            boolean result = service.changePassword(playerUuid, oldPassword, "newPass456");
+
+            assertThat(result).isTrue();
+            assertThat(service.hasValidSession(player))
+                    .as("A successful password change must end the player's existing session")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("changePassword does not invalidate the session when the old password is wrong")
+        void failedChangePasswordDoesNotInvalidateSession() throws Exception {
+            when(config.isSessionEnabled()).thenReturn(true);
+
+            String salt = "testSalt";
+            String oldPassword = "oldPass123";
+            String hash = hashPasswordForTest(oldPassword, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, oldPassword);
+            assertThat(service.hasValidSession(player)).isTrue();
+
+            boolean result = service.changePassword(playerUuid, "wrongOldPassword", "newPass456");
+
+            assertThat(result).isFalse();
+            assertThat(service.hasValidSession(player))
+                    .as("A rejected password change must not log the player out")
+                    .isTrue();
+        }
+
+        @Test
+        @DisplayName("End to end: after unregister, the session check is false and rejoining does not auto-login the deleted account")
+        void endToEndDeletionPreventsAutoLogin() throws Exception {
+            when(config.isSessionEnabled()).thenReturn(true);
+
+            String salt = "testSalt";
+            String password = "password123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, password);
+            assertThat(service.hasValidSession(player)).isTrue();
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+
+            Location mockLocation = mock(Location.class);
+            when(mockLocation.clone()).thenReturn(mockLocation);
+            when(player.getLocation()).thenReturn(mockLocation);
+
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+
+                boolean result = service.unregister(playerUuid);
+
+                assertThat(result).isTrue();
+            }
+
+            assertThat(service.hasValidSession(player))
+                    .as("the session check must return false after account deletion")
+                    .isFalse();
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("the deleted account is no longer logged in")
+                    .isFalse();
+
+            // Simulate the player rejoining. With the session gone, onPlayerJoin's own session
+            // check must not auto-login them -- exactly the outcome the removed onPlayerJoin()
+            // replay used to defeat by finding a session that had never been cleared.
+            when(mockQuery.list()).thenReturn(Collections.emptyList());
+            service.onPlayerJoin(player);
+
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("rejoining after deletion must not automatically log the account back in")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("Recovery path end to end: EmailVerificationService.resetPasswordAfterRecovery invalidates the session by delegation")
+        void recoveryPathInvalidatesSessionByDelegation() throws Exception {
+            when(config.isSessionEnabled()).thenReturn(true);
+
+            String salt = "recoverySalt";
+            String password = "recoveryPass123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            // Log the player in for real, creating a genuine session entry keyed IP:UUID.
+            service.login(player, password);
+            assertThat(service.hasValidSession(player)).isTrue();
+
+            // Drive the actual recovery entry point rather than calling LoginService.resetPassword
+            // directly -- this is what proves the delegation still reaches the real invalidation,
+            // not merely that the invalidation exists on the two-argument overload.
+            com.ultikits.plugins.login.config.EmailConfig emailConfig =
+                    mock(com.ultikits.plugins.login.config.EmailConfig.class);
+            EmailVerificationService emailVerificationService =
+                    new EmailVerificationService(UltiLoginTestHelper.getMockPlugin(), emailConfig, service);
+
+            // Seed the verified-recovery state directly, bypassing the request/verify-code flow
+            // EmailVerificationServiceTest already covers in full -- this test is scoped to
+            // proving the delegation invalidates the session, not re-testing code verification.
+            Field recoveryVerifiedField = EmailVerificationService.class.getDeclaredField("recoveryVerified");
+            recoveryVerifiedField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<UUID, String> recoveryVerified =
+                    (Map<UUID, String>) recoveryVerifiedField.get(emailVerificationService);
+            recoveryVerified.put(playerUuid, service.getPlayerIp(player));
+
+            boolean result = emailVerificationService.resetPasswordAfterRecovery(player, "newRecoveredPass456");
+
+            assertThat(result).isTrue();
+            assertThat(service.hasValidSession(player))
+                    .as("a recovery-flow password reset must end the player's existing session")
+                    .isFalse();
         }
     }
 
