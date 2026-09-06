@@ -444,6 +444,29 @@ public class LoginService {
     }
 
     /**
+     * Revoke a currently online player's active login state and let {@link #checkTimeouts()}
+     * enforce the configured login timeout on them again, as if they had just joined.
+     * <p>
+     * Reported by Codex on PR #18: {@link #invalidateSession(UUID)} only ends the remembered
+     * {@code sessions} entry, but {@code LoginProtectionListener} authorizes in-game actions
+     * through {@link #isLoggedIn(UUID)}, not {@link #hasValidSession(Player)} -- so an
+     * already-authenticated online connection stayed fully authorized with the old credentials
+     * until it happened to disconnect, defeating an administrative password reset issued in
+     * response to a compromised, currently-connected account. Deliberately does not replay
+     * {@link #onPlayerJoin(Player)}: that replay is a separate, already-fixed defect (13-06/D-08)
+     * because it re-runs the session auto-login check.
+     *
+     * @param playerUuid the player to force back into the unauthenticated state, if online
+     */
+    private void forceReauthenticationIfOnline(UUID playerUuid) {
+        Player player = Bukkit.getPlayer(playerUuid);
+        if (player != null && player.isOnline()) {
+            loggedInPlayers.put(playerUuid, false);
+            joinTimes.put(playerUuid, System.currentTimeMillis());
+        }
+    }
+
+    /**
      * Handle player join.
      */
     public void onPlayerJoin(Player player) {
@@ -564,6 +587,7 @@ public class LoginService {
 
         // Only on the success branch -- a failed update must not log the player out.
         invalidateSession(playerUuid);
+        forceReauthenticationIfOnline(playerUuid);
 
         return newPassword;
     }
@@ -594,6 +618,7 @@ public class LoginService {
         // (EmailVerificationService.resetPasswordAfterRecovery), so recovery inherits the
         // invalidation without a second call site.
         invalidateSession(playerUuid);
+        forceReauthenticationIfOnline(playerUuid);
 
         return true;
     }
@@ -613,14 +638,15 @@ public class LoginService {
         // exists, so nothing should be able to authenticate as it again.
         invalidateSession(playerUuid);
 
-        // Force logout if online. No onPlayerJoin() replay: that replay was the defect --
-        // it re-ran the join flow, whose first act is the session check, so it found a session
-        // that had never been cleared and logged the just-deleted account straight back in.
-        // The player is simply left in the normal unauthenticated state.
-        Player player = Bukkit.getPlayer(playerUuid);
-        if (player != null && player.isOnline()) {
-            loggedInPlayers.put(playerUuid, false);
-        }
+        // Force logout if online and reinitialize their login timeout (Codex PR #18 comment
+        // 3944181260): completeLogin already removed their joinTimes entry when they originally
+        // logged in, so without re-adding one here checkTimeouts() would never see this
+        // newly-unauthenticated player, silently disabling the login timeout while they remain
+        // connected. No onPlayerJoin() replay: that replay was the defect -- it re-ran the join
+        // flow, whose first act is the session check, so it found a session that had never been
+        // cleared and logged the just-deleted account straight back in. The player is simply
+        // left in the normal unauthenticated state.
+        forceReauthenticationIfOnline(playerUuid);
 
         return true;
     }
