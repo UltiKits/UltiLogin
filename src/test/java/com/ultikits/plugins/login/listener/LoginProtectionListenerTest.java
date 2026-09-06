@@ -32,6 +32,8 @@ class LoginProtectionListenerTest {
     private Player player;
     private UUID playerUuid;
     private BukkitScheduler mockScheduler;
+    private org.bukkit.plugin.Plugin mockBukkitPlugin;
+    private Server mockServer;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -50,11 +52,20 @@ class LoginProtectionListenerTest {
         // run test class already installed into the shared static field.
         java.lang.reflect.Field serverField = org.bukkit.Bukkit.class.getDeclaredField("server");
         serverField.setAccessible(true);
-        Server mockServer = mock(Server.class);
+        mockServer = mock(Server.class);
         org.bukkit.plugin.PluginManager mockPm = mock(org.bukkit.plugin.PluginManager.class);
         mockScheduler = mock(BukkitScheduler.class);
+        // Round 6 (13-REVIEW-UltiLogin.md, own review of 29ba589): presentCredentialPrompt's new
+        // dispatchOnMainThread helper only schedules via runTask(...) when bukkitPlugin.isEnabled()
+        // is true (off the primary thread, which this mock Server always reports since
+        // isPrimaryThread() is never stubbed). Default to enabled so every pre-existing
+        // scheduler-capturing test below keeps exercising the runTask path; DisabledPlugin below
+        // overrides it back to false for its own case, and PrimaryThread stubs isPrimaryThread()
+        // true instead.
+        mockBukkitPlugin = mock(org.bukkit.plugin.Plugin.class);
+        lenient().when(mockBukkitPlugin.isEnabled()).thenReturn(true);
         lenient().when(mockServer.getPluginManager()).thenReturn(mockPm);
-        lenient().when(mockPm.getPlugin("UltiTools")).thenReturn(mock(org.bukkit.plugin.Plugin.class));
+        lenient().when(mockPm.getPlugin("UltiTools")).thenReturn(mockBukkitPlugin);
         lenient().when(mockServer.getScheduler()).thenReturn(mockScheduler);
         serverField.set(null, mockServer);
 
@@ -91,6 +102,41 @@ class LoginProtectionListenerTest {
             listener.onPlayerJoin(event);
 
             verify(loginService).onPlayerJoin(player);
+        }
+    }
+
+    @Nested
+    @DisplayName("presentCredentialPrompt dispatch (round 6, 13-REVIEW-UltiLogin.md own review of 29ba589)")
+    class PresentCredentialPromptDispatch {
+
+        @Test
+        @DisplayName("Should run the prompt inline, without touching the scheduler, when already on the main thread")
+        void presentsInlineOnPrimaryThread() {
+            when(mockServer.isPrimaryThread()).thenReturn(true);
+            when(config.isGuiModeEnabled()).thenReturn(false);
+            when(loginService.isRegistered(playerUuid)).thenReturn(true);
+
+            LoginProtectionListener.presentCredentialPrompt(
+                    player, UltiLoginTestHelper.getMockPlugin(), loginService, mockBukkitPlugin);
+
+            verify(player).sendMessage(anyString());
+            verify(mockScheduler, never()).runTask(any(org.bukkit.plugin.Plugin.class), any(Runnable.class));
+        }
+
+        @Test
+        @DisplayName("Should skip the prompt and log a warning, without throwing, when the plugin is disabling")
+        void skipsWhenPluginDisabling() {
+            when(mockServer.isPrimaryThread()).thenReturn(false);
+            when(mockBukkitPlugin.isEnabled()).thenReturn(false);
+            when(config.isGuiModeEnabled()).thenReturn(false);
+
+            assertThatCode(() -> LoginProtectionListener.presentCredentialPrompt(
+                    player, UltiLoginTestHelper.getMockPlugin(), loginService, mockBukkitPlugin))
+                    .doesNotThrowAnyException();
+
+            verify(mockScheduler, never()).runTask(any(org.bukkit.plugin.Plugin.class), any(Runnable.class));
+            verify(player, never()).sendMessage(anyString());
+            verify(UltiLoginTestHelper.getMockLogger()).warn(anyString());
         }
     }
 
