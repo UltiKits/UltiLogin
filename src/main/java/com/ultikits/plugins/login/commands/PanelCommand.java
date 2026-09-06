@@ -53,9 +53,16 @@ public class PanelCommand extends BaseCommandExecutor {
         player.sendMessage(ChatColor.translateAlternateColorCodes('&',
             plugin.i18n("panel_generating")));
 
+        // Capture the invalidation generation now, before scheduling the async worker below --
+        // not inside it. An admin reset/unregister landing between this line and the worker's
+        // call to requestPanelLink() finds nothing to cancel yet (the request has not been
+        // published), so requestPanelLink() itself refuses to publish a request whose captured
+        // generation no longer matches. See Codex PR #18 thread 3945030000 (round 4).
+        long invalidationGeneration = loginService.getInvalidationGeneration(player.getUniqueId());
+
         // Run async to avoid blocking the main thread (HTTP call)
         Bukkit.getScheduler().runTaskAsynchronously(bukkitPlugin, () -> {
-            LoginService.PanelLinkResult result = loginService.requestPanelLink(player);
+            LoginService.PanelLinkResult result = loginService.requestPanelLink(player, invalidationGeneration);
 
             // Send result back on main thread
             Bukkit.getScheduler().runTask(bukkitPlugin, () -> {
