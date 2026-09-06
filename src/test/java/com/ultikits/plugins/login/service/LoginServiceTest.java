@@ -428,6 +428,63 @@ class LoginServiceTest {
             assertThat(result).isTrue();
             verify(dataOperator).update(any(AccountData.class));
         }
+
+        @Test
+        @DisplayName("Should revoke the online player's active login state after a random-password reset")
+        void forcesReauthenticationForOnlinePlayerOnRandomReset() throws Exception {
+            // Codex PR #18 review comment 3944181256: invalidateSession only ends the remembered
+            // `sessions` entry; LoginProtectionListener authorizes actions through isLoggedIn, not
+            // hasValidSession, so an already-authenticated online connection stayed fully
+            // authorized with the old credentials until it happened to disconnect -- defeating
+            // password rotation as a response to a compromised, currently-connected account.
+            String salt = "testSalt";
+            String password = "password123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, password);
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+
+            String newPassword;
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+
+                newPassword = service.resetPassword(playerUuid);
+            }
+
+            assertThat(newPassword).isNotNull();
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("an administrative password reset must revoke the online player's active"
+                            + " login state, not only its remembered session")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("Should revoke the online player's active login state after a specific-password reset")
+        void forcesReauthenticationForOnlinePlayerOnSpecificReset() throws Exception {
+            String salt = "testSalt";
+            String password = "password123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, password);
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+
+            boolean result;
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+
+                result = service.resetPassword(playerUuid, "newPassword123");
+            }
+
+            assertThat(result).isTrue();
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("an administrative password reset must revoke the online player's active"
+                            + " login state, not only its remembered session")
+                    .isFalse();
+        }
     }
 
     // ==================== unregister ====================
@@ -481,6 +538,36 @@ class LoginServiceTest {
                 verify(player, never()).sendMessage(anyString());
                 verify(player, never()).getLocation();
             }
+        }
+
+        @Test
+        @DisplayName("Should reinitialize the login timeout for an online player forced to re-authenticate")
+        void reinitializesLoginTimeoutOnUnregister() throws Exception {
+            // Codex PR #18 review comment 3944181260: completeLogin already removed this
+            // player's joinTimes entry when they originally logged in, and unregister's
+            // replacement for onPlayerJoin only flips loggedInPlayers -- it never re-adds a
+            // joinTimes entry. checkTimeouts() iterates joinTimes, so without this the
+            // now-unauthenticated player is never kicked for failing to log back in, silently
+            // disabling the configured login timeout while they remain connected.
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list())
+                    .thenReturn(Collections.singletonList(account));
+
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+
+                boolean result = service.unregister(playerUuid);
+
+                assertThat(result).isTrue();
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<UUID, Long> joinTimes = (Map<UUID, Long>) getFieldValue(service, "joinTimes");
+
+            assertThat(joinTimes)
+                    .as("checkTimeouts() must see this newly unauthenticated player, or the"
+                            + " configured login timeout is never enforced while they stay connected")
+                    .containsKey(playerUuid);
         }
     }
 
