@@ -40,8 +40,11 @@ public class EmailVerificationService {
     private final LoginService loginService;
     private final DataOperator<AccountData> dataOperator;
 
-    // Lazy-initialized framework EmailService
-    private EmailService emailService;
+    // Lazy-initialized framework EmailService. volatile: two Bukkit-scheduler threads calling
+    // getEmailService() concurrently on first use must not race on this field (WR-01,
+    // 13-REVIEW-UltiLogin.md) -- SimpleContainer.getBean returns the same singleton either way,
+    // so this is a visibility fix, not a functional one.
+    private volatile EmailService emailService;
 
     // Pending email binds: playerUUID -> PendingVerification
     private final Map<UUID, PendingVerification> pendingBinds = new ConcurrentHashMap<>();
