@@ -4,19 +4,24 @@ import com.ultikits.plugins.login.UltiLogin;
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.entity.AccountData;
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.Query;
 import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 import com.ultikits.ultitools.manager.ConfigManager;
+import com.ultikits.ultitools.utils.SimpleHttpClient;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Server;
 import org.bukkit.World;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
+import org.bukkit.scheduler.BukkitScheduler;
 import org.bukkit.scheduler.BukkitTask;
 import org.junit.jupiter.api.*;
 import org.mockito.MockedStatic;
@@ -2680,6 +2685,144 @@ class LoginServiceTest {
 
             assertThat(result).isTrue();
             // Should use player message key (not owner)
+            verify(UltiLoginTestHelper.getMockPlugin()).i18n("panel_auth_success_player");
+        }
+    }
+
+    @Nested
+    @DisplayName("startAuthPolling")
+    class StartAuthPollingRace {
+
+        /**
+         * Wires {@code server.getScheduler()} to a scheduler mock that runs both the async poll
+         * task and its main-thread completion callback synchronously, on the calling thread,
+         * instead of truly scheduling them. This turns startAuthPolling's two-hop
+         * (async poll -> main-thread completion) dispatch into a single, deterministic call
+         * stack, which is what lets the test below inject the race at the exact right point
+         * without flaky real threading -- Mockito's static mocks (used for
+         * {@link UltiTools#getEnv()} and {@link SimpleHttpClient#get(String)} below) are
+         * thread-confined to whichever thread created them, so they would silently not apply at
+         * all on a real MockBukkit worker thread.
+         */
+        private void makeSchedulerRunTasksSynchronously(Server server, BukkitTask fakeTask) {
+            // ServerMock declares a covariant getScheduler() returning BukkitSchedulerMock, not
+            // the bare BukkitScheduler interface -- doReturn() validates against that concrete
+            // declared type, so the fake must be a spy of the real instance (a
+            // Mockito-generated BukkitSchedulerMock subclass), not a plain mock(BukkitScheduler
+            // .class). Spying also means every method we do not override here still behaves
+            // exactly like the real scheduler.
+            BukkitScheduler fakeScheduler = spy(server.getScheduler());
+            doAnswer(invocation -> {
+                Runnable runnable = invocation.getArgument(1);
+                runnable.run();
+                return fakeTask;
+            }).when(fakeScheduler).runTaskTimerAsynchronously(any(Plugin.class), any(Runnable.class), anyLong(), anyLong());
+            doAnswer(invocation -> {
+                Runnable runnable = invocation.getArgument(1);
+                runnable.run();
+                return fakeTask;
+            }).when(fakeScheduler).runTask(any(Plugin.class), any(Runnable.class));
+            doReturn(fakeScheduler).when(server).getScheduler();
+        }
+
+        @Test
+        @DisplayName("Must not re-authenticate a player whose account was deleted while the poll's HTTP call was already in flight")
+        void doesNotReauthenticateAfterUnregisterDuringInFlightPoll() throws Exception {
+            // Codex PR #18 review comment 3944418953: BukkitTask#cancel() only prevents a
+            // scheduled task's future executions -- it does not interrupt an invocation already
+            // inside its HTTP call. The pre-fix fallback in startAuthPolling treated "no pending
+            // request found" as authorization to call completeLogin(player) directly, bypassing
+            // every check completePanelLogin performs (including the isRegistered guard added
+            // for CR-01). Reproduced deterministically by unregistering the account from inside
+            // the mocked HTTP call's answer -- exactly the ordering the report describes -- with
+            // the scheduler wired to run both hops of the poll synchronously so the race is
+            // exact rather than best-effort.
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            assertThat(service.forceLogin(player)).isTrue();
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            pendingPanelRequests.put("panel-req-race", playerUuid);
+
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+            doReturn(player).when(server).getPlayer(playerUuid);
+            makeSchedulerRunTasksSynchronously(server, mock(BukkitTask.class));
+
+            YamlConfiguration env = mock(YamlConfiguration.class);
+            when(env.getString("api-url")).thenReturn("http://ulticloud.test");
+
+            String pollResponseJson = "{\"data\":{\"status\":\"completed\",\"is_server_owner\":false}}";
+            SimpleHttpClient.Response completedResponse = new SimpleHttpClient.Response(200, pollResponseJson);
+
+            try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
+                 MockedStatic<SimpleHttpClient> http = mockStatic(SimpleHttpClient.class)) {
+                ultiTools.when(UltiTools::getEnv).thenReturn(env);
+                http.when(() -> SimpleHttpClient.get(anyString())).thenAnswer(invocation -> {
+                    // The account is deleted while this poll's HTTP call is "in flight" -- before
+                    // the poll code below gets a chance to notice its pending request is gone.
+                    boolean unregistered = service.unregister(playerUuid);
+                    assertThat(unregistered).isTrue();
+                    return completedResponse;
+                });
+
+                service.startAuthPolling(playerUuid.toString(), player);
+            }
+
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("a magic-link poll must not re-authenticate a player after their account"
+                            + " was deleted mid-poll, even though the poll's own cancellation"
+                            + " could not stop its already in-flight HTTP call")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("Still completes login through completePanelLogin when the request is not cancelled mid-poll")
+        void completesLoginWhenNoRaceOccurs() throws Exception {
+            // Regression guard for the fix above: startAuthPolling's normal, uncontested
+            // completion path must keep working -- it must still route through
+            // completePanelLogin (session creation, account bookkeeping, the success message)
+            // rather than becoming a silent no-op whenever the request happens to still be
+            // pending.
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            pendingPanelRequests.put("panel-req-normal", playerUuid);
+
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+            doReturn(player).when(server).getPlayer(playerUuid);
+            makeSchedulerRunTasksSynchronously(server, mock(BukkitTask.class));
+
+            YamlConfiguration env = mock(YamlConfiguration.class);
+            when(env.getString("api-url")).thenReturn("http://ulticloud.test");
+
+            String pollResponseJson = "{\"data\":{\"status\":\"completed\",\"is_server_owner\":false}}";
+            SimpleHttpClient.Response completedResponse = new SimpleHttpClient.Response(200, pollResponseJson);
+
+            try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
+                 MockedStatic<SimpleHttpClient> http = mockStatic(SimpleHttpClient.class)) {
+                ultiTools.when(UltiTools::getEnv).thenReturn(env);
+                http.when(() -> SimpleHttpClient.get(anyString())).thenReturn(completedResponse);
+
+                service.startAuthPolling(playerUuid.toString(), player);
+            }
+
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("an uncontested poll completion must still log the player in")
+                    .isTrue();
+            assertThat(pendingPanelRequests)
+                    .as("completePanelLogin must have run its own cleanup for the request")
+                    .doesNotContainKey("panel-req-normal");
             verify(UltiLoginTestHelper.getMockPlugin()).i18n("panel_auth_success_player");
         }
     }
