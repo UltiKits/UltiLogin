@@ -15,7 +15,6 @@ import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scheduler.BukkitTask;
 import org.junit.jupiter.api.*;
-import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockito.MockedStatic;
 
 import java.lang.reflect.Field;
@@ -44,44 +43,19 @@ class LoginServiceTest {
         // Bootstrap a live test-time server so PotionEffectType (used by
         // completeLogin()/onPlayerJoin() in the production code under test) resolves through
         // mockbukkit-v1.21's real RegistryAccess instead of failing at static initialization.
-        // The live server is wrapped in a Mockito spy and installed as Bukkit.server, because a
-        // bare MockBukkit.mock() server is not itself a Mockito mock/spy and this class's
-        // existing per-test doReturn(...).when(server).method(...) stubs (below) need one.
-        // Reconciliation pattern per 14-LEDGER-UltiTrade.md, the phase's canary module, which hit
-        // the identical "test helper already touches Bukkit.server" shape.
-        //
-        // Defensive cleanup first: sibling classes in this module (LoginProtectionListenerTest,
-        // EmailVerificationServiceTest, PanelCommandTest) set Bukkit.server via reflection and
-        // never clear it, so if one of them runs earlier in the same Surefire fork,
-        // MockBukkit.mock() throws UnsupportedOperationException("Cannot redefine singleton
-        // Server"). Null the field unconditionally first so this class's own bootstrap is never
-        // order-dependent on what ran before it.
-        Field bukkitServerField = Bukkit.class.getDeclaredField("server");
-        bukkitServerField.setAccessible(true);
-        bukkitServerField.set(null, null);
-
-        MockBukkit.mock();
-        Server liveServer = spy(Bukkit.getServer());
-        bukkitServerField.set(null, liveServer);
+        // Routed through UltiLoginTestHelper.bootstrapLiveServer() (rather than calling
+        // MockBukkit.mock() inline here) so this class and UltiLoginRegistrySentinelTest share one
+        // bootstrap entry point -- breaking that entry point fails both, not just whichever
+        // consumer happens to still call it directly. Reconciliation pattern per
+        // 14-LEDGER-UltiTrade.md, the phase's canary module, which hit the identical "test helper
+        // already touches Bukkit.server" shape. The live server this returns is already installed
+        // as Bukkit.server and wrapped in a Mockito spy, so the existing per-test
+        // doReturn(...).when(server).method(...) stubs later in this class keep working unchanged.
+        UltiLoginTestHelper.bootstrapLiveServer();
 
         UltiLoginTestHelper.setUp();
 
         config = UltiLoginTestHelper.createDefaultConfig();
-
-        // Set up Bukkit.server before LoginService constructor (it calls Bukkit.getPluginManager())
-        try {
-            Field serverField = Bukkit.class.getDeclaredField("server");
-            serverField.setAccessible(true);
-            if (serverField.get(null) == null) {
-                Server mockServer = mock(Server.class);
-                org.bukkit.plugin.PluginManager mockPm = mock(org.bukkit.plugin.PluginManager.class);
-                when(mockServer.getPluginManager()).thenReturn(mockPm);
-                when(mockPm.getPlugin("UltiTools")).thenReturn(mock(org.bukkit.plugin.Plugin.class));
-                serverField.set(null, mockServer);
-            }
-        } catch (Exception ignored) {
-            // Server may already be set
-        }
 
         // Mock plugin.getDataOperator to return our mock
         when(UltiLoginTestHelper.getMockPlugin().getDataOperator(AccountData.class)).thenReturn(dataOperator);
@@ -119,7 +93,7 @@ class LoginServiceTest {
     @AfterEach
     void tearDown() throws Exception {
         UltiLoginTestHelper.tearDown();
-        MockBukkit.unmock();
+        UltiLoginTestHelper.tearDownLiveServer();
     }
 
     // ==================== isRegistered ====================

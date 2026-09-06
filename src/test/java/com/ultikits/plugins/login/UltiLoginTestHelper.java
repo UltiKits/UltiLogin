@@ -5,7 +5,10 @@ import com.ultikits.plugins.login.entity.AccountData;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 
+import org.bukkit.Bukkit;
+import org.bukkit.Server;
 import org.bukkit.entity.Player;
+import org.mockbukkit.mockbukkit.MockBukkit;
 
 import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
@@ -65,6 +68,67 @@ public final class UltiLoginTestHelper {
 
     public static PluginLogger getMockLogger() {
         return mockLogger;
+    }
+
+    /**
+     * Bootstrap a live test-time Bukkit server via MockBukkit and install it as {@code Bukkit.server},
+     * wrapped in a Mockito spy so per-test {@code doReturn(...).when(server)...}/{@code when(server)...}
+     * stubs installed by callers keep working exactly as before. Needed because some production code
+     * under test (e.g. {@code PotionEffectType} resolution in {@code LoginService#completeLogin}/
+     * {@code #onPlayerJoin}) resolves through mockbukkit-v1.21's real {@code RegistryAccess}, which is
+     * only populated once a live server is mocked -- a bare {@code mock(Server.class)} never resolves it.
+     * <p>
+     * Centralized here rather than duplicated per test class so exactly one entry point exists for
+     * "does this module still bootstrap a live server for tests that need one". {@code
+     * UltiLoginRegistrySentinelTest} — the reopen guard for this bootstrap — calls this same method
+     * instead of its own {@code MockBukkit.mock()}, specifically so that breaking or removing this
+     * method's live-server behavior fails the sentinel too, not just whichever consumer test happens
+     * to still call it directly (PR #17 review, "the guard does not guard the wiring").
+     * <p>
+     * Defensive null-out first: {@code Bukkit.setServer()} throws {@code UnsupportedOperationException
+     * ("Cannot redefine singleton Server")} if the static field is already non-null, which would
+     * otherwise make this method — and therefore every caller — order-dependent on whatever the
+     * previous test class in the same Surefire fork happened to leave behind. Test classes that
+     * install their own {@code Server} mock directly (bypassing this method) are expected to clear
+     * the field back out in their own {@code @AfterEach} — see {@link #clearBukkitServer()} — but
+     * this null-out stays here too as a second line of defense: it costs one field write per call,
+     * and the alternative is a suite that goes flaky the next time an as-yet-unaudited test class
+     * reintroduces the same leak.
+     *
+     * @return the live server, wrapped in a Mockito spy, already installed as {@code Bukkit.server}
+     */
+    public static Server bootstrapLiveServer() throws Exception {
+        Field serverField = Bukkit.class.getDeclaredField("server");
+        serverField.setAccessible(true);
+        serverField.set(null, null);
+
+        MockBukkit.mock();
+        Server liveServer = spy(Bukkit.getServer());
+        serverField.set(null, liveServer);
+        return liveServer;
+    }
+
+    /**
+     * Tear down the live server installed by {@link #bootstrapLiveServer()}.
+     */
+    public static void tearDownLiveServer() {
+        MockBukkit.unmock();
+    }
+
+    /**
+     * Null out the static {@code Bukkit.server} field. Call from {@code @AfterEach} in any test class
+     * that installs its own {@code Server} mock directly (bypassing {@link #bootstrapLiveServer()}),
+     * so the next test class that runs in the same Surefire fork does not inherit a stale singleton.
+     * This is the root-cause fix for the leak Codex's review found in three consumer classes
+     * ({@code PanelCommandTest}, {@code LoginProtectionListenerTest},
+     * {@code EmailVerificationServiceTest}) — each now calls this from its own teardown instead of
+     * relying on {@link #bootstrapLiveServer()}'s defensive null-out to paper over the leak on the
+     * next class's behalf.
+     */
+    public static void clearBukkitServer() throws Exception {
+        Field serverField = Bukkit.class.getDeclaredField("server");
+        serverField.setAccessible(true);
+        serverField.set(null, null);
     }
 
     /**
