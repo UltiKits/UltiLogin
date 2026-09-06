@@ -1,10 +1,14 @@
 package com.ultikits.plugins.login.service;
 
+import com.ultikits.plugins.login.UltiLogin;
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.entity.AccountData;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.Query;
+import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
+import com.ultikits.ultitools.manager.ConfigManager;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -16,8 +20,13 @@ import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scheduler.BukkitTask;
 import org.junit.jupiter.api.*;
 import org.mockito.MockedStatic;
+import org.mockito.stubbing.Answer;
 
+import java.io.File;
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -832,6 +841,174 @@ class LoginServiceTest {
 
             assertThat(service.isCommandAllowed("/help")).isFalse();
             assertThat(service.isCommandAllowed("/spawn")).isFalse();
+        }
+    }
+
+    // ==================== recovery reachability across an upgrade reload (13-13, UltiLogin#13) ====================
+
+    /**
+     * UltiLogin#13: on a server that installed UltiLogin before {@code regs}/{@code recover}
+     * were added to {@code allowedCommands}' default, those two commands stay unreachable even
+     * after an operator corrects {@code login.yml} and reloads. The plan 13-13 measurement
+     * (13-LEDGER-UltiLogin.md, "Recovery command diagnosis") found the cause is neither the
+     * {@code LoginConfig} field-binding (proven working in isolation) nor {@code isCommandAllowed}'s
+     * own string parsing (also proven working) -- it is {@code UltiLogin.reloadSelf()} itself,
+     * which overrides {@link UltiToolsPlugin#reloadSelf()} without calling {@code super.reloadSelf()},
+     * so {@code ConfigManager.reloadConfigs(...)} -- the only thing that re-reads {@code login.yml}
+     * into a running {@code LoginConfig} -- is never invoked, no matter how many times
+     * {@code /ul reload UltiLogin} runs or what the file says afterward.
+     * <p>
+     * Every test here drives the REAL {@link ConfigManager}, the REAL
+     * {@link com.ultikits.plugins.login.config.LoginConfig#init}/{@code reloadConfigs} binding, and
+     * the REAL {@code UltiLogin.reloadSelf()} method body -- not a re-implementation or a stub of
+     * any of the three -- against a stored configuration in the shape an upgraded server actually
+     * has (missing {@code regs}/{@code recover}), exactly as 13-13's plan requires.
+     */
+    @Nested
+    @DisplayName("Recovery command reachability across an upgrade reload")
+    class RecoveryReachabilityOnUpgradedServer {
+
+        /**
+         * Builds the upgraded-server fixture: a real {@link LoginConfig} registered with a real
+         * {@link ConfigManager} against a temp config folder holding the pre-{@code regs}/
+         * {@code recover} shape, plus a real {@link LoginService} bound to that same
+         * {@code LoginConfig} instance -- the exact object identity chain
+         * {@code PluginManager.assemblePluginContainer} produces in production (config entities are
+         * registered as container singletons from {@code ConfigManager}'s own map, so the bean
+         * {@code LoginService}'s constructor receives IS the map's entry).
+         */
+        private UpgradedServerFixture buildUpgradedServerFixture() throws Exception {
+            Path configRoot = Files.createTempDirectory("ultilogin-13-13-upgrade-server");
+            File loginYml = configRoot.resolve("config").resolve("login.yml").toFile();
+            assertThat(loginYml.getParentFile().mkdirs())
+                    .as("temp config directory must be created")
+                    .isTrue();
+            writeAllowedCommands(loginYml, "login", "l", "register", "reg", "panel");
+
+            UltiLogin realPlugin = mock(UltiLogin.class, (Answer<Object>) invocation -> {
+                String name = invocation.getMethod().getName();
+                if ("getConfigFile".equals(name)) {
+                    return new File(configRoot.toFile(), (String) invocation.getArguments()[0]);
+                }
+                if ("getConfigFolder".equals(name)) {
+                    return configRoot.toFile().getAbsolutePath();
+                }
+                return RETURNS_DEFAULTS.answer(invocation);
+            });
+            PluginLogger logger = mock(PluginLogger.class);
+            when(realPlugin.getLogger()).thenReturn(logger);
+            when(realPlugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
+            doCallRealMethod().when(realPlugin).reloadSelf();
+
+            LoginConfig realConfig = new LoginConfig();
+            ConfigManager realConfigManager = new ConfigManager();
+            // Mirrors ConfigManager.registerAll's own addConfigEntity(): init() runs against the
+            // pre-upgrade file first, then the instance is stored -- the same order production
+            // follows at plugin load.
+            realConfigManager.register(realPlugin, realConfig);
+
+            LoginService realService = new LoginService(realPlugin, realConfig);
+
+            return new UpgradedServerFixture(configRoot, loginYml, realPlugin, realConfig, realConfigManager, realService);
+        }
+
+        @Test
+        @DisplayName("An unauthenticated player can reach the recovery command on an upgraded server")
+        void anUnauthenticatedPlayerCanReachTheRecoveryCommandOnAnUpgradedServer() throws Exception {
+            UpgradedServerFixture fixture = buildUpgradedServerFixture();
+
+            // Precondition, matching the issue's own original observation: before any correction,
+            // an upgraded server's recovery command is unreachable.
+            assertThat(fixture.service.isCommandAllowed("/recover"))
+                    .as("an upgraded server's original login.yml has no regs/recover entries yet")
+                    .isFalse();
+
+            // The operator's own retest: correct login.yml to the current default, then reload.
+            writeAllowedCommands(fixture.loginYml,
+                    "login", "l", "register", "reg", "panel", "regs", "recover");
+
+            try (MockedStatic<UltiToolsPlugin> staticMock =
+                    mockStatic(UltiToolsPlugin.class, CALLS_REAL_METHODS)) {
+                staticMock.when(UltiToolsPlugin::getConfigManager).thenReturn(fixture.configManager);
+                fixture.plugin.reloadSelf();
+            }
+
+            assertThat(fixture.service.isCommandAllowed("/recover"))
+                    .as("a corrected login.yml plus a reload must make /recover reachable")
+                    .isTrue();
+        }
+
+        @Test
+        @DisplayName("An unauthenticated player still cannot reach a command that is not permitted")
+        void anUnauthenticatedPlayerStillCannotReachACommandThatIsNotPermitted() throws Exception {
+            UpgradedServerFixture fixture = buildUpgradedServerFixture();
+
+            writeAllowedCommands(fixture.loginYml,
+                    "login", "l", "register", "reg", "panel", "regs", "recover");
+
+            try (MockedStatic<UltiToolsPlugin> staticMock =
+                    mockStatic(UltiToolsPlugin.class, CALLS_REAL_METHODS)) {
+                staticMock.when(UltiToolsPlugin::getConfigManager).thenReturn(fixture.configManager);
+                fixture.plugin.reloadSelf();
+            }
+
+            // The fix must not widen the gate into a hole (T-13-13-01): a command outside the
+            // permitted set stays refused after the reload, exactly as before it.
+            assertThat(fixture.service.isCommandAllowed("/definitelynotanallowedcommand"))
+                    .as("the reload fix must not permit a command that was never on the list")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("The list the running plugin holds matches what was measured")
+        void theListTheRunningPluginHoldsMatchesWhatWasMeasured() throws Exception {
+            UpgradedServerFixture fixture = buildUpgradedServerFixture();
+
+            assertThat(fixture.config.getAllowedCommands())
+                    .as("in memory, before any correction, the upgraded server's list is exactly the file's")
+                    .containsExactly("login", "l", "register", "reg", "panel");
+
+            writeAllowedCommands(fixture.loginYml,
+                    "login", "l", "register", "reg", "panel", "regs", "recover");
+
+            try (MockedStatic<UltiToolsPlugin> staticMock =
+                    mockStatic(UltiToolsPlugin.class, CALLS_REAL_METHODS)) {
+                staticMock.when(UltiToolsPlugin::getConfigManager).thenReturn(fixture.configManager);
+                fixture.plugin.reloadSelf();
+            }
+
+            // Direct assertion on the list the running plugin holds -- the mechanism, not only the
+            // symptom -- reproducing 13-LEDGER-UltiLogin.md's own measured second-init() output.
+            assertThat(fixture.config.getAllowedCommands())
+                    .as("in memory, after a correct file plus a reload, the list must match the file")
+                    .containsExactly("login", "l", "register", "reg", "panel", "regs", "recover");
+        }
+
+        private void writeAllowedCommands(File file, String... commands) throws Exception {
+            StringBuilder sb = new StringBuilder("allowed-commands:\n");
+            for (String c : commands) {
+                sb.append("- ").append(c).append('\n');
+            }
+            Files.write(file.toPath(), sb.toString().getBytes(StandardCharsets.UTF_8));
+        }
+
+        private final class UpgradedServerFixture {
+            final Path configRoot;
+            final File loginYml;
+            final UltiLogin plugin;
+            final LoginConfig config;
+            final ConfigManager configManager;
+            final LoginService service;
+
+            UpgradedServerFixture(Path configRoot, File loginYml, UltiLogin plugin, LoginConfig config,
+                                   ConfigManager configManager, LoginService service) {
+                this.configRoot = configRoot;
+                this.loginYml = loginYml;
+                this.plugin = plugin;
+                this.config = config;
+                this.configManager = configManager;
+                this.service = service;
+            }
         }
     }
 
