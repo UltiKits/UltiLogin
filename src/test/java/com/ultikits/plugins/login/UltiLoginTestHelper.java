@@ -73,10 +73,33 @@ public final class UltiLoginTestHelper {
     /**
      * Bootstrap a live test-time Bukkit server via MockBukkit and install it as {@code Bukkit.server},
      * wrapped in a Mockito spy so per-test {@code doReturn(...).when(server)...}/{@code when(server)...}
-     * stubs installed by callers keep working exactly as before. Needed because some production code
-     * under test (e.g. {@code PotionEffectType} resolution in {@code LoginService#completeLogin}/
-     * {@code #onPlayerJoin}) resolves through mockbukkit-v1.21's real {@code RegistryAccess}, which is
-     * only populated once a live server is mocked -- a bare {@code mock(Server.class)} never resolves it.
+     * stubs installed by callers keep working exactly as before.
+     * <p>
+     * <b>What the live server is actually for.</b> {@code ServerMock} supplies the real
+     * {@code getPluginManager()} / {@code getPlugin("UltiTools")} / {@code getScheduler()} wiring
+     * that consumer tests would otherwise hand-stub — {@code LoginService}'s constructor calls
+     * {@code Bukkit.getPluginManager().getPlugin("UltiTools")} — and it is what makes item
+     * construction work: {@code new ItemStack(Material.DIAMOND)} routes through
+     * {@code Material.asItemType()} into mockbukkit's {@code RegistryMock.loadIfEmpty}, which
+     * throws under a bare {@code mock(Server.class)} (where {@code Bukkit.getUnsafe()} is
+     * {@code null}).
+     * <p>
+     * <b>What it is not for.</b> An earlier revision of this javadoc claimed
+     * {@code PotionEffectType} "resolves through mockbukkit-v1.21's real {@code RegistryAccess},
+     * which is only populated once a live server is mocked -- a bare {@code mock(Server.class)}
+     * never resolves it". That is measurably false. With only {@code mock(Server.class)} installed
+     * — indeed with no server installed at all — {@code PotionEffectType.BLINDNESS} resolves and
+     * {@code new PotionEffect(BLINDNESS, 100, 1)} constructs. Drop
+     * {@code mockbukkit-v1.21-4.101.0.jar} from the classpath and the same code throws
+     * {@code ExceptionInInitializerError}. That jar ships
+     * {@code META-INF/services/io.papermc.paper.registry.RegistryAccess}, so <b>the classpath
+     * dependency is what fixes {@code PotionEffectType}; this bootstrap is not.</b>
+     * <p>
+     * The distinction that holds generally: <i>registry constant resolution</i>
+     * ({@code PotionEffectType.X}, {@code Material.X}, {@code Sound.X} resolving, class
+     * initialization succeeding) comes from the classpath {@code ServiceLoader} provider and needs
+     * no server; <i>item construction</i> ({@code new ItemStack(Material.X)}, real
+     * {@code ItemMeta}) needs a live one.
      * <p>
      * Centralized here rather than duplicated per test class so exactly one entry point exists for
      * "does this module still bootstrap a live server for tests that need one". {@code

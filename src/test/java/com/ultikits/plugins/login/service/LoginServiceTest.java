@@ -40,9 +40,20 @@ class LoginServiceTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        // Bootstrap a live test-time server so PotionEffectType (used by
-        // completeLogin()/onPlayerJoin() in the production code under test) resolves through
-        // mockbukkit-v1.21's real RegistryAccess instead of failing at static initialization.
+        // Bootstrap a live test-time server, for the wiring rather than for the registry.
+        // ServerMock supplies getPluginManager()/getPlugin("UltiTools") -- LoginService's
+        // constructor calls Bukkit.getPluginManager().getPlugin("UltiTools") -- plus the scheduler,
+        // all of which this class used to hand-stub inline before the shared bootstrap replaced it.
+        //
+        // It is NOT what makes PotionEffectType resolve, though an earlier revision of this comment
+        // said so. Measured: with only mock(Server.class) installed -- or with no server installed
+        // at all -- PotionEffectType.BLINDNESS resolves and new PotionEffect(BLINDNESS, 100, 1)
+        // constructs; drop mockbukkit-v1.21-4.101.0.jar from the classpath and the same code throws
+        // ExceptionInInitializerError. That jar ships
+        // META-INF/services/io.papermc.paper.registry.RegistryAccess, so the classpath dependency
+        // is what fixes PotionEffectType. See UltiLoginTestHelper#bootstrapLiveServer() for the
+        // full constant-resolution vs. item-construction split.
+        //
         // Routed through UltiLoginTestHelper.bootstrapLiveServer() (rather than calling
         // MockBukkit.mock() inline here) so this class and UltiLoginRegistrySentinelTest share one
         // bootstrap entry point -- breaking that entry point fails both, not just whichever
