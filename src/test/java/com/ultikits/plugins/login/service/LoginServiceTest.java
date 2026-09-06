@@ -930,6 +930,17 @@ class LoginServiceTest {
                 if ("getConfigFolder".equals(name)) {
                     return configRoot.toFile().getAbsolutePath();
                 }
+                if ("getResourceFolderPath".equals(name)) {
+                    // WR-02 (13-REVIEW-UltiLogin.md): ConfigManager.register(...) reads this
+                    // Lombok-generated public getter (distinct from getConfigFolder/getConfigFile
+                    // above, both protected final) to build `new File(getResourceFolderPath(),
+                    // "config/login.yml")`. Left un-stubbed, it falls through to
+                    // RETURNS_DEFAULTS -> null, and File(null, child) happens to treat that as
+                    // "relative to the process CWD" -- so isDirectory() only returns false because
+                    // no such directory exists relative to wherever the test JVM's CWD is. Stub it
+                    // explicitly so this fixture does not depend on that accident.
+                    return configRoot.toFile().getAbsolutePath();
+                }
                 return RETURNS_DEFAULTS.answer(invocation);
             });
             PluginLogger logger = mock(PluginLogger.class);
