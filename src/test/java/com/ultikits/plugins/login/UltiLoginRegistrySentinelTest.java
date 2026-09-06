@@ -3,6 +3,7 @@ package com.ultikits.plugins.login;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -30,6 +31,12 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
  * from {@code RegistryMock.loadIfEmpty}. {@code liveServerIsBootstrapped} asserts the concrete
  * {@code ServerMock} type for the same reason: {@code assertNotNull(Bukkit.getServer())} would
  * distinguish only "some server" from "none", and the stub would pass it.
+ * <p>
+ * {@code frameworkPluginIsLoadedUnderTheNameProductionLooksUp} guards the other half of the shared
+ * bootstrap — the plugin the module's production code looks up by name. It fails under a bare
+ * {@code mock(Server.class)}, whose {@code getPluginManager()} is {@code null}, and its
+ * {@code getName()} assertion additionally fails under the fully-configured sibling stub, whose
+ * {@code mock(Plugin.class)} answers {@code getName()} with {@code null}.
  * <p>
  * Bootstraps through {@link UltiLoginTestHelper#bootstrapLiveServer()} — the same shared entry
  * point {@code LoginServiceTest} uses — rather than calling {@code MockBukkit.mock()} itself.
@@ -83,5 +90,21 @@ class UltiLoginRegistrySentinelTest {
         ItemStack stack = new ItemStack(Material.DIAMOND);
         assertNotNull(stack);
         assertEquals(Material.DIAMOND, stack.getType());
+    }
+
+    @Test
+    void frameworkPluginIsLoadedUnderTheNameProductionLooksUp() {
+        // Six production sites in this module resolve their scheduler owner with
+        // Bukkit.getPluginManager().getPlugin("UltiTools"). A ServerMock alone has no plugins
+        // loaded and returns null there, so bootstrapLiveServer() loads one; this pins that it
+        // still does. The name is asserted literally because the name is the whole contract --
+        // UltiKits/UltiEssentials#15 is the same shape as a live production defect, where a lookup
+        // for "UltiTools-API" never matches plugin.yml's `name: UltiTools` and always yields null.
+        Plugin framework = Bukkit.getPluginManager().getPlugin("UltiTools");
+
+        assertNotNull(framework,
+                "live server bootstrap must load a plugin named UltiTools, or every production "
+                        + "site that resolves its scheduler owner by that name holds null");
+        assertEquals("UltiTools", framework.getName());
     }
 }
