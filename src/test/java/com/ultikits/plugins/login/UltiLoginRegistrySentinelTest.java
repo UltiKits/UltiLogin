@@ -6,10 +6,12 @@ import org.bukkit.inventory.ItemStack;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockbukkit.mockbukkit.ServerMock;
 
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
@@ -20,6 +22,14 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
  * mock via {@code ServiceLoader}, so a bare constant read would stay green even if the live
  * bootstrap were deleted entirely). If this class goes red, the bootstrap has been silently
  * removed.
+ * <p>
+ * That claim is load-bearing, so each assertion is chosen to fail under a bare
+ * {@code mock(Server.class)} — the stub three sibling classes in this module install — and not
+ * merely under no server at all: {@code Bukkit.getUnsafe()} and {@code Bukkit.createProfile(...)}
+ * both return {@code null} against that stub, and {@code new ItemStack(Material.DIAMOND)} throws
+ * from {@code RegistryMock.loadIfEmpty}. {@code liveServerIsBootstrapped} asserts the concrete
+ * {@code ServerMock} type for the same reason: {@code assertNotNull(Bukkit.getServer())} would
+ * distinguish only "some server" from "none", and the stub would pass it.
  * <p>
  * Bootstraps through {@link UltiLoginTestHelper#bootstrapLiveServer()} — the same shared entry
  * point {@code LoginServiceTest} uses — rather than calling {@code MockBukkit.mock()} itself.
@@ -48,7 +58,13 @@ class UltiLoginRegistrySentinelTest {
 
     @Test
     void liveServerIsBootstrapped() {
-        assertNotNull(Bukkit.getServer(), "live server bootstrap must be present");
+        // assertNotNull alone would not have earned this class's javadoc claim: it distinguishes
+        // "some server" from "none", not "live" from "stub", and passes just as happily under the
+        // bare mock(Server.class) that three sibling classes in this module install. Asserting the
+        // concrete ServerMock type is what discriminates. Mockito's spy in bootstrapLiveServer()
+        // does not defeat it -- the spy is a ServerMock instance, so instanceof still holds.
+        assertInstanceOf(ServerMock.class, Bukkit.getServer(),
+                "live server bootstrap must install a MockBukkit ServerMock, not a bare Server stub");
     }
 
     @Test
