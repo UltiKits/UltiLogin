@@ -82,8 +82,11 @@ public class PanelCommand extends BaseCommandExecutor {
                         new ComponentBuilder(ChatColor.GRAY + "Click to open panel").create()));
                     player.spigot().sendMessage(message);
 
-                    // Start polling for auth completion
-                    loginService.startAuthPolling(player.getUniqueId().toString(), player);
+                    // Start polling for auth completion, keyed on the exact request id this
+                    // result was published under -- never on "whatever is currently pending" for
+                    // this player (Codex PR #18 thread 3946170644, round 7).
+                    loginService.startAuthPolling(player.getUniqueId().toString(), player,
+                            result.getRequestId());
                 } else {
                     player.sendMessage(ChatColor.translateAlternateColorCodes('&',
                         plugin.i18n("panel_error")));

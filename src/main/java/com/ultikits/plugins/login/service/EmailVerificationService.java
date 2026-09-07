@@ -322,6 +322,12 @@ public class EmailVerificationService {
 
     /**
      * Reset password after recovery verification.
+     * <p>
+     * Round 7 (Codex PR #18 thread 3946170649): delegates to {@code
+     * LoginService.resetPasswordForRecovery} rather than the public {@code resetPassword}, since
+     * {@code RecoverCommand.resetPassword} calls {@code LoginService.completeLogin(Player)}
+     * immediately after this returns {@code true} -- presenting the credential prompt in between
+     * (as the public overload does) would show it an instant before logging the player back in.
      *
      * @param player      the player
      * @param newPassword the new password
@@ -342,8 +348,9 @@ public class EmailVerificationService {
             return false;
         }
 
-        // Reset password
-        boolean result = loginService.resetPassword(uuid, newPassword);
+        // Reset password without presenting the credential prompt -- the caller
+        // (RecoverCommand) logs the player back in itself immediately on success.
+        boolean result = loginService.resetPasswordForRecovery(uuid, newPassword);
 
         // Clean up
         recoveryVerified.remove(uuid);

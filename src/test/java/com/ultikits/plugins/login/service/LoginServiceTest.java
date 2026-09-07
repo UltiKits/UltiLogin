@@ -4,6 +4,7 @@ import com.ultikits.plugins.login.UltiLogin;
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.entity.AccountData;
+import com.ultikits.plugins.login.listener.LoginProtectionListener;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.interfaces.DataOperator;
@@ -19,6 +20,8 @@ import org.bukkit.Server;
 import org.bukkit.World;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.InventoryView;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
@@ -594,6 +597,87 @@ class LoginServiceTest {
                             + " the player must stay unauthenticated until they actually"
                             + " re-enter a password")
                     .isFalse();
+        }
+    }
+
+    // ==================== resetPasswordForRecovery ====================
+
+    @Nested
+    @DisplayName("resetPasswordForRecovery")
+    class ResetPasswordForRecovery {
+
+        @Test
+        @DisplayName("Should authenticate a successful recovery without presenting the credential"
+                + " prompt or leaving a credential GUI open")
+        void authenticatesSilentlyAndClosesAnyOpenCredentialGuiOnSuccessfulRecovery() throws Exception {
+            // Codex PR #18 thread 3946170649 (round 7): RecoverCommand.resetPassword calls
+            // completeLogin(player) immediately after a successful
+            // EmailVerificationService.resetPasswordAfterRecovery() -- which used to delegate to
+            // the public, prompt-presenting resetPassword(UUID, String). That showed the login/
+            // register prompt (a "log in now" message in text mode, or a freshly reopened
+            // LoginGUIPage in GUI mode) an instant before completeLogin ran: in text mode a
+            // jarring "log in now" immediately followed by "you are logged in"; in GUI mode a
+            // credential GUI left open, since completeLogin never closed it. This test drives the
+            // same two-call sequence RecoverCommand does and asserts neither symptom occurs: the
+            // prompt collaborator (LoginProtectionListener) is never invoked, and an
+            // already-open credential GUI (simulating one left over from the original join flow
+            // before the player ran /recover) is closed by completeLogin.
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+            doReturn(player).when(server).getPlayer(playerUuid);
+
+            InventoryView openInventory = mock(InventoryView.class);
+            Inventory topInventory = mock(Inventory.class);
+            com.ultikits.plugins.login.gui.LoginGUIPage guiHolder =
+                    mock(com.ultikits.plugins.login.gui.LoginGUIPage.class);
+            when(player.getOpenInventory()).thenReturn(openInventory);
+            when(openInventory.getTopInventory()).thenReturn(topInventory);
+            when(topInventory.getHolder()).thenReturn(guiHolder);
+
+            boolean result;
+            try (MockedStatic<LoginProtectionListener> listener = mockStatic(LoginProtectionListener.class)) {
+                result = service.resetPasswordForRecovery(playerUuid, "newPassword123");
+
+                assertThat(result).isTrue();
+                listener.verifyNoInteractions();
+            }
+
+            service.completeLogin(player);
+
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("a successful recovery must leave the player authenticated")
+                    .isTrue();
+            // completeLogin must close an already-open credential GUI, or the player is left
+            // staring at a stale prompt even though they are now logged in.
+            verify(player).closeInventory();
+        }
+
+        @Test
+        @DisplayName("Should still present the credential prompt for an admin-triggered reset,"
+                + " unlike recovery")
+        void adminResetStillPresentsTheCredentialPrompt() throws Exception {
+            // Regression guard distinguishing the two paths: only resetPasswordForRecovery
+            // (recovery) suppresses the prompt. The public resetPassword(UUID, String) (admin
+            // command) must keep presenting it exactly as before.
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+            doReturn(player).when(server).getPlayer(playerUuid);
+
+            try (MockedStatic<LoginProtectionListener> listener = mockStatic(LoginProtectionListener.class)) {
+                boolean result = service.resetPassword(playerUuid, "newPassword123");
+
+                assertThat(result).isTrue();
+                listener.verify(() -> LoginProtectionListener.presentCredentialPrompt(
+                        eq(player), eq(UltiLoginTestHelper.getMockPlugin()), eq(service), any()));
+            }
         }
     }
 
@@ -2538,6 +2622,65 @@ class LoginServiceTest {
     }
 
     @Nested
+    @DisplayName("requestPanelLink post-POST invalidation re-check")
+    class RequestPanelLinkPostPostRecheck {
+
+        @Test
+        @DisplayName("Should discard a successful HTTP result when the session was invalidated"
+                + " while the POST was in flight")
+        void discardsTheResultWhenInvalidatedWhileThePostWasInFlight() {
+            // Codex PR #18 thread 3946170644 (round 7): the pre-POST fence
+            // (RequestPanelLinkGenerationFence above) only closes the gap *before* the blocking
+            // HTTP call -- the check and the pendingPanelRequests insert are atomic with each
+            // other, but nothing re-checks either afterward. An invalidateSession(...) landing
+            // *during* the call (simulated here from inside the mocked SimpleHttpClient.post()
+            // answer, after the pre-POST atomic check-and-insert has already run) removes this
+            // request's pendingPanelRequests entry and bumps the generation, but neither of those
+            // stops this in-flight call from finishing and requestPanelLink() handing back a
+            // success result regardless -- unless requestPanelLink() re-checks after the call
+            // returns, which is the fix under test.
+            when(config.isUlticloudEnabled()).thenReturn(true);
+
+            long capturedGeneration = service.getInvalidationGeneration(playerUuid);
+
+            YamlConfiguration env = mock(YamlConfiguration.class);
+            when(env.getString("api-url")).thenReturn("http://ulticloud.test");
+            SimpleHttpClient.Response okResponse =
+                    new SimpleHttpClient.Response(200, "{\"data\":{\"url\":\"http://panel.test/link\"}}");
+
+            try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
+                 MockedStatic<CommonUtils> commonUtils = mockStatic(CommonUtils.class);
+                 MockedStatic<SimpleHttpClient> http = mockStatic(SimpleHttpClient.class)) {
+                ultiTools.when(UltiTools::getEnv).thenReturn(env);
+                commonUtils.when(CommonUtils::getUltiToolsUUID).thenReturn("server-uuid");
+                http.when(() -> SimpleHttpClient.post(anyString(), anyMap(), anyString()))
+                        .thenAnswer(invocation -> {
+                            // The session is invalidated while this POST is "in flight" -- after
+                            // the pre-POST atomic check-and-insert already ran, but before this
+                            // call returns.
+                            service.invalidateSession(playerUuid);
+                            return okResponse;
+                        });
+
+                LoginService.PanelLinkResult result = service.requestPanelLink(player, capturedGeneration);
+
+                assertThat(result.isSuccess())
+                        .as("a result whose invalidation raced the in-flight POST must be"
+                                + " discarded, not returned as success")
+                        .isFalse();
+                assertThat(result.getError()).contains("invalidated");
+                assertThat(result.getUrl()).isNull();
+                assertThat(result.getRequestId()).isNull();
+                assertThat(service.hasPendingPanelRequest(playerUuid))
+                        .as("the discarded request must not remain pending -- nothing left for a"
+                                + " caller to poll for")
+                        .isFalse();
+                http.verify(() -> SimpleHttpClient.post(anyString(), anyMap(), anyString()), times(1));
+            }
+        }
+    }
+
+    @Nested
     @DisplayName("completePanelLogin")
     class CompletePanelLogin {
 
@@ -2977,7 +3120,7 @@ class LoginServiceTest {
                     return completedResponse;
                 });
 
-                service.startAuthPolling(playerUuid.toString(), player);
+                service.startAuthPolling(playerUuid.toString(), player, "panel-req-race");
             }
 
             assertThat(service.isLoggedIn(playerUuid))
@@ -3020,7 +3163,7 @@ class LoginServiceTest {
                 ultiTools.when(UltiTools::getEnv).thenReturn(env);
                 http.when(() -> SimpleHttpClient.get(anyString())).thenReturn(completedResponse);
 
-                service.startAuthPolling(playerUuid.toString(), player);
+                service.startAuthPolling(playerUuid.toString(), player, "panel-req-normal");
             }
 
             assertThat(service.isLoggedIn(playerUuid))
@@ -3030,6 +3173,65 @@ class LoginServiceTest {
                     .as("completePanelLogin must have run its own cleanup for the request")
                     .doesNotContainKey("panel-req-normal");
             verify(UltiLoginTestHelper.getMockPlugin()).i18n("panel_auth_success_player");
+        }
+
+        @Test
+        @DisplayName("Must not authenticate through a newer pending request for the same player"
+                + " after this poll's own request was cancelled")
+        void doesNotAuthenticateThroughANewerPendingRequestAfterAStaleCompletion() throws Exception {
+            // Codex PR #18 thread 3946170644 (round 7): handlePanelPollCompleted used to resolve
+            // "completed" by scanning pendingPanelRequests for whichever entry was pending for
+            // this player, rather than the specific request id this poll was started for. If this
+            // poll's own request had already been cancelled (e.g. by an invalidation) but the
+            // player had since started a fresh /panel request, that scan would pick up the newer
+            // request and authenticate through it -- even though this poll's own "completed"
+            // observation had nothing to do with the newer request. Reproduced by removing the
+            // original request and inserting a newer one for the same player from inside the
+            // mocked HTTP call's answer, exactly the ordering the report describes.
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            pendingPanelRequests.put("panel-req-old", playerUuid);
+
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+            doReturn(player).when(server).getPlayer(playerUuid);
+            makeSchedulerRunTasksSynchronously(server, mock(BukkitTask.class));
+
+            YamlConfiguration env = mock(YamlConfiguration.class);
+            when(env.getString("api-url")).thenReturn("http://ulticloud.test");
+
+            String pollResponseJson = "{\"data\":{\"status\":\"completed\",\"is_server_owner\":false}}";
+            SimpleHttpClient.Response completedResponse = new SimpleHttpClient.Response(200, pollResponseJson);
+
+            try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
+                 MockedStatic<SimpleHttpClient> http = mockStatic(SimpleHttpClient.class)) {
+                ultiTools.when(UltiTools::getEnv).thenReturn(env);
+                http.when(() -> SimpleHttpClient.get(anyString())).thenAnswer(invocation -> {
+                    // The original request is cancelled (e.g. by an invalidation) and the player
+                    // starts a fresh /panel request, both landing before this poll's "completed"
+                    // response is processed on the main thread.
+                    pendingPanelRequests.remove("panel-req-old");
+                    pendingPanelRequests.put("panel-req-new", playerUuid);
+                    return completedResponse;
+                });
+
+                service.startAuthPolling(playerUuid.toString(), player, "panel-req-old");
+            }
+
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("a stale completion for a cancelled request must not authenticate the"
+                            + " player through an unrelated, newer pending request for the same"
+                            + " player")
+                    .isFalse();
+            assertThat(pendingPanelRequests)
+                    .as("the newer request must be left untouched -- this poll's stale"
+                            + " completion was never entitled to consume it")
+                    .containsKey("panel-req-new");
         }
     }
 
@@ -3187,6 +3389,24 @@ class LoginServiceTest {
             assertThat(result.isSuccess()).isFalse();
             assertThat(result.getUrl()).isNull();
             assertThat(result.getError()).isNull();
+        }
+
+        @Test
+        @DisplayName("Should default requestId to null on the three-argument constructor")
+        void threeArgumentConstructorDefaultsRequestIdToNull() {
+            LoginService.PanelLinkResult result =
+                    new LoginService.PanelLinkResult(true, "https://panel.example.com/login", null);
+
+            assertThat(result.getRequestId()).isNull();
+        }
+
+        @Test
+        @DisplayName("Should store the request id given to the four-argument constructor")
+        void fourArgumentConstructorStoresRequestId() {
+            LoginService.PanelLinkResult result = new LoginService.PanelLinkResult(
+                    true, "https://panel.example.com/login", null, "req-42");
+
+            assertThat(result.getRequestId()).isEqualTo("req-42");
         }
     }
 

@@ -126,20 +126,24 @@ class PanelCommandTest {
         @DisplayName("Should not deliver the panel-link result if the player went offline before the async request completed")
         void skipsDeliveryWhenOffline() {
             Runnable task = captureResultDeliveryTask(
-                    new LoginService.PanelLinkResult(true, "https://panel.example/link", null));
+                    new LoginService.PanelLinkResult(true, "https://panel.example/link", null, "req-1"));
             when(player.isOnline()).thenReturn(false);
 
             task.run();
 
             verify(player, never()).spigot();
-            verify(loginService, never()).startAuthPolling(anyString(), any());
+            verify(loginService, never()).startAuthPolling(anyString(), any(), anyString());
         }
 
         @Test
-        @DisplayName("Should send a clickable panel link and start auth polling when the link request succeeds")
+        @DisplayName("Should send a clickable panel link and start auth polling, keyed on the result's request id, when the link request succeeds")
         void sendsClickableLinkAndStartsPollingOnSuccess() {
+            // Round 7 (Codex PR #18 thread 3946170644): startAuthPolling must be keyed on the
+            // exact request id requestPanelLink() published, not re-derived from "whatever is
+            // pending now" -- so this result's requestId ("req-1") must reach startAuthPolling
+            // unchanged.
             Runnable task = captureResultDeliveryTask(
-                    new LoginService.PanelLinkResult(true, "https://panel.example/link", null));
+                    new LoginService.PanelLinkResult(true, "https://panel.example/link", null, "req-1"));
 
             Player.Spigot spigot = mock(Player.Spigot.class);
             when(player.spigot()).thenReturn(spigot);
@@ -147,7 +151,7 @@ class PanelCommandTest {
             task.run();
 
             verify(spigot).sendMessage(any(BaseComponent.class));
-            verify(loginService).startAuthPolling(playerUuid.toString(), player);
+            verify(loginService).startAuthPolling(playerUuid.toString(), player, "req-1");
         }
 
         @Test
@@ -160,7 +164,7 @@ class PanelCommandTest {
 
             verify(player, times(2)).sendMessage(anyString());
             verify(player, never()).spigot();
-            verify(loginService, never()).startAuthPolling(anyString(), any());
+            verify(loginService, never()).startAuthPolling(anyString(), any(), anyString());
         }
     }
 
