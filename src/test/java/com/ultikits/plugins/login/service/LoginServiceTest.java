@@ -598,6 +598,135 @@ class LoginServiceTest {
                             + " re-enter a password")
                     .isFalse();
         }
+
+        @Test
+        @DisplayName("Reapplies the blind effect and spawn teleport to an online player whose"
+                + " credentials are revoked, matching what a fresh join would receive")
+        void reappliesNoSessionProtectionsWhenAnOnlinePlayerIsRevoked() throws Exception {
+            // Codex PR #18 round 8, thread 3946414499: forceReauthenticationIfOnline only
+            // flipped loggedInPlayers/joinTimes -- if blind-effect or spawn-location.enabled are
+            // configured, onPlayerJoin is the only code that applies them, and it never runs
+            // again for an already-connected player, so a revoked client stayed fully sighted at
+            // its current, potentially sensitive location despite now being unauthenticated.
+            when(config.isBlindEffect()).thenReturn(true);
+            when(config.isSpawnLocationEnabled()).thenReturn(true);
+            when(config.getSpawnWorld()).thenReturn("world");
+            when(config.getSpawnX()).thenReturn(100.0);
+            when(config.getSpawnY()).thenReturn(64.0);
+            when(config.getSpawnZ()).thenReturn(200.0);
+
+            Location currentLoc = mock(Location.class);
+            when(currentLoc.clone()).thenReturn(currentLoc);
+            when(player.getLocation()).thenReturn(currentLoc);
+
+            String salt = "testSalt";
+            String password = "password123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, password);
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+                bukkitMock.when(() -> Bukkit.getWorld("world")).thenReturn(mock(World.class));
+                // The scheduled runnable must actually run for these assertions to prove
+                // anything -- a bare "runTask was called" check would pass even if the
+                // runnable's body never executed.
+                stubSchedulerToRunSynchronously(bukkitMock);
+
+                String newPassword = service.resetPassword(playerUuid);
+                assertThat(newPassword).isNotNull();
+            }
+
+            verify(player).addPotionEffect(any(PotionEffect.class));
+            verify(player).teleport(any(Location.class));
+        }
+
+        @Test
+        @DisplayName("Does not reapply the no-session protections for the silent"
+                + " recovery re-authentication path")
+        void doesNotApplyNoSessionProtectionsOnSilentRecovery() throws Exception {
+            // The silent recovery path (resetPasswordForRecovery, presentPrompt=false) leaves
+            // the player authenticated immediately afterward -- reapplying blindness/teleport
+            // here would apply protections to a player who is about to be logged straight back
+            // in, which is exactly the same over-application forceReauthenticationIfOnline's own
+            // presentPrompt guard already exists to avoid for the credential prompt.
+            when(config.isBlindEffect()).thenReturn(true);
+            when(config.isSpawnLocationEnabled()).thenReturn(true);
+            when(config.getSpawnWorld()).thenReturn("world");
+            when(config.getSpawnX()).thenReturn(100.0);
+            when(config.getSpawnY()).thenReturn(64.0);
+            when(config.getSpawnZ()).thenReturn(200.0);
+
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+
+                boolean result = service.resetPasswordForRecovery(playerUuid, "newPassword123");
+                assertThat(result).isTrue();
+            }
+
+            verify(player, never()).addPotionEffect(any(PotionEffect.class));
+            verify(player, never()).teleport(any(Location.class));
+        }
+
+        @Test
+        @DisplayName("Clears the reapplied no-session protections once the revoked player"
+                + " successfully logs back in")
+        void clearsReappliedProtectionsAfterSuccessfulReLogin() throws Exception {
+            // Round 8 fix, item 3: completeLogin() already removes the blind effect and
+            // restores the player's original location for the ordinary join-time protections;
+            // this pins that the same clearing happens for a revoked-then-re-authenticated
+            // player, using the location applyNoSessionProtections() recorded at revocation
+            // time (originalLocations had already been cleared by this player's first
+            // completeLogin(), so without a fresh record there would be nothing to restore to).
+            when(config.isBlindEffect()).thenReturn(true);
+            when(config.isSpawnLocationEnabled()).thenReturn(true);
+            when(config.getSpawnWorld()).thenReturn("world");
+            when(config.getSpawnX()).thenReturn(100.0);
+            when(config.getSpawnY()).thenReturn(64.0);
+            when(config.getSpawnZ()).thenReturn(200.0);
+
+            Location currentLoc = mock(Location.class);
+            when(currentLoc.clone()).thenReturn(currentLoc);
+            when(player.getLocation()).thenReturn(currentLoc);
+
+            String salt = "testSalt";
+            String password = "password123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, password);
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+
+            // completeLogin() (called by the login() above) unconditionally calls
+            // removePotionEffect(BLINDNESS) regardless of whether blindness was actually
+            // applied -- clear that invocation so the assertion below pins the *second*
+            // completeLogin() call (the one clearing the just-reapplied protections), not the
+            // first one's unrelated no-op.
+            clearInvocations(player);
+
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+                bukkitMock.when(() -> Bukkit.getWorld("world")).thenReturn(mock(World.class));
+                stubSchedulerToRunSynchronously(bukkitMock);
+
+                String newPassword = service.resetPassword(playerUuid);
+                assertThat(newPassword).isNotNull();
+            }
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+
+            service.completeLogin(player);
+
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+            verify(player).removePotionEffect(PotionEffectType.BLINDNESS);
+            verify(player).teleport(currentLoc);
+        }
     }
 
     // ==================== resetPasswordForRecovery ====================

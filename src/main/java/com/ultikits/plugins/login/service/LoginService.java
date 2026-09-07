@@ -578,9 +578,59 @@ public class LoginService {
             loggedInPlayers.put(playerUuid, false);
             joinTimes.put(playerUuid, System.currentTimeMillis());
             if (presentPrompt) {
+                applyNoSessionProtections(player);
                 presentCredentialPrompt(player);
             }
         }
+    }
+
+    /**
+     * Reapply the no-session protections -- a temporary blindness effect, and a teleport to the
+     * configured spawn location -- that an unauthenticated player already receives on join, for a
+     * player whose credentials have just been revoked while connected.
+     * <p>
+     * Codex PR #18 round 8, thread 3946414499 ({@code forceReauthenticationIfOnline}): before this
+     * fix, revoking an online player's session (account deletion, an administrative password
+     * reset, or a self-service password change) only cleared the login flag and restarted the
+     * join timeout. {@link #onPlayerJoin(Player)} was the only code applying {@code blind-effect}
+     * / {@code spawn-location.enabled}, and it never runs again for an already-connected player,
+     * so a revoked client stayed fully sighted at its current, potentially sensitive location
+     * despite now being unauthenticated -- until it happened to reconnect.
+     * <p>
+     * Shared with {@link #onPlayerJoin(Player)} so both paths apply the identical protections the
+     * identical way; neither call site touches {@code loggedInPlayers}/{@code joinTimes} or
+     * session auto-login here -- that stays {@link #forceReauthenticationIfOnline(UUID, boolean)}'s
+     * and {@link #onPlayerJoin(Player)}'s own concern, not this method's.
+     * <p>
+     * Dispatched onto the main thread via {@link LoginProtectionListener#dispatchOnMainThread},
+     * since potion effects and teleports are main-thread-only Bukkit APIs and a caller revoking a
+     * session (e.g. an admin command) is not guaranteed to already be there.
+     * <p>
+     * If a spawn teleport applies, the player's current location is recorded into {@code
+     * originalLocations} (only if not already present -- {@link #completeLogin(Player)} removes
+     * that entry on every successful login, so a revoked-and-reconnected player would otherwise
+     * have no recorded location to restore on their next successful login).
+     *
+     * @param player the online player to apply the protections to
+     */
+    private void applyNoSessionProtections(Player player) {
+        LoginProtectionListener.dispatchOnMainThread(player, plugin, bukkitPlugin, () -> {
+            if (!player.isOnline()) {
+                return;
+            }
+            if (config.isBlindEffect()) {
+                player.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS, Integer.MAX_VALUE, 0, false, false));
+            }
+
+            if (config.isSpawnLocationEnabled()) {
+                World world = Bukkit.getWorld(config.getSpawnWorld());
+                if (world != null) {
+                    originalLocations.putIfAbsent(player.getUniqueId(), player.getLocation().clone());
+                    Location spawn = new Location(world, config.getSpawnX(), config.getSpawnY(), config.getSpawnZ());
+                    player.teleport(spawn);
+                }
+            }
+        });
     }
 
     /**
@@ -622,20 +672,10 @@ public class LoginService {
             return;
         }
         
-        // Apply blind effect
-        if (config.isBlindEffect()) {
-            player.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS, Integer.MAX_VALUE, 0, false, false));
-        }
-        
-        // Teleport to spawn if enabled
-        if (config.isSpawnLocationEnabled()) {
-            World world = Bukkit.getWorld(config.getSpawnWorld());
-            if (world != null) {
-                Location spawn = new Location(world, config.getSpawnX(), config.getSpawnY(), config.getSpawnZ());
-                player.teleport(spawn);
-            }
-        }
-        
+        // Apply the no-session protections (blind effect / spawn teleport) -- shared with
+        // forceReauthenticationIfOnline(), see applyNoSessionProtections().
+        applyNoSessionProtections(player);
+
         // Send prompt based on mode
         if (isRegistered(uuid)) {
             String message = config.isGuiModeEnabled() 

@@ -282,6 +282,13 @@ public class LoginProtectionListener implements Listener {
      *   anyway; skip and log a warning instead of letting the scheduler's unchecked exception
      *   propagate out of the credential-invalidation call chain that triggered this prompt.</li>
      * </ol>
+     * <p>
+     * Round 8 (Codex PR #18, thread 3946414499): widened from {@code private} to {@code public}
+     * so {@code LoginService}'s own {@code applyNoSessionProtections(Player)} -- the blind-effect
+     * and spawn-teleport reapplication shared with {@link
+     * com.ultikits.plugins.login.service.LoginService#onPlayerJoin(Player)} -- can dispatch
+     * through the identical main-thread rules, since potion effects and teleports are exactly as
+     * main-thread-only as the GUI/text prompt this method already guards.
      *
      * @param player the player the prompt is for, used only for the skip warning's message
      * @param plugin the UltiTools plugin instance, used to log the skip warning
@@ -289,7 +296,7 @@ public class LoginProtectionListener implements Listener {
      *                     under
      * @param task the prompt body to run
      */
-    private static void dispatchOnMainThread(Player player, UltiToolsPlugin plugin,
+    public static void dispatchOnMainThread(Player player, UltiToolsPlugin plugin,
             Plugin bukkitPlugin, Runnable task) {
         if (Bukkit.isPrimaryThread()) {
             task.run();
