@@ -78,7 +78,7 @@ class PanelCommandTest {
             command.openPanel(player);
 
             verify(player).sendMessage(anyString());
-            verify(loginService, never()).requestPanelLink(any());
+            verify(loginService, never()).requestPanelLink(any(), anyLong());
         }
 
         @Test
@@ -102,7 +102,20 @@ class PanelCommandTest {
          */
         private Runnable captureResultDeliveryTask(LoginService.PanelLinkResult result) {
             when(loginService.isPanelEnabled()).thenReturn(true);
-            when(loginService.requestPanelLink(player)).thenReturn(result);
+            // Round 4 (Codex PR #18 thread 3945030000): openPanel() now captures the player's
+            // invalidation generation via getInvalidationGeneration() before scheduling the
+            // async worker, and passes it into the two-argument requestPanelLink() overload so
+            // the worker can refuse to publish a request that went stale in the gap. The
+            // captured value itself does not matter to this fixture (loginService is a plain
+            // mock, so getInvalidationGeneration() already returns 0 by default) -- only that
+            // the two-argument overload is the one stubbed and invoked.
+            when(loginService.requestPanelLink(eq(player), anyLong())).thenReturn(result);
+            // Round 9 (Codex PR #18 thread 3946574845): the result-delivery task now revalidates
+            // via isPanelRequestCurrent() before acting on a successful result -- default this to
+            // "still current" so the pre-existing success-path tests below keep exercising the
+            // link-sent/poll-started behaviour unchanged. The dedicated staleness test overrides
+            // this per-test.
+            lenient().when(loginService.isPanelRequestCurrent(any(), any(), anyLong())).thenReturn(true);
 
             command.openPanel(player);
 
@@ -119,20 +132,24 @@ class PanelCommandTest {
         @DisplayName("Should not deliver the panel-link result if the player went offline before the async request completed")
         void skipsDeliveryWhenOffline() {
             Runnable task = captureResultDeliveryTask(
-                    new LoginService.PanelLinkResult(true, "https://panel.example/link", null));
+                    new LoginService.PanelLinkResult(true, "https://panel.example/link", null, "req-1"));
             when(player.isOnline()).thenReturn(false);
 
             task.run();
 
             verify(player, never()).spigot();
-            verify(loginService, never()).startAuthPolling(anyString(), any());
+            verify(loginService, never()).startAuthPolling(anyString(), any(), anyString());
         }
 
         @Test
-        @DisplayName("Should send a clickable panel link and start auth polling when the link request succeeds")
+        @DisplayName("Should send a clickable panel link and start auth polling, keyed on the result's request id, when the link request succeeds")
         void sendsClickableLinkAndStartsPollingOnSuccess() {
+            // Round 7 (Codex PR #18 thread 3946170644): startAuthPolling must be keyed on the
+            // exact request id requestPanelLink() published, not re-derived from "whatever is
+            // pending now" -- so this result's requestId ("req-1") must reach startAuthPolling
+            // unchanged.
             Runnable task = captureResultDeliveryTask(
-                    new LoginService.PanelLinkResult(true, "https://panel.example/link", null));
+                    new LoginService.PanelLinkResult(true, "https://panel.example/link", null, "req-1"));
 
             Player.Spigot spigot = mock(Player.Spigot.class);
             when(player.spigot()).thenReturn(spigot);
@@ -140,7 +157,35 @@ class PanelCommandTest {
             task.run();
 
             verify(spigot).sendMessage(any(BaseComponent.class));
-            verify(loginService).startAuthPolling(playerUuid.toString(), player);
+            verify(loginService).startAuthPolling(playerUuid.toString(), player, "req-1");
+        }
+
+        @Test
+        @DisplayName("Should discard a successful result and send the plain failure message when"
+                + " the request was invalidated between requestPanelLink()'s return and this"
+                + " callback actually running on the main thread")
+        void discardsResultWhenInvalidatedBeforeCallbackRuns() {
+            // Round 9 (Codex PR #18 thread 3946574845, P2): requestPanelLink()'s own post-POST
+            // re-check (round 7) only closes the race up to the moment that method returns. This
+            // callback is itself scheduled via runTask(...) after that method already returned a
+            // success result -- an invalidateSession(...) landing in that final gap must still be
+            // caught here, or the revoked player would receive the magic link and start a new
+            // poll for it anyway.
+            Runnable task = captureResultDeliveryTask(
+                    new LoginService.PanelLinkResult(true, "https://panel.example/link", null, "req-1"));
+            when(loginService.isPanelRequestCurrent(eq(playerUuid), eq("req-1"), anyLong()))
+                    .thenReturn(false);
+
+            Player.Spigot spigot = mock(Player.Spigot.class);
+            when(player.spigot()).thenReturn(spigot);
+
+            task.run();
+
+            verify(spigot, never()).sendMessage(any(BaseComponent.class));
+            verify(loginService, never()).startAuthPolling(anyString(), any(), anyString());
+            // Once for openPanel()'s own "generating" message, once for the discarded result's
+            // failure message -- same count as the pre-existing sendsErrorMessageOnFailure case.
+            verify(player, times(2)).sendMessage(anyString());
         }
 
         @Test
@@ -153,7 +198,7 @@ class PanelCommandTest {
 
             verify(player, times(2)).sendMessage(anyString());
             verify(player, never()).spigot();
-            verify(loginService, never()).startAuthPolling(anyString(), any());
+            verify(loginService, never()).startAuthPolling(anyString(), any(), anyString());
         }
     }
 

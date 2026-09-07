@@ -1,23 +1,43 @@
 package com.ultikits.plugins.login.service;
 
+import com.ultikits.plugins.login.UltiLogin;
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.entity.AccountData;
+import com.ultikits.plugins.login.listener.LoginProtectionListener;
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.Query;
+import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
+import com.ultikits.ultitools.manager.ConfigManager;
+import com.ultikits.ultitools.utils.CommonUtils;
+import com.ultikits.ultitools.utils.SimpleHttpClient;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Server;
 import org.bukkit.World;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
+import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.InventoryView;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
+import org.bukkit.scheduler.BukkitScheduler;
 import org.bukkit.scheduler.BukkitTask;
 import org.junit.jupiter.api.*;
+import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
+import org.mockito.stubbing.Answer;
 
+import java.io.File;
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -376,6 +396,43 @@ class LoginServiceTest {
             assertThat(result).isTrue();
             verify(dataOperator).update(any(AccountData.class));
         }
+
+        @Test
+        @DisplayName("Should revoke the online player's active login state after a successful change")
+        void forcesReauthenticationForOnlinePlayerOnChangePassword() throws Exception {
+            // Real-machine finding F-L1 (13-uat-results.md #14, Laojun 2026-09-06): a real
+            // /changepassword reported success while the player stayed authenticated --
+            // /mail inbox still worked, /recover and /login both said already logged in.
+            // invalidateSession only ended the remembered `sessions` entry; unlike unregister
+            // and resetPassword it never called forceReauthenticationIfOnline, so
+            // LoginProtectionListener (which authorizes actions through isLoggedIn, not
+            // hasValidSession) kept the connection fully authorized under the old credentials.
+            String salt = "testSalt";
+            String oldPassword = "oldPass123";
+            String hash = hashPasswordForTest(oldPassword, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, oldPassword);
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+
+            boolean result;
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+                stubSchedulerToRunSynchronously(bukkitMock);
+
+                result = service.changePassword(playerUuid, oldPassword, "newPass123");
+            }
+
+            assertThat(result).isTrue();
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("a successful password change must revoke the online player's active"
+                            + " login state, not only its remembered session")
+                    .isFalse();
+            assertThat(service.hasValidSession(player))
+                    .as("a successful password change must also end the persisted session")
+                    .isFalse();
+        }
     }
 
     // ==================== resetPassword ====================
@@ -419,6 +476,340 @@ class LoginServiceTest {
             assertThat(result).isTrue();
             verify(dataOperator).update(any(AccountData.class));
         }
+
+        @Test
+        @DisplayName("Should revoke the online player's active login state after a random-password reset")
+        void forcesReauthenticationForOnlinePlayerOnRandomReset() throws Exception {
+            // Codex PR #18 review comment 3944181256: invalidateSession only ends the remembered
+            // `sessions` entry; LoginProtectionListener authorizes actions through isLoggedIn, not
+            // hasValidSession, so an already-authenticated online connection stayed fully
+            // authorized with the old credentials until it happened to disconnect -- defeating
+            // password rotation as a response to a compromised, currently-connected account.
+            String salt = "testSalt";
+            String password = "password123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, password);
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+
+            String newPassword;
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+                stubSchedulerToRunSynchronously(bukkitMock);
+
+                newPassword = service.resetPassword(playerUuid);
+            }
+
+            assertThat(newPassword).isNotNull();
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("an administrative password reset must revoke the online player's active"
+                            + " login state, not only its remembered session")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("Should revoke the online player's active login state after a specific-password reset")
+        void forcesReauthenticationForOnlinePlayerOnSpecificReset() throws Exception {
+            String salt = "testSalt";
+            String password = "password123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, password);
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+
+            boolean result;
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+                stubSchedulerToRunSynchronously(bukkitMock);
+
+                result = service.resetPassword(playerUuid, "newPassword123");
+            }
+
+            assertThat(result).isTrue();
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("an administrative password reset must revoke the online player's active"
+                            + " login state, not only its remembered session")
+                    .isFalse();
+        }
+    }
+
+    // ==================== forceReauthenticationIfOnline credential prompt ====================
+
+    @Nested
+    @DisplayName("forceReauthenticationIfOnline credential prompt")
+    class ForceReauthenticationCredentialPrompt {
+
+        @Test
+        @DisplayName("Presents the GUI credential prompt after an online player's password is"
+                + " reset in GUI mode, without replaying session auto-login")
+        void presentsGuiPromptAfterResetPasswordInGuiMode() throws Exception {
+            // Codex PR #18 thread 3945030004 (round 4), see forceReauthenticationIfOnline():
+            // forceReauthenticationIfOnline only flipped the login flag and started the
+            // timeout -- with GUI mode enabled, LoginProtectionListener only ever opens the
+            // login/register GUI from PlayerJoinEvent or a blocked action, neither of which
+            // fires again on its own after a silent flag flip, so a revoked online player was
+            // frozen by the action guards and eventually kicked by the timeout without ever
+            // seeing the credential screen again.
+            when(config.isGuiModeEnabled()).thenReturn(true);
+
+            String salt = "testSalt";
+            String password = "password123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, password);
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+            doReturn(player).when(server).getPlayer(playerUuid);
+
+            // Force the scheduled main-thread task to run synchronously, same pattern as
+            // StartAuthPollingRace#makeSchedulerRunTasksSynchronously below.
+            BukkitScheduler fakeScheduler = spy(server.getScheduler());
+            doAnswer(invocation -> {
+                Runnable runnable = invocation.getArgument(1);
+                runnable.run();
+                return mock(BukkitTask.class);
+            }).when(fakeScheduler).runTask(any(Plugin.class), any(Runnable.class));
+            doReturn(fakeScheduler).when(server).getScheduler();
+
+            String newPassword;
+            try (MockedStatic<com.ultikits.plugins.login.gui.LoginGUIPage> loginGui =
+                         mockStatic(com.ultikits.plugins.login.gui.LoginGUIPage.class);
+                 MockedStatic<com.ultikits.plugins.login.gui.RegisterGUIPage> registerGui =
+                         mockStatic(com.ultikits.plugins.login.gui.RegisterGUIPage.class)) {
+
+                newPassword = service.resetPassword(playerUuid);
+
+                assertThat(newPassword).isNotNull();
+                loginGui.verify(() -> com.ultikits.plugins.login.gui.LoginGUIPage.open(
+                        player, UltiLoginTestHelper.getMockPlugin(), service));
+                registerGui.verifyNoInteractions();
+            }
+
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("presenting the credential prompt must not replay session auto-login --"
+                            + " the player must stay unauthenticated until they actually"
+                            + " re-enter a password")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("Reapplies the blind effect and spawn teleport to an online player whose"
+                + " credentials are revoked, matching what a fresh join would receive")
+        void reappliesNoSessionProtectionsWhenAnOnlinePlayerIsRevoked() throws Exception {
+            // Codex PR #18 round 8, thread 3946414499: forceReauthenticationIfOnline only
+            // flipped loggedInPlayers/joinTimes -- if blind-effect or spawn-location.enabled are
+            // configured, onPlayerJoin is the only code that applies them, and it never runs
+            // again for an already-connected player, so a revoked client stayed fully sighted at
+            // its current, potentially sensitive location despite now being unauthenticated.
+            when(config.isBlindEffect()).thenReturn(true);
+            when(config.isSpawnLocationEnabled()).thenReturn(true);
+            when(config.getSpawnWorld()).thenReturn("world");
+            when(config.getSpawnX()).thenReturn(100.0);
+            when(config.getSpawnY()).thenReturn(64.0);
+            when(config.getSpawnZ()).thenReturn(200.0);
+
+            Location currentLoc = mock(Location.class);
+            when(currentLoc.clone()).thenReturn(currentLoc);
+            when(player.getLocation()).thenReturn(currentLoc);
+
+            String salt = "testSalt";
+            String password = "password123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, password);
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+                bukkitMock.when(() -> Bukkit.getWorld("world")).thenReturn(mock(World.class));
+                // The scheduled runnable must actually run for these assertions to prove
+                // anything -- a bare "runTask was called" check would pass even if the
+                // runnable's body never executed.
+                stubSchedulerToRunSynchronously(bukkitMock);
+
+                String newPassword = service.resetPassword(playerUuid);
+                assertThat(newPassword).isNotNull();
+            }
+
+            verify(player).addPotionEffect(any(PotionEffect.class));
+            verify(player).teleport(any(Location.class));
+        }
+
+        @Test
+        @DisplayName("Does not reapply the no-session protections for the silent"
+                + " recovery re-authentication path")
+        void doesNotApplyNoSessionProtectionsOnSilentRecovery() throws Exception {
+            // The silent recovery path (resetPasswordForRecovery, presentPrompt=false) leaves
+            // the player authenticated immediately afterward -- reapplying blindness/teleport
+            // here would apply protections to a player who is about to be logged straight back
+            // in, which is exactly the same over-application forceReauthenticationIfOnline's own
+            // presentPrompt guard already exists to avoid for the credential prompt.
+            when(config.isBlindEffect()).thenReturn(true);
+            when(config.isSpawnLocationEnabled()).thenReturn(true);
+            when(config.getSpawnWorld()).thenReturn("world");
+            when(config.getSpawnX()).thenReturn(100.0);
+            when(config.getSpawnY()).thenReturn(64.0);
+            when(config.getSpawnZ()).thenReturn(200.0);
+
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+
+                boolean result = service.resetPasswordForRecovery(playerUuid, "newPassword123");
+                assertThat(result).isTrue();
+            }
+
+            verify(player, never()).addPotionEffect(any(PotionEffect.class));
+            verify(player, never()).teleport(any(Location.class));
+        }
+
+        @Test
+        @DisplayName("Clears the reapplied no-session protections once the revoked player"
+                + " successfully logs back in")
+        void clearsReappliedProtectionsAfterSuccessfulReLogin() throws Exception {
+            // Round 8 fix, item 3: completeLogin() already removes the blind effect and
+            // restores the player's original location for the ordinary join-time protections;
+            // this pins that the same clearing happens for a revoked-then-re-authenticated
+            // player, using the location applyNoSessionProtections() recorded at revocation
+            // time (originalLocations had already been cleared by this player's first
+            // completeLogin(), so without a fresh record there would be nothing to restore to).
+            when(config.isBlindEffect()).thenReturn(true);
+            when(config.isSpawnLocationEnabled()).thenReturn(true);
+            when(config.getSpawnWorld()).thenReturn("world");
+            when(config.getSpawnX()).thenReturn(100.0);
+            when(config.getSpawnY()).thenReturn(64.0);
+            when(config.getSpawnZ()).thenReturn(200.0);
+
+            Location currentLoc = mock(Location.class);
+            when(currentLoc.clone()).thenReturn(currentLoc);
+            when(player.getLocation()).thenReturn(currentLoc);
+
+            String salt = "testSalt";
+            String password = "password123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, password);
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+
+            // completeLogin() (called by the login() above) unconditionally calls
+            // removePotionEffect(BLINDNESS) regardless of whether blindness was actually
+            // applied -- clear that invocation so the assertion below pins the *second*
+            // completeLogin() call (the one clearing the just-reapplied protections), not the
+            // first one's unrelated no-op.
+            clearInvocations(player);
+
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+                bukkitMock.when(() -> Bukkit.getWorld("world")).thenReturn(mock(World.class));
+                stubSchedulerToRunSynchronously(bukkitMock);
+
+                String newPassword = service.resetPassword(playerUuid);
+                assertThat(newPassword).isNotNull();
+            }
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+
+            service.completeLogin(player);
+
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+            verify(player).removePotionEffect(PotionEffectType.BLINDNESS);
+            verify(player).teleport(currentLoc);
+        }
+    }
+
+    // ==================== resetPasswordForRecovery ====================
+
+    @Nested
+    @DisplayName("resetPasswordForRecovery")
+    class ResetPasswordForRecovery {
+
+        @Test
+        @DisplayName("Should authenticate a successful recovery without presenting the credential"
+                + " prompt or leaving a credential GUI open")
+        void authenticatesSilentlyAndClosesAnyOpenCredentialGuiOnSuccessfulRecovery() throws Exception {
+            // Codex PR #18 thread 3946170649 (round 7): RecoverCommand.resetPassword calls
+            // completeLogin(player) immediately after a successful
+            // EmailVerificationService.resetPasswordAfterRecovery() -- which used to delegate to
+            // the public, prompt-presenting resetPassword(UUID, String). That showed the login/
+            // register prompt (a "log in now" message in text mode, or a freshly reopened
+            // LoginGUIPage in GUI mode) an instant before completeLogin ran: in text mode a
+            // jarring "log in now" immediately followed by "you are logged in"; in GUI mode a
+            // credential GUI left open, since completeLogin never closed it. This test drives the
+            // same two-call sequence RecoverCommand does and asserts neither symptom occurs: the
+            // prompt collaborator (LoginProtectionListener) is never invoked, and an
+            // already-open credential GUI (simulating one left over from the original join flow
+            // before the player ran /recover) is closed by completeLogin.
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+            doReturn(player).when(server).getPlayer(playerUuid);
+
+            InventoryView openInventory = mock(InventoryView.class);
+            Inventory topInventory = mock(Inventory.class);
+            com.ultikits.plugins.login.gui.LoginGUIPage guiHolder =
+                    mock(com.ultikits.plugins.login.gui.LoginGUIPage.class);
+            when(player.getOpenInventory()).thenReturn(openInventory);
+            when(openInventory.getTopInventory()).thenReturn(topInventory);
+            when(topInventory.getHolder()).thenReturn(guiHolder);
+
+            boolean result;
+            try (MockedStatic<LoginProtectionListener> listener = mockStatic(LoginProtectionListener.class)) {
+                result = service.resetPasswordForRecovery(playerUuid, "newPassword123");
+
+                assertThat(result).isTrue();
+                listener.verifyNoInteractions();
+            }
+
+            service.completeLogin(player);
+
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("a successful recovery must leave the player authenticated")
+                    .isTrue();
+            // completeLogin must close an already-open credential GUI, or the player is left
+            // staring at a stale prompt even though they are now logged in.
+            verify(player).closeInventory();
+        }
+
+        @Test
+        @DisplayName("Should still present the credential prompt for an admin-triggered reset,"
+                + " unlike recovery")
+        void adminResetStillPresentsTheCredentialPrompt() throws Exception {
+            // Regression guard distinguishing the two paths: only resetPasswordForRecovery
+            // (recovery) suppresses the prompt. The public resetPassword(UUID, String) (admin
+            // command) must keep presenting it exactly as before.
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+            doReturn(player).when(server).getPlayer(playerUuid);
+
+            try (MockedStatic<LoginProtectionListener> listener = mockStatic(LoginProtectionListener.class)) {
+                boolean result = service.resetPassword(playerUuid, "newPassword123");
+
+                assertThat(result).isTrue();
+                listener.verify(() -> LoginProtectionListener.presentCredentialPrompt(
+                        eq(player), eq(UltiLoginTestHelper.getMockPlugin()), eq(service), any()));
+            }
+        }
     }
 
     // ==================== unregister ====================
@@ -450,28 +841,319 @@ class LoginServiceTest {
         }
 
         @Test
-        @DisplayName("Should force logout an online player when unregistering their account")
+        @DisplayName("Should force logout an online player when unregistering their account, without replaying the join handler")
         void forceLogoutOnlinePlayerOnUnregister() {
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
             when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
 
-            Location mockLocation = mock(Location.class);
-            when(mockLocation.clone()).thenReturn(mockLocation);
-            when(player.getLocation()).thenReturn(mockLocation);
-
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+                stubSchedulerToRunSynchronously(bukkitMock);
 
                 boolean result = service.unregister(playerUuid);
 
                 assertThat(result).isTrue();
                 assertThat(service.isLoggedIn(playerUuid)).isFalse();
-                // onPlayerJoin(player) re-runs the join flow as part of the forced logout;
-                // this player is registered so it sends the (re-)login prompt, which is
-                // otherwise observable only as a side effect of that call actually happening.
+                // 13-06/D-08: unregister() no longer replays onPlayerJoin(player) to force a
+                // logout -- that replay is the defect (it re-runs the session check, which found
+                // the never-cleared session and logged the deleted account straight back in).
+                // getLocation() (used by onPlayerJoin's original-location bookkeeping) is what
+                // proves the replay is still gone -- it is never called from this path.
+                //
+                // A message IS expected here as of round 4 (Codex PR #18 thread 3945030004):
+                // forceReauthenticationIfOnline() now also calls presentCredentialPrompt(), so
+                // the revoked player sees the login/register prompt immediately instead of being
+                // silently frozen by the action guards until checkTimeouts() kicks them.
                 verify(player).sendMessage(anyString());
+                verify(player, never()).getLocation();
             }
+        }
+
+        @Test
+        @DisplayName("Should reinitialize the login timeout for an online player forced to re-authenticate")
+        void reinitializesLoginTimeoutOnUnregister() throws Exception {
+            // Codex PR #18 review comment 3944181260: completeLogin already removed this
+            // player's joinTimes entry when they originally logged in, and unregister's
+            // replacement for onPlayerJoin only flips loggedInPlayers -- it never re-adds a
+            // joinTimes entry. checkTimeouts() iterates joinTimes, so without this the
+            // now-unauthenticated player is never kicked for failing to log back in, silently
+            // disabling the configured login timeout while they remain connected.
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list())
+                    .thenReturn(Collections.singletonList(account));
+
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+                stubSchedulerToRunSynchronously(bukkitMock);
+
+                boolean result = service.unregister(playerUuid);
+
+                assertThat(result).isTrue();
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<UUID, Long> joinTimes = (Map<UUID, Long>) getFieldValue(service, "joinTimes");
+
+            assertThat(joinTimes)
+                    .as("checkTimeouts() must see this newly unauthenticated player, or the"
+                            + " configured login timeout is never enforced while they stay connected")
+                    .containsKey(playerUuid);
+        }
+    }
+
+    // ==================== credential GUI transition (round 9, thread 3946574852) ====================
+
+    @Nested
+    @DisplayName("Credential GUI transition (round 9, Codex PR #18 thread 3946574852)")
+    class CredentialGuiTransition {
+
+        @Test
+        @DisplayName("Unregistering an online player with LoginGUIPage open opens exactly one"
+                + " RegisterGUIPage, and the login GUI's own close hook -- fired synchronously by"
+                + " that open, exactly as real Bukkit would -- does not reopen a login GUI"
+                + " (no ping-pong)")
+        void unregisterWhileLoginGuiOpenOpensExactlyOneRegisterGuiWithoutPingPong() throws Exception {
+            when(config.isGuiModeEnabled()).thenReturn(true);
+            when(config.getGuiLoginTitle()).thenReturn("&aLogin");
+
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            // First call (LoginService.getAccount(), inside unregister()) sees the account;
+            // every call after that (isRegistered(), reached via presentCredentialPrompt() and,
+            // if the fix regresses, the login GUI's own close-hook re-check) sees it gone -- the
+            // account really was deleted by dataOperator.delById() before invalidateSession()
+            // ever runs.
+            when(mockQuery.list())
+                    .thenReturn(Collections.singletonList(account))
+                    .thenReturn(Collections.emptyList());
+
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+            doReturn(player).when(server).getPlayer(playerUuid);
+
+            // The GUI the player currently has open -- constructed directly (not via .open()),
+            // matching this module's established "does not test open()/InventoryAPI rendering"
+            // convention for Gui-page unit tests. Only its onClose() hook is exercised.
+            com.ultikits.plugins.login.gui.LoginGUIPage openLoginGui =
+                    new com.ultikits.plugins.login.gui.LoginGUIPage(
+                            player, UltiLoginTestHelper.getMockPlugin(), service);
+
+            BukkitScheduler fakeScheduler = spy(server.getScheduler());
+            doAnswer(invocation -> {
+                Runnable runnable = invocation.getArgument(1);
+                runnable.run();
+                return mock(BukkitTask.class);
+            }).when(fakeScheduler).runTask(any(Plugin.class), any(Runnable.class));
+            doReturn(fakeScheduler).when(server).getScheduler();
+
+            try (MockedStatic<com.ultikits.plugins.login.gui.LoginGUIPage> loginGui =
+                         mockStatic(com.ultikits.plugins.login.gui.LoginGUIPage.class);
+                 MockedStatic<com.ultikits.plugins.login.gui.RegisterGUIPage> registerGui =
+                         mockStatic(com.ultikits.plugins.login.gui.RegisterGUIPage.class)) {
+
+                // Simulate exactly what real Bukkit does when RegisterGUIPage.open() opens a new
+                // inventory while LoginGUIPage is still on screen: it implicitly fires an
+                // InventoryCloseEvent for the GUI being replaced, synchronously, as part of the
+                // same call -- i.e. drive the close hook explicitly, from inside the open() call
+                // it is a side effect of, not as a separate step afterward.
+                registerGui.when(() -> com.ultikits.plugins.login.gui.RegisterGUIPage.open(
+                        eq(player), eq(UltiLoginTestHelper.getMockPlugin()), eq(service)))
+                        .thenAnswer(invocation -> {
+                            openLoginGui.onClose(mock(InventoryCloseEvent.class));
+                            return null;
+                        });
+
+                boolean result = service.unregister(playerUuid);
+                assertThat(result).isTrue();
+
+                registerGui.verify(() -> com.ultikits.plugins.login.gui.RegisterGUIPage.open(
+                        player, UltiLoginTestHelper.getMockPlugin(), service), times(1));
+                loginGui.verify(() -> com.ultikits.plugins.login.gui.LoginGUIPage.open(
+                        any(), any(), any()), never());
+            }
+
+            verify(fakeScheduler, never()).runTaskLater(any(Plugin.class), any(Runnable.class), anyLong());
+        }
+
+        @Test
+        @DisplayName("Closing the login GUI while the player is still registered and"
+                + " unauthenticated still reopens it (normal case, unaffected by the fix)")
+        void closingLoginGuiWhileStillRegisteredAndUnauthenticatedStillReopensIt() throws Exception {
+            when(config.isGuiModeEnabled()).thenReturn(true);
+            when(config.getGuiLoginTitle()).thenReturn("&aLogin");
+
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            com.ultikits.plugins.login.gui.LoginGUIPage openLoginGui =
+                    new com.ultikits.plugins.login.gui.LoginGUIPage(
+                            player, UltiLoginTestHelper.getMockPlugin(), service);
+
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+
+            BukkitScheduler fakeScheduler = spy(server.getScheduler());
+            doAnswer(invocation -> {
+                Runnable runnable = invocation.getArgument(1);
+                runnable.run();
+                return mock(BukkitTask.class);
+            }).when(fakeScheduler).runTaskLater(any(Plugin.class), any(Runnable.class), anyLong());
+            doReturn(fakeScheduler).when(server).getScheduler();
+
+            // onClose()'s reopen path constructs a plain "new LoginGUIPage(...).open()" (an
+            // instance call to obliviate-invs' Gui#open(), not the static LoginGUIPage.open(...)
+            // convenience method LoginProtectionListener uses) -- mockConstruction() intercepts
+            // that specific "new" so the reopen can be verified without actually calling the real
+            // Gui#open(), which requires InventoryAPI to be initialized (it throws
+            // NullPointerException otherwise; this module's Gui-page tests deliberately do not
+            // exercise open()/InventoryAPI, per RemoteBagContentGUITest's own convention).
+            try (org.mockito.MockedConstruction<com.ultikits.plugins.login.gui.LoginGUIPage> construction =
+                         mockConstruction(com.ultikits.plugins.login.gui.LoginGUIPage.class)) {
+
+                openLoginGui.onClose(mock(InventoryCloseEvent.class));
+
+                assertThat(construction.constructed()).hasSize(1);
+                verify(construction.constructed().get(0)).open();
+            }
+        }
+
+        @Test
+        @DisplayName("An admin password reset landing during a queued login-GUI reopen's delay"
+                + " cancels the queued reopen, so it never opens a second credential GUI over the"
+                + " one the reset's own prompt already opened (round 10, Codex PR #18 thread"
+                + " 3946842965)")
+        void adminResetDuringQueuedReopenDelayCancelsTheQueuedReopenAndOpensExactlyOneGui() throws Exception {
+            when(config.isGuiModeEnabled()).thenReturn(true);
+            when(config.getGuiLoginTitle()).thenReturn("&aLogin");
+
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            // Reset password does not delete the account -- isRegistered(uuid) must keep seeing
+            // it, both from presentCredentialPrompt's GUI-type choice and from the queued
+            // reopen's own state re-check, exactly as it would for the real bug this reproduces.
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            // The GUI the player currently has open, closed for an unrelated reason (not a
+            // credential change) -- constructed directly, not via .open(), matching this module's
+            // established "does not test open()/InventoryAPI rendering" convention.
+            com.ultikits.plugins.login.gui.LoginGUIPage openLoginGui =
+                    new com.ultikits.plugins.login.gui.LoginGUIPage(
+                            player, UltiLoginTestHelper.getMockPlugin(), service);
+
+            BukkitTask queuedTask = mock(BukkitTask.class);
+
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class);
+                 MockedStatic<com.ultikits.plugins.login.gui.LoginGUIPage> loginGui =
+                         mockStatic(com.ultikits.plugins.login.gui.LoginGUIPage.class)) {
+
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+
+                BukkitScheduler fakeScheduler = mock(BukkitScheduler.class);
+                // Capture the reopen the player-initiated close schedules, without running it --
+                // this is the queued task an admin reset landing during its delay must supersede.
+                doReturn(queuedTask).when(fakeScheduler)
+                        .runTaskLater(any(Plugin.class), any(Runnable.class), eq(10L));
+                // The reset's own credential-prompt dispatch (and applyNoSessionProtections) runs
+                // via runTask (dispatchOnMainThread); run it inline like this class's other tests.
+                doAnswer(invocation -> {
+                    Runnable runnable = invocation.getArgument(1);
+                    runnable.run();
+                    return mock(BukkitTask.class);
+                }).when(fakeScheduler).runTask(any(Plugin.class), any(Runnable.class));
+                bukkitMock.when(Bukkit::getScheduler).thenReturn(fakeScheduler);
+
+                // Simulate LoginGUIPage.open() actually opening a GUI: mark the player as having
+                // a credential GUI open, matching this page's real onOpen() side effect (onOpen()
+                // itself never runs here since the static open() method is mocked).
+                loginGui.when(() -> com.ultikits.plugins.login.gui.LoginGUIPage.open(
+                                eq(player), eq(UltiLoginTestHelper.getMockPlugin()), eq(service)))
+                        .thenAnswer(invocation -> {
+                            service.markCredentialGuiOpen(playerUuid);
+                            return null;
+                        });
+
+                // t=0: the player closes LoginGUIPage for an unrelated reason -- the close hook
+                // schedules a reopen 10 ticks later.
+                openLoginGui.onClose(mock(InventoryCloseEvent.class));
+
+                // t=5 (within the queued reopen's delay): an admin resets the password.
+                String newPassword = service.resetPassword(playerUuid);
+                assertThat(newPassword).isNotNull();
+
+                // The reset's own credential prompt opened exactly one GUI.
+                loginGui.verify(() -> com.ultikits.plugins.login.gui.LoginGUIPage.open(
+                        player, UltiLoginTestHelper.getMockPlugin(), service), times(1));
+
+                // t=10: even if the queued task's runnable still ran despite the cancellation
+                // below, its own fresh guard checks (isCredentialGuiOpen) must refuse to stack a
+                // second GUI on top of the one the reset already opened.
+                ArgumentCaptor<Runnable> reopenCaptor = ArgumentCaptor.forClass(Runnable.class);
+                verify(fakeScheduler).runTaskLater(any(Plugin.class), reopenCaptor.capture(), eq(10L));
+                reopenCaptor.getValue().run();
+
+                loginGui.verify(() -> com.ultikits.plugins.login.gui.LoginGUIPage.open(
+                        player, UltiLoginTestHelper.getMockPlugin(), service), times(1));
+            }
+
+            verify(queuedTask, description("the reopen queued before the reset must be cancelled,"
+                    + " or it would open a second credential GUI over the one the reset's own"
+                    + " prompt just opened"))
+                    .cancel();
+        }
+
+        @Test
+        @DisplayName("Without an intervening credential change, the queued login-GUI reopen"
+                + " still fires normally after its delay, and removes its own bookkeeping so a"
+                + " later, unrelated reopen cannot be spuriously cancelled by a stale entry"
+                + " (round 10, Codex PR #18 thread 3946842965)")
+        void queuedReopenStillFiresNormallyAndSelfClearsItsBookkeeping() throws Exception {
+            when(config.isGuiModeEnabled()).thenReturn(true);
+            when(config.getGuiLoginTitle()).thenReturn("&aLogin");
+
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            com.ultikits.plugins.login.gui.LoginGUIPage openLoginGui =
+                    new com.ultikits.plugins.login.gui.LoginGUIPage(
+                            player, UltiLoginTestHelper.getMockPlugin(), service);
+
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+
+            // Unlike this class's other onClose regression test, does NOT run the scheduled
+            // runnable inline as part of stubbing runTaskLater -- real Bukkit always returns from
+            // runTaskLater before a delayed runnable can fire, and this test specifically checks
+            // bookkeeping (registerCredentialGuiReopenTask must run, and only then can the
+            // runnable's own clearCredentialGuiReopenTask self-clear see it) whose correctness
+            // depends on that ordering.
+            BukkitScheduler fakeScheduler = spy(server.getScheduler());
+            doReturn(mock(BukkitTask.class)).when(fakeScheduler)
+                    .runTaskLater(any(Plugin.class), any(Runnable.class), anyLong());
+            doReturn(fakeScheduler).when(server).getScheduler();
+
+            try (org.mockito.MockedConstruction<com.ultikits.plugins.login.gui.LoginGUIPage> construction =
+                         mockConstruction(com.ultikits.plugins.login.gui.LoginGUIPage.class)) {
+
+                openLoginGui.onClose(mock(InventoryCloseEvent.class));
+
+                ArgumentCaptor<Runnable> reopenCaptor = ArgumentCaptor.forClass(Runnable.class);
+                verify(fakeScheduler).runTaskLater(any(Plugin.class), reopenCaptor.capture(), eq(10L));
+                reopenCaptor.getValue().run();
+
+                assertThat(construction.constructed()).hasSize(1);
+                verify(construction.constructed().get(0)).open();
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<UUID, BukkitTask> pending =
+                    (Map<UUID, BukkitTask>) getFieldValue(service, "pendingCredentialGuiReopenTasks");
+            assertThat(pending)
+                    .as("the fired reopen task must remove itself from the pending-reopen"
+                            + " registry, or a later, unrelated reopen for this player could be"
+                            + " spuriously cancelled by this stale entry")
+                    .doesNotContainKey(playerUuid);
         }
     }
 
@@ -559,6 +1241,299 @@ class LoginServiceTest {
         }
     }
 
+    // ==================== session invalidation (13-06 / D-08, D-09) ====================
+
+    @Nested
+    @DisplayName("Session Invalidation")
+    class SessionInvalidation {
+
+        @Test
+        @DisplayName("unregister invalidates the deleted account's session")
+        void unregisterInvalidatesSession() throws Exception {
+            when(config.isSessionEnabled()).thenReturn(true);
+
+            String salt = "testSalt";
+            String password = "password123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, password);
+            assertThat(service.hasValidSession(player)).isTrue();
+
+            // Player offline -- isolates this test to the invalidation call itself, not the
+            // separately-tested forced-logout-while-online branch.
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(null);
+
+                boolean result = service.unregister(playerUuid);
+
+                assertThat(result).isTrue();
+            }
+
+            assertThat(service.hasValidSession(player))
+                    .as("unregister must end the deleted account's session")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("invalidateSession also ends a session opened from a different address than the caller's own")
+        void invalidatesSessionFromAnotherAddress() throws Exception {
+            when(config.isSessionEnabled()).thenReturn(true);
+
+            String salt = "testSalt";
+            String password = "password123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            // Log in once from the player's normal (mocked) address.
+            service.login(player, password);
+            assertThat(service.hasValidSession(player)).isTrue();
+
+            // Seed a second session for the same player from a different address directly into
+            // the session map -- simulating exactly the case an administrator ending someone
+            // else's session needs: a session the actor is not connected from. This is why
+            // invalidation matches by the player-identifier suffix of the key, not by the
+            // caller's own current address.
+            Field sessionsField = LoginService.class.getDeclaredField("sessions");
+            sessionsField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<String, Long> sessions = (Map<String, Long>) sessionsField.get(service);
+            String otherAddressKey = "10.0.0.99:" + playerUuid;
+            sessions.put(otherAddressKey, System.currentTimeMillis());
+            assertThat(sessions).containsKey(otherAddressKey);
+
+            service.invalidateSession(playerUuid);
+
+            assertThat(sessions)
+                    .as("a session opened from a different address must also be removed")
+                    .doesNotContainKey(otherAddressKey);
+            assertThat(service.hasValidSession(player))
+                    .as("the player's own session must also be gone")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("invalidateSession cancels a pending panel magic-link request and its polling task")
+        void invalidateSessionCancelsPendingPanelRequest() throws Exception {
+            // CR-01 (13-REVIEW-UltiLogin.md): unregister() ends `sessions` entries but, before
+            // this fix, left an in-flight /panel magic-link request live. Since invalidateSession
+            // is the single entry point every credential-changing path already routes through
+            // (13-06/D-08), the cancellation belongs here rather than duplicated at each call
+            // site -- covering unregister and both resetPassword overloads and changePassword in
+            // one place.
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            @SuppressWarnings("unchecked")
+            Map<String, Long> pendingPanelTimestamps =
+                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
+            @SuppressWarnings("unchecked")
+            Map<String, BukkitTask> pollingTasks =
+                    (Map<String, BukkitTask>) getFieldValue(service, "pollingTasks");
+            @SuppressWarnings("unchecked")
+            Map<UUID, String> currentPollingRequestId =
+                    (Map<UUID, String>) getFieldValue(service, "currentPollingRequestId");
+
+            String requestId = "pending-panel-request";
+            pendingPanelRequests.put(requestId, playerUuid);
+            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
+            BukkitTask mockTask = mock(BukkitTask.class);
+            pollingTasks.put(requestId, mockTask);
+            currentPollingRequestId.put(playerUuid, requestId);
+
+            service.invalidateSession(playerUuid);
+
+            assertThat(pendingPanelRequests)
+                    .as("a pending panel magic-link request for the invalidated player must be cancelled")
+                    .doesNotContainKey(requestId);
+            assertThat(pendingPanelTimestamps).doesNotContainKey(requestId);
+            assertThat(pollingTasks)
+                    .as("the polling task backing the cancelled request must be removed")
+                    .doesNotContainKey(requestId);
+            assertThat(currentPollingRequestId)
+                    .as("the player's current-poll index entry must also be cleared")
+                    .doesNotContainKey(playerUuid);
+            verify(mockTask).cancel();
+        }
+
+        @Test
+        @DisplayName("Administrator reset (resetPassword(UUID)) invalidates the session")
+        void adminResetInvalidatesSession() throws Exception {
+            when(config.isSessionEnabled()).thenReturn(true);
+
+            String salt = "testSalt";
+            String password = "password123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, password);
+            assertThat(service.hasValidSession(player)).isTrue();
+
+            String newPassword = service.resetPassword(playerUuid);
+
+            assertThat(newPassword).isNotNull();
+            assertThat(service.hasValidSession(player))
+                    .as("An administrator password reset must end the player's existing session")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("Self-service reset (resetPassword(UUID, String)) invalidates the session")
+        void specificPasswordResetInvalidatesSession() throws Exception {
+            when(config.isSessionEnabled()).thenReturn(true);
+
+            String salt = "testSalt";
+            String password = "password123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, password);
+            assertThat(service.hasValidSession(player)).isTrue();
+
+            boolean result = service.resetPassword(playerUuid, "newPassword123");
+
+            assertThat(result).isTrue();
+            assertThat(service.hasValidSession(player))
+                    .as("Resetting to a specific password must end the player's existing session")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("changePassword invalidates the session on success")
+        void changePasswordInvalidatesSession() throws Exception {
+            when(config.isSessionEnabled()).thenReturn(true);
+
+            String salt = "testSalt";
+            String oldPassword = "oldPass123";
+            String hash = hashPasswordForTest(oldPassword, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, oldPassword);
+            assertThat(service.hasValidSession(player)).isTrue();
+
+            boolean result = service.changePassword(playerUuid, oldPassword, "newPass456");
+
+            assertThat(result).isTrue();
+            assertThat(service.hasValidSession(player))
+                    .as("A successful password change must end the player's existing session")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("changePassword does not invalidate the session when the old password is wrong")
+        void failedChangePasswordDoesNotInvalidateSession() throws Exception {
+            when(config.isSessionEnabled()).thenReturn(true);
+
+            String salt = "testSalt";
+            String oldPassword = "oldPass123";
+            String hash = hashPasswordForTest(oldPassword, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, oldPassword);
+            assertThat(service.hasValidSession(player)).isTrue();
+
+            boolean result = service.changePassword(playerUuid, "wrongOldPassword", "newPass456");
+
+            assertThat(result).isFalse();
+            assertThat(service.hasValidSession(player))
+                    .as("A rejected password change must not log the player out")
+                    .isTrue();
+        }
+
+        @Test
+        @DisplayName("End to end: after unregister, the session check is false and rejoining does not auto-login the deleted account")
+        void endToEndDeletionPreventsAutoLogin() throws Exception {
+            when(config.isSessionEnabled()).thenReturn(true);
+
+            String salt = "testSalt";
+            String password = "password123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            service.login(player, password);
+            assertThat(service.hasValidSession(player)).isTrue();
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+
+            Location mockLocation = mock(Location.class);
+            when(mockLocation.clone()).thenReturn(mockLocation);
+            when(player.getLocation()).thenReturn(mockLocation);
+
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+                stubSchedulerToRunSynchronously(bukkitMock);
+
+                boolean result = service.unregister(playerUuid);
+
+                assertThat(result).isTrue();
+            }
+
+            assertThat(service.hasValidSession(player))
+                    .as("the session check must return false after account deletion")
+                    .isFalse();
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("the deleted account is no longer logged in")
+                    .isFalse();
+
+            // Simulate the player rejoining. With the session gone, onPlayerJoin's own session
+            // check must not auto-login them -- exactly the outcome the removed onPlayerJoin()
+            // replay used to defeat by finding a session that had never been cleared.
+            when(mockQuery.list()).thenReturn(Collections.emptyList());
+            service.onPlayerJoin(player);
+
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("rejoining after deletion must not automatically log the account back in")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("Recovery path end to end: EmailVerificationService.resetPasswordAfterRecovery invalidates the session by delegation")
+        void recoveryPathInvalidatesSessionByDelegation() throws Exception {
+            when(config.isSessionEnabled()).thenReturn(true);
+
+            String salt = "recoverySalt";
+            String password = "recoveryPass123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            // Log the player in for real, creating a genuine session entry keyed IP:UUID.
+            service.login(player, password);
+            assertThat(service.hasValidSession(player)).isTrue();
+
+            // Drive the actual recovery entry point rather than calling LoginService.resetPassword
+            // directly -- this is what proves the delegation still reaches the real invalidation,
+            // not merely that the invalidation exists on the two-argument overload.
+            com.ultikits.plugins.login.config.EmailConfig emailConfig =
+                    mock(com.ultikits.plugins.login.config.EmailConfig.class);
+            EmailVerificationService emailVerificationService =
+                    new EmailVerificationService(UltiLoginTestHelper.getMockPlugin(), emailConfig, service);
+
+            // Seed the verified-recovery state directly, bypassing the request/verify-code flow
+            // EmailVerificationServiceTest already covers in full -- this test is scoped to
+            // proving the delegation invalidates the session, not re-testing code verification.
+            Field recoveryVerifiedField = EmailVerificationService.class.getDeclaredField("recoveryVerified");
+            recoveryVerifiedField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<UUID, String> recoveryVerified =
+                    (Map<UUID, String>) recoveryVerifiedField.get(emailVerificationService);
+            recoveryVerified.put(playerUuid, service.getPlayerIp(player));
+
+            boolean result = emailVerificationService.resetPasswordAfterRecovery(player, "newRecoveredPass456");
+
+            assertThat(result).isTrue();
+            assertThat(service.hasValidSession(player))
+                    .as("a recovery-flow password reset must end the player's existing session")
+                    .isFalse();
+        }
+    }
+
     // ==================== command allowed ====================
 
     @Nested
@@ -584,6 +1559,185 @@ class LoginServiceTest {
 
             assertThat(service.isCommandAllowed("/help")).isFalse();
             assertThat(service.isCommandAllowed("/spawn")).isFalse();
+        }
+    }
+
+    // ==================== recovery reachability across an upgrade reload (13-13, UltiLogin#13) ====================
+
+    /**
+     * UltiLogin#13: on a server that installed UltiLogin before {@code regs}/{@code recover}
+     * were added to {@code allowedCommands}' default, those two commands stay unreachable even
+     * after an operator corrects {@code login.yml} and reloads. The plan 13-13 measurement
+     * (13-LEDGER-UltiLogin.md, "Recovery command diagnosis") found the cause is neither the
+     * {@code LoginConfig} field-binding (proven working in isolation) nor {@code isCommandAllowed}'s
+     * own string parsing (also proven working) -- it is {@code UltiLogin.reloadSelf()} itself,
+     * which overrides {@link UltiToolsPlugin#reloadSelf()} without calling {@code super.reloadSelf()},
+     * so {@code ConfigManager.reloadConfigs(...)} -- the only thing that re-reads {@code login.yml}
+     * into a running {@code LoginConfig} -- is never invoked, no matter how many times
+     * {@code /ul reload UltiLogin} runs or what the file says afterward.
+     * <p>
+     * Every test here drives the REAL {@link ConfigManager}, the REAL
+     * {@link com.ultikits.plugins.login.config.LoginConfig#init}/{@code reloadConfigs} binding, and
+     * the REAL {@code UltiLogin.reloadSelf()} method body -- not a re-implementation or a stub of
+     * any of the three -- against a stored configuration in the shape an upgraded server actually
+     * has (missing {@code regs}/{@code recover}), exactly as 13-13's plan requires.
+     */
+    @Nested
+    @DisplayName("Recovery command reachability across an upgrade reload")
+    class RecoveryReachabilityOnUpgradedServer {
+
+        /**
+         * Builds the upgraded-server fixture: a real {@link LoginConfig} registered with a real
+         * {@link ConfigManager} against a temp config folder holding the pre-{@code regs}/
+         * {@code recover} shape, plus a real {@link LoginService} bound to that same
+         * {@code LoginConfig} instance -- the exact object identity chain
+         * {@code PluginManager.assemblePluginContainer} produces in production (config entities are
+         * registered as container singletons from {@code ConfigManager}'s own map, so the bean
+         * {@code LoginService}'s constructor receives IS the map's entry).
+         */
+        private UpgradedServerFixture buildUpgradedServerFixture() throws Exception {
+            Path configRoot = Files.createTempDirectory("ultilogin-13-13-upgrade-server");
+            File loginYml = configRoot.resolve("config").resolve("login.yml").toFile();
+            assertThat(loginYml.getParentFile().mkdirs())
+                    .as("temp config directory must be created")
+                    .isTrue();
+            writeAllowedCommands(loginYml, "login", "l", "register", "reg", "panel");
+
+            UltiLogin realPlugin = mock(UltiLogin.class, (Answer<Object>) invocation -> {
+                String name = invocation.getMethod().getName();
+                if ("getConfigFile".equals(name)) {
+                    return new File(configRoot.toFile(), (String) invocation.getArguments()[0]);
+                }
+                if ("getConfigFolder".equals(name)) {
+                    return configRoot.toFile().getAbsolutePath();
+                }
+                if ("getResourceFolderPath".equals(name)) {
+                    // WR-02 (13-REVIEW-UltiLogin.md): ConfigManager.register(...) reads this
+                    // Lombok-generated public getter (distinct from getConfigFolder/getConfigFile
+                    // above, both protected final) to build `new File(getResourceFolderPath(),
+                    // "config/login.yml")`. Left un-stubbed, it falls through to
+                    // RETURNS_DEFAULTS -> null, and File(null, child) happens to treat that as
+                    // "relative to the process CWD" -- so isDirectory() only returns false because
+                    // no such directory exists relative to wherever the test JVM's CWD is. Stub it
+                    // explicitly so this fixture does not depend on that accident.
+                    return configRoot.toFile().getAbsolutePath();
+                }
+                return RETURNS_DEFAULTS.answer(invocation);
+            });
+            PluginLogger logger = mock(PluginLogger.class);
+            when(realPlugin.getLogger()).thenReturn(logger);
+            when(realPlugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
+            doCallRealMethod().when(realPlugin).reloadSelf();
+
+            LoginConfig realConfig = new LoginConfig();
+            ConfigManager realConfigManager = new ConfigManager();
+            // Mirrors ConfigManager.registerAll's own addConfigEntity(): init() runs against the
+            // pre-upgrade file first, then the instance is stored -- the same order production
+            // follows at plugin load.
+            realConfigManager.register(realPlugin, realConfig);
+
+            LoginService realService = new LoginService(realPlugin, realConfig);
+
+            return new UpgradedServerFixture(configRoot, loginYml, realPlugin, realConfig, realConfigManager, realService);
+        }
+
+        @Test
+        @DisplayName("An unauthenticated player can reach the recovery command on an upgraded server")
+        void anUnauthenticatedPlayerCanReachTheRecoveryCommandOnAnUpgradedServer() throws Exception {
+            UpgradedServerFixture fixture = buildUpgradedServerFixture();
+
+            // Precondition, matching the issue's own original observation: before any correction,
+            // an upgraded server's recovery command is unreachable.
+            assertThat(fixture.service.isCommandAllowed("/recover"))
+                    .as("an upgraded server's original login.yml has no regs/recover entries yet")
+                    .isFalse();
+
+            // The operator's own retest: correct login.yml to the current default, then reload.
+            writeAllowedCommands(fixture.loginYml,
+                    "login", "l", "register", "reg", "panel", "regs", "recover");
+
+            try (MockedStatic<UltiToolsPlugin> staticMock =
+                    mockStatic(UltiToolsPlugin.class, CALLS_REAL_METHODS)) {
+                staticMock.when(UltiToolsPlugin::getConfigManager).thenReturn(fixture.configManager);
+                fixture.plugin.reloadSelf();
+            }
+
+            assertThat(fixture.service.isCommandAllowed("/recover"))
+                    .as("a corrected login.yml plus a reload must make /recover reachable")
+                    .isTrue();
+        }
+
+        @Test
+        @DisplayName("An unauthenticated player still cannot reach a command that is not permitted")
+        void anUnauthenticatedPlayerStillCannotReachACommandThatIsNotPermitted() throws Exception {
+            UpgradedServerFixture fixture = buildUpgradedServerFixture();
+
+            writeAllowedCommands(fixture.loginYml,
+                    "login", "l", "register", "reg", "panel", "regs", "recover");
+
+            try (MockedStatic<UltiToolsPlugin> staticMock =
+                    mockStatic(UltiToolsPlugin.class, CALLS_REAL_METHODS)) {
+                staticMock.when(UltiToolsPlugin::getConfigManager).thenReturn(fixture.configManager);
+                fixture.plugin.reloadSelf();
+            }
+
+            // The fix must not widen the gate into a hole (T-13-13-01): a command outside the
+            // permitted set stays refused after the reload, exactly as before it.
+            assertThat(fixture.service.isCommandAllowed("/definitelynotanallowedcommand"))
+                    .as("the reload fix must not permit a command that was never on the list")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("The list the running plugin holds matches what was measured")
+        void theListTheRunningPluginHoldsMatchesWhatWasMeasured() throws Exception {
+            UpgradedServerFixture fixture = buildUpgradedServerFixture();
+
+            assertThat(fixture.config.getAllowedCommands())
+                    .as("in memory, before any correction, the upgraded server's list is exactly the file's")
+                    .containsExactly("login", "l", "register", "reg", "panel");
+
+            writeAllowedCommands(fixture.loginYml,
+                    "login", "l", "register", "reg", "panel", "regs", "recover");
+
+            try (MockedStatic<UltiToolsPlugin> staticMock =
+                    mockStatic(UltiToolsPlugin.class, CALLS_REAL_METHODS)) {
+                staticMock.when(UltiToolsPlugin::getConfigManager).thenReturn(fixture.configManager);
+                fixture.plugin.reloadSelf();
+            }
+
+            // Direct assertion on the list the running plugin holds -- the mechanism, not only the
+            // symptom -- reproducing 13-LEDGER-UltiLogin.md's own measured second-init() output.
+            assertThat(fixture.config.getAllowedCommands())
+                    .as("in memory, after a correct file plus a reload, the list must match the file")
+                    .containsExactly("login", "l", "register", "reg", "panel", "regs", "recover");
+        }
+
+        private void writeAllowedCommands(File file, String... commands) throws Exception {
+            StringBuilder sb = new StringBuilder("allowed-commands:\n");
+            for (String c : commands) {
+                sb.append("- ").append(c).append('\n');
+            }
+            Files.write(file.toPath(), sb.toString().getBytes(StandardCharsets.UTF_8));
+        }
+
+        private final class UpgradedServerFixture {
+            final Path configRoot;
+            final File loginYml;
+            final UltiLogin plugin;
+            final LoginConfig config;
+            final ConfigManager configManager;
+            final LoginService service;
+
+            UpgradedServerFixture(Path configRoot, File loginYml, UltiLogin plugin, LoginConfig config,
+                                   ConfigManager configManager, LoginService service) {
+                this.configRoot = configRoot;
+                this.loginYml = loginYml;
+                this.plugin = plugin;
+                this.config = config;
+                this.configManager = configManager;
+                this.service = service;
+            }
         }
     }
 
@@ -1256,6 +2410,31 @@ class LoginServiceTest {
 
             verify(player, never()).teleport(any(org.bukkit.Location.class));
         }
+
+        @Test
+        @DisplayName("Should restore a revoked player's saved location even if spawn-location was disabled after the teleport")
+        void restoresSavedLocationRegardlessOfCurrentSpawnSetting() throws Exception {
+            // Codex PR #18 round 13, thread 3947908093: a player was teleported to spawn while
+            // spawn-location.enabled was true (the same recording onPlayerJoin/
+            // applyNoSessionProtections does), then an admin reload flips the setting to false
+            // before the player runs /login. completeLogin must restore the saved location
+            // regardless of the setting's *current* value -- the entry's presence in
+            // originalLocations is the record that a teleport actually happened, not the current
+            // config.
+            org.bukkit.Location originalLoc = mock(org.bukkit.Location.class);
+            @SuppressWarnings("unchecked")
+            Map<UUID, org.bukkit.Location> originalLocations =
+                    (Map<UUID, org.bukkit.Location>) getFieldValue(service, "originalLocations");
+            originalLocations.put(playerUuid, originalLoc);
+
+            // Setting flipped to false between the original teleport and this completeLogin call.
+            when(config.isSpawnLocationEnabled()).thenReturn(false);
+
+            service.completeLogin(player);
+
+            verify(player).teleport(originalLoc);
+            assertThat(originalLocations).doesNotContainKey(playerUuid);
+        }
     }
 
     // ==================== getConfig ====================
@@ -1560,16 +2739,22 @@ class LoginServiceTest {
         @DisplayName("Should cancel polling task on quit")
         void cancelPollingTask() throws Exception {
             @SuppressWarnings("unchecked")
-            Map<UUID, BukkitTask> pollingTasks =
-                    (Map<UUID, BukkitTask>) getFieldValue(service, "pollingTasks");
+            Map<String, BukkitTask> pollingTasks =
+                    (Map<String, BukkitTask>) getFieldValue(service, "pollingTasks");
+            @SuppressWarnings("unchecked")
+            Map<UUID, String> currentPollingRequestId =
+                    (Map<UUID, String>) getFieldValue(service, "currentPollingRequestId");
 
+            String requestId = "quit-request";
             BukkitTask mockTask = mock(BukkitTask.class);
-            pollingTasks.put(playerUuid, mockTask);
+            pollingTasks.put(requestId, mockTask);
+            currentPollingRequestId.put(playerUuid, requestId);
 
             service.onPlayerQuit(player);
 
             verify(mockTask).cancel();
-            assertThat(pollingTasks).doesNotContainKey(playerUuid);
+            assertThat(pollingTasks).doesNotContainKey(requestId);
+            assertThat(currentPollingRequestId).doesNotContainKey(playerUuid);
         }
 
         @Test
@@ -1767,6 +2952,159 @@ class LoginServiceTest {
     }
 
     @Nested
+    @DisplayName("requestPanelLink invalidation-generation fence")
+    class RequestPanelLinkGenerationFence {
+
+        @Test
+        @DisplayName("Should refuse to publish a request captured before an invalidation that landed"
+                + " before the worker inserted it")
+        void refusesRequestCapturedBeforeInvalidation() {
+            // Codex PR #18 thread 3945030000 (round 4), see requestPanelLink(Player, long):
+            // /panel captures the invalidation generation before scheduling its asynchronous
+            // worker; requestPanelLink() runs later, on that worker thread. An administrator's
+            // reset/unregister landing in the gap between those two points calls
+            // invalidateSession(), which increments the generation and calls
+            // cancelPendingPanelRequest() -- but that cancellation finds nothing yet, since this
+            // request has not been inserted into pendingPanelRequests at that point. Without the
+            // fence, the worker would go on to publish the (already-stale) request, send the
+            // link, and start polling; since a reset/change does not remove the account,
+            // completePanelLogin()'s registration check would later pass and re-authenticate the
+            // revoked connection.
+            //
+            // Round 5 (13-REVIEW-UltiLogin.md, own deep review of bcadfb5): the previous version
+            // of this test passed for the wrong reason. UltiTools.getInstance() is null in this
+            // unit test, so requestPanelLink's own try/catch around UltiTools.getEnv() refused
+            // the request via the unrelated "API URL not configured" branch regardless of
+            // whether the fence check above it existed at all -- removing the fence entirely
+            // left this test passing unchanged. Stubbing UltiTools.getEnv(), CommonUtils
+            // .getUltiToolsUUID(), and SimpleHttpClient.post() below makes the rest of the
+            // publish path succeed, so that with the fence removed this request WOULD be
+            // published; the assertions then pin the fence-specific outcome instead of a
+            // coincidental one. Verified locally: disabling the "if (generationCell.get() !=
+            // expectedGeneration)" check in requestPanelLink() turns the isSuccess() assertion
+            // below red -- org.opentest4j.AssertionFailedError: [a panel link request captured
+            // before an invalidation must not be published] Expecting value to be false but was
+            // true -- since the (fence-free) request then reaches the stubbed HTTP call and
+            // succeeds.
+            when(config.isUlticloudEnabled()).thenReturn(true);
+
+            long capturedGeneration = service.getInvalidationGeneration(playerUuid);
+
+            // Simulates the admin action landing in the gap before the worker calls
+            // requestPanelLink() with the generation it captured above.
+            service.invalidateSession(playerUuid);
+
+            YamlConfiguration env = mock(YamlConfiguration.class);
+            when(env.getString("api-url")).thenReturn("http://ulticloud.test");
+            SimpleHttpClient.Response okResponse =
+                    new SimpleHttpClient.Response(200, "{\"data\":{\"url\":\"http://panel.test/link\"}}");
+
+            try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
+                 MockedStatic<CommonUtils> commonUtils = mockStatic(CommonUtils.class);
+                 MockedStatic<SimpleHttpClient> http = mockStatic(SimpleHttpClient.class)) {
+                ultiTools.when(UltiTools::getEnv).thenReturn(env);
+                commonUtils.when(CommonUtils::getUltiToolsUUID).thenReturn("server-uuid");
+                http.when(() -> SimpleHttpClient.post(anyString(), anyMap(), anyString()))
+                        .thenReturn(okResponse);
+
+                LoginService.PanelLinkResult result = service.requestPanelLink(player, capturedGeneration);
+
+                assertThat(result.isSuccess())
+                        .as("a panel link request captured before an invalidation must not be published")
+                        .isFalse();
+                assertThat(result.getError())
+                        .as("the fence's own refusal must be distinguishable from any other"
+                                + " failure path -- this test's stubs make every other failure"
+                                + " path (e.g. \"API URL not configured\") unreachable, so only"
+                                + " the fence itself can produce this message")
+                        .contains("invalidated");
+                assertThat(service.hasPendingPanelRequest(playerUuid))
+                        .as("a refused request must never be inserted into pendingPanelRequests")
+                        .isFalse();
+                http.verifyNoInteractions();
+            }
+        }
+
+        @Test
+        @DisplayName("Should still attempt to publish when the captured generation matches the current one")
+        void publishesWhenGenerationMatches() {
+            // Regression guard: an uncontested request (no invalidation in the gap) must keep
+            // working through the new two-argument overload exactly like before. The API URL is
+            // deliberately left unconfigured so this test can tell the fence apart from the
+            // (unrelated) "API URL not configured" failure without mocking SimpleHttpClient.
+            when(config.isUlticloudEnabled()).thenReturn(true);
+
+            long capturedGeneration = service.getInvalidationGeneration(playerUuid);
+
+            LoginService.PanelLinkResult result = service.requestPanelLink(player, capturedGeneration);
+
+            assertThat(result.getError())
+                    .as("a request whose generation still matches must pass the fence and reach"
+                            + " the API-URL lookup, not be refused by the fence itself")
+                    .doesNotContain("invalidated");
+        }
+    }
+
+    @Nested
+    @DisplayName("requestPanelLink post-POST invalidation re-check")
+    class RequestPanelLinkPostPostRecheck {
+
+        @Test
+        @DisplayName("Should discard a successful HTTP result when the session was invalidated"
+                + " while the POST was in flight")
+        void discardsTheResultWhenInvalidatedWhileThePostWasInFlight() {
+            // Codex PR #18 thread 3946170644 (round 7): the pre-POST fence
+            // (RequestPanelLinkGenerationFence above) only closes the gap *before* the blocking
+            // HTTP call -- the check and the pendingPanelRequests insert are atomic with each
+            // other, but nothing re-checks either afterward. An invalidateSession(...) landing
+            // *during* the call (simulated here from inside the mocked SimpleHttpClient.post()
+            // answer, after the pre-POST atomic check-and-insert has already run) removes this
+            // request's pendingPanelRequests entry and bumps the generation, but neither of those
+            // stops this in-flight call from finishing and requestPanelLink() handing back a
+            // success result regardless -- unless requestPanelLink() re-checks after the call
+            // returns, which is the fix under test.
+            when(config.isUlticloudEnabled()).thenReturn(true);
+
+            long capturedGeneration = service.getInvalidationGeneration(playerUuid);
+
+            YamlConfiguration env = mock(YamlConfiguration.class);
+            when(env.getString("api-url")).thenReturn("http://ulticloud.test");
+            SimpleHttpClient.Response okResponse =
+                    new SimpleHttpClient.Response(200, "{\"data\":{\"url\":\"http://panel.test/link\"}}");
+
+            try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
+                 MockedStatic<CommonUtils> commonUtils = mockStatic(CommonUtils.class);
+                 MockedStatic<SimpleHttpClient> http = mockStatic(SimpleHttpClient.class)) {
+                ultiTools.when(UltiTools::getEnv).thenReturn(env);
+                commonUtils.when(CommonUtils::getUltiToolsUUID).thenReturn("server-uuid");
+                http.when(() -> SimpleHttpClient.post(anyString(), anyMap(), anyString()))
+                        .thenAnswer(invocation -> {
+                            // The session is invalidated while this POST is "in flight" -- after
+                            // the pre-POST atomic check-and-insert already ran, but before this
+                            // call returns.
+                            service.invalidateSession(playerUuid);
+                            return okResponse;
+                        });
+
+                LoginService.PanelLinkResult result = service.requestPanelLink(player, capturedGeneration);
+
+                assertThat(result.isSuccess())
+                        .as("a result whose invalidation raced the in-flight POST must be"
+                                + " discarded, not returned as success")
+                        .isFalse();
+                assertThat(result.getError()).contains("invalidated");
+                assertThat(result.getUrl()).isNull();
+                assertThat(result.getRequestId()).isNull();
+                assertThat(service.hasPendingPanelRequest(playerUuid))
+                        .as("the discarded request must not remain pending -- nothing left for a"
+                                + " caller to poll for")
+                        .isFalse();
+                http.verify(() -> SimpleHttpClient.post(anyString(), anyMap(), anyString()), times(1));
+            }
+        }
+    }
+
+    @Nested
     @DisplayName("completePanelLogin")
     class CompletePanelLogin {
 
@@ -1917,6 +3255,46 @@ class LoginServiceTest {
         }
 
         @Test
+        @DisplayName("Should refuse to complete login when the account is no longer registered")
+        void refusesLoginForDeletedAccount() throws Exception {
+            // CR-01 (13-REVIEW-UltiLogin.md): a second, independent layer of defense alongside
+            // invalidateSession's cancellation. If a magic-link request survives account deletion
+            // for any reason (e.g. it was created after the account row was already gone, or the
+            // cancellation path itself regresses), completePanelLogin must still refuse to mark a
+            // non-existent account as logged in.
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            @SuppressWarnings("unchecked")
+            Map<String, Long> pendingPanelTimestamps =
+                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
+
+            String requestId = "test-deleted-account-request";
+            pendingPanelRequests.put(requestId, playerUuid);
+            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
+
+            try {
+                Field serverField = Bukkit.class.getDeclaredField("server");
+                serverField.setAccessible(true);
+                Server server = (Server) serverField.get(null);
+                doReturn(player).when(server).getPlayer(playerUuid);
+            } catch (Exception e) {
+                // Skip
+            }
+
+            // No account for this UUID -- the account row was deleted (unregister) while the
+            // magic-link request was still pending.
+            when(mockQuery.list()).thenReturn(Collections.emptyList());
+
+            boolean result = service.completePanelLogin(requestId, false);
+
+            assertThat(result)
+                    .as("completePanelLogin must not log in a player whose account no longer exists")
+                    .isFalse();
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+        }
+
+        @Test
         @DisplayName("Should create session after panel login when enabled")
         void createSessionAfterPanelLogin() throws Exception {
             when(config.isSessionEnabled()).thenReturn(true);
@@ -2013,8 +3391,12 @@ class LoginServiceTest {
         }
 
         @Test
-        @DisplayName("Should handle null account during panel login")
+        @DisplayName("Should refuse panel login when no account exists for the request")
         void nullAccountPanelLogin() throws Exception {
+            // CR-01 (13-REVIEW-UltiLogin.md): this test previously asserted the bug itself --
+            // that completePanelLogin "should still complete login" with no backing account.
+            // That is exactly the deleted-account-logs-back-in defect the phase closes, so the
+            // expectation is corrected here rather than left pinning the old behavior.
             @SuppressWarnings("unchecked")
             Map<String, UUID> pendingPanelRequests =
                     (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
@@ -2040,10 +3422,9 @@ class LoginServiceTest {
 
             boolean result = service.completePanelLogin(requestId, false);
 
-            // Should still complete login (account update is optional)
-            assertThat(result).isTrue();
-            assertThat(service.isLoggedIn(playerUuid)).isTrue();
-            // update should NOT be called since account is null
+            assertThat(result).isFalse();
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            // update should NOT be called since there is no account to log in or update
             verify(dataOperator, never()).update(any());
         }
 
@@ -2078,6 +3459,380 @@ class LoginServiceTest {
             assertThat(result).isTrue();
             // Should use player message key (not owner)
             verify(UltiLoginTestHelper.getMockPlugin()).i18n("panel_auth_success_player");
+        }
+    }
+
+    @Nested
+    @DisplayName("startAuthPolling")
+    class StartAuthPollingRace {
+
+        /**
+         * Wires {@code server.getScheduler()} to a scheduler mock that runs both the async poll
+         * task and its main-thread completion callback synchronously, on the calling thread,
+         * instead of truly scheduling them. This turns startAuthPolling's two-hop
+         * (async poll -> main-thread completion) dispatch into a single, deterministic call
+         * stack, which is what lets the test below inject the race at the exact right point
+         * without flaky real threading -- Mockito's static mocks (used for
+         * {@link UltiTools#getEnv()} and {@link SimpleHttpClient#get(String)} below) are
+         * thread-confined to whichever thread created them, so they would silently not apply at
+         * all on a real MockBukkit worker thread.
+         */
+        private void makeSchedulerRunTasksSynchronously(Server server, BukkitTask fakeTask) {
+            // ServerMock declares a covariant getScheduler() returning BukkitSchedulerMock, not
+            // the bare BukkitScheduler interface -- doReturn() validates against that concrete
+            // declared type, so the fake must be a spy of the real instance (a
+            // Mockito-generated BukkitSchedulerMock subclass), not a plain mock(BukkitScheduler
+            // .class). Spying also means every method we do not override here still behaves
+            // exactly like the real scheduler.
+            BukkitScheduler fakeScheduler = spy(server.getScheduler());
+            doAnswer(invocation -> {
+                Runnable runnable = invocation.getArgument(1);
+                runnable.run();
+                return fakeTask;
+            }).when(fakeScheduler).runTaskTimerAsynchronously(any(Plugin.class), any(Runnable.class), anyLong(), anyLong());
+            doAnswer(invocation -> {
+                Runnable runnable = invocation.getArgument(1);
+                runnable.run();
+                return fakeTask;
+            }).when(fakeScheduler).runTask(any(Plugin.class), any(Runnable.class));
+            doReturn(fakeScheduler).when(server).getScheduler();
+        }
+
+        @Test
+        @DisplayName("Must not re-authenticate a player whose account was deleted while the poll's HTTP call was already in flight")
+        void doesNotReauthenticateAfterUnregisterDuringInFlightPoll() throws Exception {
+            // Codex PR #18 review comment 3944418953: BukkitTask#cancel() only prevents a
+            // scheduled task's future executions -- it does not interrupt an invocation already
+            // inside its HTTP call. The pre-fix fallback in startAuthPolling treated "no pending
+            // request found" as authorization to call completeLogin(player) directly, bypassing
+            // every check completePanelLogin performs (including the isRegistered guard added
+            // for CR-01). Reproduced deterministically by unregistering the account from inside
+            // the mocked HTTP call's answer -- exactly the ordering the report describes -- with
+            // the scheduler wired to run both hops of the poll synchronously so the race is
+            // exact rather than best-effort.
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            assertThat(service.forceLogin(player)).isTrue();
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            pendingPanelRequests.put("panel-req-race", playerUuid);
+
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+            doReturn(player).when(server).getPlayer(playerUuid);
+            makeSchedulerRunTasksSynchronously(server, mock(BukkitTask.class));
+
+            YamlConfiguration env = mock(YamlConfiguration.class);
+            when(env.getString("api-url")).thenReturn("http://ulticloud.test");
+
+            String pollResponseJson = "{\"data\":{\"status\":\"completed\",\"is_server_owner\":false}}";
+            SimpleHttpClient.Response completedResponse = new SimpleHttpClient.Response(200, pollResponseJson);
+
+            try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
+                 MockedStatic<SimpleHttpClient> http = mockStatic(SimpleHttpClient.class)) {
+                ultiTools.when(UltiTools::getEnv).thenReturn(env);
+                http.when(() -> SimpleHttpClient.get(anyString())).thenAnswer(invocation -> {
+                    // The account is deleted while this poll's HTTP call is "in flight" -- before
+                    // the poll code below gets a chance to notice its pending request is gone.
+                    boolean unregistered = service.unregister(playerUuid);
+                    assertThat(unregistered).isTrue();
+                    return completedResponse;
+                });
+
+                service.startAuthPolling(playerUuid.toString(), player, "panel-req-race");
+            }
+
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("a magic-link poll must not re-authenticate a player after their account"
+                            + " was deleted mid-poll, even though the poll's own cancellation"
+                            + " could not stop its already in-flight HTTP call")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("Still completes login through completePanelLogin when the request is not cancelled mid-poll")
+        void completesLoginWhenNoRaceOccurs() throws Exception {
+            // Regression guard for the fix above: startAuthPolling's normal, uncontested
+            // completion path must keep working -- it must still route through
+            // completePanelLogin (session creation, account bookkeeping, the success message)
+            // rather than becoming a silent no-op whenever the request happens to still be
+            // pending.
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            pendingPanelRequests.put("panel-req-normal", playerUuid);
+
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+            doReturn(player).when(server).getPlayer(playerUuid);
+            makeSchedulerRunTasksSynchronously(server, mock(BukkitTask.class));
+
+            YamlConfiguration env = mock(YamlConfiguration.class);
+            when(env.getString("api-url")).thenReturn("http://ulticloud.test");
+
+            String pollResponseJson = "{\"data\":{\"status\":\"completed\",\"is_server_owner\":false}}";
+            SimpleHttpClient.Response completedResponse = new SimpleHttpClient.Response(200, pollResponseJson);
+
+            try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
+                 MockedStatic<SimpleHttpClient> http = mockStatic(SimpleHttpClient.class)) {
+                ultiTools.when(UltiTools::getEnv).thenReturn(env);
+                http.when(() -> SimpleHttpClient.get(anyString())).thenReturn(completedResponse);
+
+                service.startAuthPolling(playerUuid.toString(), player, "panel-req-normal");
+            }
+
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("an uncontested poll completion must still log the player in")
+                    .isTrue();
+            assertThat(pendingPanelRequests)
+                    .as("completePanelLogin must have run its own cleanup for the request")
+                    .doesNotContainKey("panel-req-normal");
+            verify(UltiLoginTestHelper.getMockPlugin()).i18n("panel_auth_success_player");
+        }
+
+        @Test
+        @DisplayName("Must not authenticate through a newer pending request for the same player"
+                + " after this poll's own request was cancelled")
+        void doesNotAuthenticateThroughANewerPendingRequestAfterAStaleCompletion() throws Exception {
+            // Codex PR #18 thread 3946170644 (round 7): handlePanelPollCompleted used to resolve
+            // "completed" by scanning pendingPanelRequests for whichever entry was pending for
+            // this player, rather than the specific request id this poll was started for. If this
+            // poll's own request had already been cancelled (e.g. by an invalidation) but the
+            // player had since started a fresh /panel request, that scan would pick up the newer
+            // request and authenticate through it -- even though this poll's own "completed"
+            // observation had nothing to do with the newer request. Reproduced by removing the
+            // original request and inserting a newer one for the same player from inside the
+            // mocked HTTP call's answer, exactly the ordering the report describes.
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            pendingPanelRequests.put("panel-req-old", playerUuid);
+
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+            doReturn(player).when(server).getPlayer(playerUuid);
+            makeSchedulerRunTasksSynchronously(server, mock(BukkitTask.class));
+
+            YamlConfiguration env = mock(YamlConfiguration.class);
+            when(env.getString("api-url")).thenReturn("http://ulticloud.test");
+
+            String pollResponseJson = "{\"data\":{\"status\":\"completed\",\"is_server_owner\":false}}";
+            SimpleHttpClient.Response completedResponse = new SimpleHttpClient.Response(200, pollResponseJson);
+
+            try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
+                 MockedStatic<SimpleHttpClient> http = mockStatic(SimpleHttpClient.class)) {
+                ultiTools.when(UltiTools::getEnv).thenReturn(env);
+                http.when(() -> SimpleHttpClient.get(anyString())).thenAnswer(invocation -> {
+                    // The original request is cancelled (e.g. by an invalidation) and the player
+                    // starts a fresh /panel request, both landing before this poll's "completed"
+                    // response is processed on the main thread.
+                    pendingPanelRequests.remove("panel-req-old");
+                    pendingPanelRequests.put("panel-req-new", playerUuid);
+                    return completedResponse;
+                });
+
+                service.startAuthPolling(playerUuid.toString(), player, "panel-req-old");
+            }
+
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("a stale completion for a cancelled request must not authenticate the"
+                            + " player through an unrelated, newer pending request for the same"
+                            + " player")
+                    .isFalse();
+            assertThat(pendingPanelRequests)
+                    .as("the newer request must be left untouched -- this poll's stale"
+                            + " completion was never entitled to consume it")
+                    .containsKey("panel-req-new");
+        }
+
+        @Test
+        @DisplayName("Must not cancel or remove a newer poll's own task when an older,"
+                + " superseded poll's stale HTTP response arrives")
+        void doesNotCancelANewerPollsTaskWhenAnOlderSupersededPollsStaleCompletionArrives() throws Exception {
+            // Codex PR #18 thread 3947189541 (round 11): starting poll B always cancels+replaces
+            // poll A's scheduled task for the same player -- correct, a new /panel request
+            // supersedes the previous one. But BukkitTask#cancel() only prevents a task's
+            // *future* scheduled executions; it does not interrupt an invocation already blocked
+            // inside its own HTTP call. If A's HTTP call was still in flight when B started, A's
+            // own "completed" observation -- arriving later, on that same in-flight invocation --
+            // used to remove and cancel whatever task pollingTasks currently held keyed on the
+            // player's UUID: B's task, not A's own (already-replaced) one.
+            // handlePanelPollCompleted correctly refused to complete A's own (never-published)
+            // request, but B's task was killed anyway, permanently stalling B's still-valid
+            // magic link. Reproduced by starting B from inside A's mocked HTTP call's answer --
+            // exactly the ordering the report describes.
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            // Request B is already published and pending; poll A's stale completion (for a
+            // request that was never itself made pending here) must never be able to consume it.
+            pendingPanelRequests.put("panel-req-new", playerUuid);
+
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+            doReturn(player).when(server).getPlayer(playerUuid);
+
+            BukkitTask taskA = mock(BukkitTask.class, "taskA");
+            BukkitTask taskB = mock(BukkitTask.class, "taskB");
+            Iterator<BukkitTask> taskIterator = Arrays.asList(taskA, taskB).iterator();
+            List<Runnable> capturedPollRunnables = new ArrayList<>();
+            BukkitScheduler fakeScheduler = spy(server.getScheduler());
+            // Capture each poll's scheduled runnable instead of running it inline (unlike
+            // makeSchedulerRunTasksSynchronously above): this test needs poll A's own
+            // startAuthPolling call to finish storing its task into pollingTasks *before* its
+            // runnable ever executes, exactly as real Bukkit guarantees via its initial
+            // scheduling delay. Running the runnable inline during scheduling would let the
+            // nested startAuthPolling(...) call for B run to completion before A's own outer
+            // call ever reached its own pollingTasks.put(...) -- an ordering that cannot happen
+            // against a real scheduler and would produce a false failure here.
+            doAnswer(invocation -> {
+                capturedPollRunnables.add(invocation.getArgument(1));
+                return taskIterator.next();
+            }).when(fakeScheduler)
+              .runTaskTimerAsynchronously(any(Plugin.class), any(Runnable.class), anyLong(), anyLong());
+            doAnswer(invocation -> {
+                Runnable runnable = invocation.getArgument(1);
+                runnable.run();
+                return mock(BukkitTask.class);
+            }).when(fakeScheduler).runTask(any(Plugin.class), any(Runnable.class));
+            doReturn(fakeScheduler).when(server).getScheduler();
+
+            YamlConfiguration env = mock(YamlConfiguration.class);
+            when(env.getString("api-url")).thenReturn("http://ulticloud.test");
+
+            String completedJson = "{\"data\":{\"status\":\"completed\",\"is_server_owner\":false}}";
+            SimpleHttpClient.Response completedResponse = new SimpleHttpClient.Response(200, completedJson);
+
+            try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
+                 MockedStatic<SimpleHttpClient> http = mockStatic(SimpleHttpClient.class)) {
+                ultiTools.when(UltiTools::getEnv).thenReturn(env);
+                http.when(() -> SimpleHttpClient.get(anyString())).thenAnswer(invocation -> {
+                    // Poll A's HTTP call is "in flight" here -- the player starts a fresh
+                    // /panel request while it's blocked, which cancels+replaces A's task with
+                    // B's (does not run B's own first tick -- irrelevant to this race).
+                    service.startAuthPolling(playerUuid.toString(), player, "panel-req-new");
+                    // Poll A's own (now-stale) HTTP call finally returns "completed".
+                    return completedResponse;
+                });
+
+                service.startAuthPolling(playerUuid.toString(), player, "panel-req-old");
+                // Fire poll A's first tick manually -- this is where its HTTP call "blocks" and,
+                // from inside the mocked answer above, the player starts poll B.
+                capturedPollRunnables.get(0).run();
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, BukkitTask> pollingTasks =
+                    (Map<String, BukkitTask>) getFieldValue(service, "pollingTasks");
+
+            assertThat(pollingTasks)
+                    .as("poll A's stale completion must not remove poll B's own task")
+                    .containsEntry("panel-req-new", taskB);
+            assertThat(pollingTasks)
+                    .as("poll A's own (already-superseded) entry must be gone")
+                    .doesNotContainKey("panel-req-old");
+            verify(taskB, never()).cancel();
+
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("poll A's own (superseded, never-published) request must not be"
+                            + " completed")
+                    .isFalse();
+
+            boolean completed = service.completePanelLogin("panel-req-new");
+            assertThat(completed)
+                    .as("poll B's still-pending request must remain completable after poll A's"
+                            + " stale completion ran")
+                    .isTrue();
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("poll B must be able to authenticate the player normally")
+                    .isTrue();
+        }
+
+        @Test
+        @DisplayName("A normal (uncontested) completion still removes and cancels its own"
+                + " polling task")
+        void normalCompletionRemovesAndCancelsItsOwnTask() throws Exception {
+            // Regression guard for the fix above: a poll that is never superseded must still
+            // clean up its own entry in pollingTasks (and the currentPollingRequestId index) on
+            // completion, rather than becoming a permanent leak once tasks stopped being keyed
+            // by player UUID.
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            pendingPanelRequests.put("panel-req-solo", playerUuid);
+
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+            doReturn(player).when(server).getPlayer(playerUuid);
+
+            BukkitTask fakeTask = mock(BukkitTask.class);
+            List<Runnable> capturedPollRunnables = new ArrayList<>();
+            BukkitScheduler fakeScheduler = spy(server.getScheduler());
+            // Same capture-then-run-manually ordering as the race test above: pollingTasks.put(
+            // ...) for this poll must happen before its runnable ever executes.
+            doAnswer(invocation -> {
+                capturedPollRunnables.add(invocation.getArgument(1));
+                return fakeTask;
+            }).when(fakeScheduler)
+              .runTaskTimerAsynchronously(any(Plugin.class), any(Runnable.class), anyLong(), anyLong());
+            doAnswer(invocation -> {
+                Runnable runnable = invocation.getArgument(1);
+                runnable.run();
+                return mock(BukkitTask.class);
+            }).when(fakeScheduler).runTask(any(Plugin.class), any(Runnable.class));
+            doReturn(fakeScheduler).when(server).getScheduler();
+
+            YamlConfiguration env = mock(YamlConfiguration.class);
+            when(env.getString("api-url")).thenReturn("http://ulticloud.test");
+
+            String pollResponseJson = "{\"data\":{\"status\":\"completed\",\"is_server_owner\":false}}";
+            SimpleHttpClient.Response completedResponse = new SimpleHttpClient.Response(200, pollResponseJson);
+
+            try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
+                 MockedStatic<SimpleHttpClient> http = mockStatic(SimpleHttpClient.class)) {
+                ultiTools.when(UltiTools::getEnv).thenReturn(env);
+                http.when(() -> SimpleHttpClient.get(anyString())).thenReturn(completedResponse);
+
+                service.startAuthPolling(playerUuid.toString(), player, "panel-req-solo");
+                capturedPollRunnables.get(0).run();
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, BukkitTask> pollingTasks =
+                    (Map<String, BukkitTask>) getFieldValue(service, "pollingTasks");
+            @SuppressWarnings("unchecked")
+            Map<UUID, String> currentPollingRequestId =
+                    (Map<UUID, String>) getFieldValue(service, "currentPollingRequestId");
+
+            assertThat(pollingTasks)
+                    .as("a poll must remove its own task from pollingTasks once it completes")
+                    .doesNotContainKey("panel-req-solo");
+            assertThat(currentPollingRequestId)
+                    .as("the player's current-poll index entry must also be cleared")
+                    .doesNotContainKey(playerUuid);
+            verify(fakeTask).cancel();
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
         }
     }
 
@@ -2236,6 +3991,24 @@ class LoginServiceTest {
             assertThat(result.getUrl()).isNull();
             assertThat(result.getError()).isNull();
         }
+
+        @Test
+        @DisplayName("Should default requestId to null on the three-argument constructor")
+        void threeArgumentConstructorDefaultsRequestIdToNull() {
+            LoginService.PanelLinkResult result =
+                    new LoginService.PanelLinkResult(true, "https://panel.example.com/login", null);
+
+            assertThat(result.getRequestId()).isNull();
+        }
+
+        @Test
+        @DisplayName("Should store the request id given to the four-argument constructor")
+        void fourArgumentConstructorStoresRequestId() {
+            LoginService.PanelLinkResult result = new LoginService.PanelLinkResult(
+                    true, "https://panel.example.com/login", null, "req-42");
+
+            assertThat(result.getRequestId()).isEqualTo("req-42");
+        }
     }
 
     // ==================== shutdown with polling tasks ====================
@@ -2248,13 +4021,13 @@ class LoginServiceTest {
         @DisplayName("Should cancel all polling tasks on shutdown")
         void cancelAllPollingTasks() throws Exception {
             @SuppressWarnings("unchecked")
-            Map<UUID, BukkitTask> pollingTasks =
-                    (Map<UUID, BukkitTask>) getFieldValue(service, "pollingTasks");
+            Map<String, BukkitTask> pollingTasks =
+                    (Map<String, BukkitTask>) getFieldValue(service, "pollingTasks");
 
             BukkitTask task1 = mock(BukkitTask.class);
             BukkitTask task2 = mock(BukkitTask.class);
-            pollingTasks.put(UUID.randomUUID(), task1);
-            pollingTasks.put(UUID.randomUUID(), task2);
+            pollingTasks.put(UUID.randomUUID().toString(), task1);
+            pollingTasks.put(UUID.randomUUID().toString(), task2);
 
             service.shutdown();
 
@@ -2284,6 +4057,29 @@ class LoginServiceTest {
     }
 
     // ==================== Helper methods ====================
+
+    /**
+     * Stubs {@code Bukkit.getScheduler()} under an already-open {@code mockStatic(Bukkit.class)}
+     * block to run {@code runTask(...)} synchronously on the calling thread, and returns the
+     * fake scheduler so callers can add further stubs if needed.
+     * <p>
+     * Round 5 (13-REVIEW-UltiLogin.md, own deep review of bcadfb5, Info finding): {@link
+     * LoginProtectionListener#presentCredentialPrompt} now dispatches its text-prompt branch
+     * through {@code Bukkit.getScheduler().runTask(...)} the same way its GUI branch already
+     * did, so every test that fully mocks {@code Bukkit} (which otherwise makes {@code
+     * Bukkit.getScheduler()} return {@code null}) and then exercises a credential-invalidating
+     * path against an online player must stub the scheduler too, or the text branch NPEs.
+     */
+    private BukkitScheduler stubSchedulerToRunSynchronously(MockedStatic<Bukkit> bukkitMock) {
+        BukkitScheduler fakeScheduler = mock(BukkitScheduler.class);
+        doAnswer(invocation -> {
+            Runnable runnable = invocation.getArgument(1);
+            runnable.run();
+            return mock(BukkitTask.class);
+        }).when(fakeScheduler).runTask(any(Plugin.class), any(Runnable.class));
+        bukkitMock.when(Bukkit::getScheduler).thenReturn(fakeScheduler);
+        return fakeScheduler;
+    }
 
     private String hashPasswordForTest(String password, String salt) {
         try {

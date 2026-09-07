@@ -23,6 +23,8 @@ import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.*;
 
+import java.util.UUID;
+
 /**
  * Listener for login protection.
  *
@@ -199,26 +201,142 @@ public class LoginProtectionListener implements Listener {
      * Send login prompt to player.
      */
     private void sendLoginPrompt(Player player) {
+        presentCredentialPrompt(player, plugin, loginService, bukkitPlugin);
+    }
+
+    /**
+     * Present the login or register credential prompt -- the GUI page or a plain chat message,
+     * chosen by {@code loginService}'s config and the player's current registration state.
+     * <p>
+     * {@code static} and package-visible via a full parameter list (rather than an instance
+     * method reached through a bean reference) so {@link LoginService#presentCredentialPrompt
+     * (Player)} can call this exact same branching after an administrative credential change
+     * (Codex PR #18 thread 3945030004, round 4) without duplicating it a second time, and
+     * without introducing a circular bean dependency between the listener and the service --
+     * {@code LoginService} already has {@code plugin} and {@code bukkitPlugin} as constructor-
+     * injected fields, so it can call this like any other static utility. This class's own
+     * mock-based unit tests are unaffected: {@link #sendLoginPrompt(Player)} still exercises the
+     * identical branching with the identical field values, just via this extracted method.
+     * <p>
+     * Both branches are dispatched onto the main thread via {@link #dispatchOnMainThread}:
+     * inventory APIs are not thread-safe, and a caller revoking a session (e.g. an admin
+     * command) is not guaranteed to already be on the main thread. Round 5 (13-REVIEW-UltiLogin
+     * .md, own deep review of bcadfb5, Info finding): the text branch used to send synchronously
+     * on whatever thread the caller was on, safe only because every current caller of {@code
+     * LoginService.invalidateSession(UUID)} happens to be a synchronous command body. Dispatching
+     * it the same way as the GUI branch removes that latent assumption, so a future async caller
+     * (e.g. a WebSocket-driven remote admin action) cannot call a Bukkit player API off-thread
+     * through this path.
+     *
+     * @param player the player to prompt; must be online
+     * @param plugin the UltiTools plugin instance, passed through to the GUI pages
+     * @param loginService the login service to read registration/login state and config from
+     * @param bukkitPlugin the framework plugin instance the scheduler task is registered under
+     */
+    public static void presentCredentialPrompt(Player player, UltiToolsPlugin plugin,
+            LoginService loginService, Plugin bukkitPlugin) {
         if (loginService.getConfig().isGuiModeEnabled()) {
             // Reopen GUI
-            Bukkit.getScheduler().runTask(bukkitPlugin, () -> {
+            dispatchOnMainThread(player, plugin, bukkitPlugin, () -> {
                 if (player.isOnline() && !loginService.isLoggedIn(player.getUniqueId())) {
-                    if (loginService.isRegistered(player.getUniqueId())) {
-                        LoginGUIPage.open(player, plugin, loginService);
-                    } else {
-                        RegisterGUIPage.open(player, plugin, loginService);
+                    UUID uuid = player.getUniqueId();
+                    // Round 9 (Codex PR #18 thread 3946574852, P2): mark this player as
+                    // mid-transition before opening the new credential GUI. In real Bukkit,
+                    // opening a new inventory implicitly closes whatever the player currently has
+                    // open, which runs that GUI's own onClose reopen hook synchronously, on this
+                    // same call -- without this marker, that hook could schedule its own reopen
+                    // of the GUI being replaced, fighting (in the unregister case, permanently)
+                    // the GUI this method is deliberately opening. Cleared in the finally block
+                    // once the new GUI has actually been opened, so it never leaks past this call.
+                    // Round 10 (Codex PR #18 thread 3946842965): a GUI the player already closed
+                    // for an unrelated reason may have a delayed reopen queued (see
+                    // LoginGUIPage/RegisterGUIPage#onClose). Cancel it before opening this fresh
+                    // GUI so it cannot fire afterward and stack a second credential GUI on top of
+                    // this one, whose own onClose would then queue yet another reopen in turn.
+                    loginService.cancelPendingCredentialGuiReopen(uuid);
+                    loginService.beginCredentialGuiTransition(uuid);
+                    try {
+                        if (loginService.isRegistered(uuid)) {
+                            LoginGUIPage.open(player, plugin, loginService);
+                        } else {
+                            RegisterGUIPage.open(player, plugin, loginService);
+                        }
+                    } finally {
+                        loginService.endCredentialGuiTransition(uuid);
                     }
                 }
             });
         } else {
             // Send text prompt
-            if (loginService.isRegistered(player.getUniqueId())) {
-                player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
-                    loginService.getConfig().getLoginPrompt()));
-            } else {
-                player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
-                    loginService.getConfig().getRegisterPrompt()));
-            }
+            dispatchOnMainThread(player, plugin, bukkitPlugin, () -> {
+                // Round 12 (Codex PR #18 thread 3947572910, P3): unlike the GUI branch above,
+                // this queued callback used to send unconditionally, with no re-check of the
+                // player's state at execution time. AsyncPlayerChatEvent already runs off the
+                // main thread, so this callback is *always* queued for a later tick here, not
+                // just occasionally -- if the player was force-logged-in (or otherwise
+                // authenticated) in the gap between queuing and this tick, it still sent the
+                // login/register instruction to an already-authenticated player. Re-check
+                // exactly what the GUI branch checks before sending anything.
+                if (player.isOnline() && !loginService.isLoggedIn(player.getUniqueId())) {
+                    if (loginService.isRegistered(player.getUniqueId())) {
+                        player.sendMessage(ChatColor.translateAlternateColorCodes('&',
+                            loginService.getConfig().getLoginPrompt()));
+                    } else {
+                        player.sendMessage(ChatColor.translateAlternateColorCodes('&',
+                            loginService.getConfig().getRegisterPrompt()));
+                    }
+                }
+            });
+        }
+    }
+
+    /**
+     * Run {@code task} on the main thread, without letting {@link Bukkit#getScheduler()}'s
+     * unchecked exception on a disabling plugin escape to the caller.
+     * <p>
+     * Round 6 (13-REVIEW-UltiLogin.md, own review of 29ba589, Warning finding): both branches of
+     * {@link #presentCredentialPrompt} call {@code Bukkit.getScheduler().runTask(bukkitPlugin,
+     * ...)} unconditionally. Bukkit's scheduler validates {@code plugin.isEnabled()} before
+     * accepting a task and throws an unchecked exception if the owning plugin is disabled at the
+     * moment {@code runTask} is called -- and nothing upstream of this method (including {@code
+     * LoginService.invalidateSession}/{@code forceReauthenticationIfOnline}) catches it. Three
+     * rules close that gap and its symmetric restriction against needlessly hopping threads:
+     * <ol>
+     *   <li>Already on the main thread ({@link Bukkit#isPrimaryThread()}) -- run {@code task}
+     *   inline. Scheduling a task from the main thread to run on the main thread only adds a tick
+     *   of latency for no safety benefit, and this is also what keeps a caller that is already the
+     *   main thread from having to depend on the scheduler validating {@code bukkitPlugin} at
+     *   all.</li>
+     *   <li>Off the main thread and {@code bukkitPlugin} is still enabled -- schedule via {@link
+     *   Bukkit#getScheduler()}{@code .runTask(...)}, exactly as before.</li>
+     *   <li>Off the main thread and {@code bukkitPlugin} is disabled -- the plugin is disabling
+     *   (or already disabled) and cannot usefully prompt a player through its own scheduler
+     *   anyway; skip and log a warning instead of letting the scheduler's unchecked exception
+     *   propagate out of the credential-invalidation call chain that triggered this prompt.</li>
+     * </ol>
+     * <p>
+     * Round 8 (Codex PR #18, thread 3946414499): widened from {@code private} to {@code public}
+     * so {@code LoginService}'s own {@code applyNoSessionProtections(Player)} -- the blind-effect
+     * and spawn-teleport reapplication shared with {@link
+     * com.ultikits.plugins.login.service.LoginService#onPlayerJoin(Player)} -- can dispatch
+     * through the identical main-thread rules, since potion effects and teleports are exactly as
+     * main-thread-only as the GUI/text prompt this method already guards.
+     *
+     * @param player the player the prompt is for, used only for the skip warning's message
+     * @param plugin the UltiTools plugin instance, used to log the skip warning
+     * @param bukkitPlugin the framework plugin instance the scheduler task would be registered
+     *                     under
+     * @param task the prompt body to run
+     */
+    public static void dispatchOnMainThread(Player player, UltiToolsPlugin plugin,
+            Plugin bukkitPlugin, Runnable task) {
+        if (Bukkit.isPrimaryThread()) {
+            task.run();
+        } else if (bukkitPlugin.isEnabled()) {
+            Bukkit.getScheduler().runTask(bukkitPlugin, task);
+        } else {
+            plugin.getLogger().warn("Skipped presenting the credential prompt to "
+                + player.getName() + " because the plugin is disabling");
         }
     }
 }

@@ -4,7 +4,6 @@ import com.ultikits.plugins.login.config.EmailConfig;
 import com.ultikits.plugins.login.entity.AccountData;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Scheduled;
-import com.ultikits.ultitools.context.ContextHolder;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.services.EmailService;
 
@@ -41,8 +40,11 @@ public class EmailVerificationService {
     private final LoginService loginService;
     private final DataOperator<AccountData> dataOperator;
 
-    // Lazy-initialized framework EmailService
-    private EmailService emailService;
+    // Lazy-initialized framework EmailService. volatile: two Bukkit-scheduler threads calling
+    // getEmailService() concurrently on first use must not race on this field (WR-01,
+    // 13-REVIEW-UltiLogin.md) -- SimpleContainer.getBean returns the same singleton either way,
+    // so this is a visibility fix, not a functional one.
+    private volatile EmailService emailService;
 
     // Pending email binds: playerUUID -> PendingVerification
     private final Map<UUID, PendingVerification> pendingBinds = new ConcurrentHashMap<>();
@@ -65,7 +67,14 @@ public class EmailVerificationService {
 
     private EmailService getEmailService() {
         if (emailService == null) {
-            emailService = ContextHolder.getBean(EmailService.class);
+            // Resolved through this plugin's own IoC container rather than the framework-internal
+            // ContextHolder: nothing in production ever calls ContextHolder.setContext(...), so
+            // that lookup always resolved against an uninitialised holder (framework issue #390),
+            // and the class was since deleted outright, making the old call a compile error.
+            // plugin.getContext() returns this module's own child SimpleContainer, whose lookup
+            // falls through to the shared core container when the module itself has not
+            // registered the bean -- exactly where EmailService's default implementation lives.
+            emailService = plugin.getContext().getBean(EmailService.class);
         }
         return emailService;
     }
@@ -313,6 +322,12 @@ public class EmailVerificationService {
 
     /**
      * Reset password after recovery verification.
+     * <p>
+     * Round 7 (Codex PR #18 thread 3946170649): delegates to {@code
+     * LoginService.resetPasswordForRecovery} rather than the public {@code resetPassword}, since
+     * {@code RecoverCommand.resetPassword} calls {@code LoginService.completeLogin(Player)}
+     * immediately after this returns {@code true} -- presenting the credential prompt in between
+     * (as the public overload does) would show it an instant before logging the player back in.
      *
      * @param player      the player
      * @param newPassword the new password
@@ -333,8 +348,9 @@ public class EmailVerificationService {
             return false;
         }
 
-        // Reset password
-        boolean result = loginService.resetPassword(uuid, newPassword);
+        // Reset password without presenting the credential prompt -- the caller
+        // (RecoverCommand) logs the player back in itself immediately on success.
+        boolean result = loginService.resetPasswordForRecovery(uuid, newPassword);
 
         // Clean up
         recoveryVerified.remove(uuid);

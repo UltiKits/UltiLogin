@@ -53,9 +53,16 @@ public class PanelCommand extends BaseCommandExecutor {
         player.sendMessage(ChatColor.translateAlternateColorCodes('&',
             plugin.i18n("panel_generating")));
 
+        // Capture the invalidation generation now, before scheduling the async worker below --
+        // not inside it. An admin reset/unregister landing between this line and the worker's
+        // call to requestPanelLink() finds nothing to cancel yet (the request has not been
+        // published), so requestPanelLink() itself refuses to publish a request whose captured
+        // generation no longer matches. See Codex PR #18 thread 3945030000 (round 4).
+        long invalidationGeneration = loginService.getInvalidationGeneration(player.getUniqueId());
+
         // Run async to avoid blocking the main thread (HTTP call)
         Bukkit.getScheduler().runTaskAsynchronously(bukkitPlugin, () -> {
-            LoginService.PanelLinkResult result = loginService.requestPanelLink(player);
+            LoginService.PanelLinkResult result = loginService.requestPanelLink(player, invalidationGeneration);
 
             // Send result back on main thread
             Bukkit.getScheduler().runTask(bukkitPlugin, () -> {
@@ -63,7 +70,17 @@ public class PanelCommand extends BaseCommandExecutor {
                     return;
                 }
 
-                if (result.isSuccess()) {
+                // Revalidate the request one last time, right here, before acting on it. This
+                // callback is itself scheduled -- requestPanelLink()'s own post-POST re-check
+                // (round 7) only closes the gap up to the moment that method returned; an
+                // invalidation landing between that return and this callback actually running on
+                // the main thread would otherwise still let a revoked player receive the magic
+                // link and start a new poll for it. See Codex PR #18 thread 3946574845 (round 9).
+                boolean current = result.isSuccess()
+                        && loginService.isPanelRequestCurrent(player.getUniqueId(),
+                                result.getRequestId(), invalidationGeneration);
+
+                if (current) {
                     String url = result.getUrl();
                     // Send clickable link using Bungee chat API
                     TextComponent message = new TextComponent(
@@ -75,8 +92,11 @@ public class PanelCommand extends BaseCommandExecutor {
                         new ComponentBuilder(ChatColor.GRAY + "Click to open panel").create()));
                     player.spigot().sendMessage(message);
 
-                    // Start polling for auth completion
-                    loginService.startAuthPolling(player.getUniqueId().toString(), player);
+                    // Start polling for auth completion, keyed on the exact request id this
+                    // result was published under -- never on "whatever is currently pending" for
+                    // this player (Codex PR #18 thread 3946170644, round 7).
+                    loginService.startAuthPolling(player.getUniqueId().toString(), player,
+                            result.getRequestId());
                 } else {
                     player.sendMessage(ChatColor.translateAlternateColorCodes('&',
                         plugin.i18n("panel_error")));

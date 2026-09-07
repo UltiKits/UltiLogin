@@ -16,9 +16,11 @@ import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.scheduler.BukkitTask;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * GUI page for player login with numeric keypad.
@@ -65,6 +67,11 @@ public class LoginGUIPage extends Gui {
     
     @Override
     public void onOpen(InventoryOpenEvent event) {
+        // Round 10 (Codex PR #18 thread 3946842965): mark this player as having a credential GUI
+        // open, so a delayed reopen queued by a previous close of this or the register GUI (see
+        // onClose below) refuses to stack a second one on top of this one.
+        loginService.markCredentialGuiOpen(player.getUniqueId());
+
         // Fill background
         Icon background = new Icon(XVersionUtils.getColoredPlaneGlass(Colors.BLACK));
         background.setName(" ");
@@ -89,17 +96,52 @@ public class LoginGUIPage extends Gui {
     
     @Override
     public void onClose(InventoryCloseEvent event) {
-        // If not logged in, reopen GUI after a short delay
-        if (!loginService.isLoggedIn(player.getUniqueId())) {
-            org.bukkit.Bukkit.getScheduler().runTaskLater(
+        UUID uuid = player.getUniqueId();
+
+        // Round 10 (Codex PR #18 thread 3946842965): this GUI is genuinely closing regardless of
+        // why -- clear the "credential GUI open" marker unconditionally, before the transition
+        // check below, so a queued reopen's own guard (see below) and presentCredentialPrompt's
+        // state checks never see a GUI that no longer exists.
+        loginService.markCredentialGuiClosed(uuid);
+
+        // Round 9 (Codex PR #18 thread 3946574852, P2): skip entirely while
+        // LoginProtectionListener.presentCredentialPrompt is mid-transition to a different
+        // credential GUI for this player. That call is the one deliberately closing this GUI --
+        // it is already about to open the correct one itself -- so this hook must not schedule a
+        // reopen of its own, regardless of what the state checks below would otherwise say.
+        if (loginService.isCredentialGuiTransitioning(uuid)) {
+            return;
+        }
+
+        // If still registered and not yet logged in, reopen after a short delay. Checking
+        // isRegistered too (not just isLoggedIn) closes the other half of the same defect: an
+        // admin unregistering this player while this GUI was open used to leave isLoggedIn false
+        // forever, so this hook kept reopening a login GUI for an account that no longer exists,
+        // fighting the register GUI the revocation prompt opened over it every 10 ticks.
+        if (loginService.isRegistered(uuid) && !loginService.isLoggedIn(uuid)) {
+            // Round 10 (Codex PR #18 thread 3946842965): an admin password reset (or self-service
+            // change) landing during this delay leaves isRegistered/isLoggedIn unchanged, so the
+            // state check above cannot by itself detect that a credential change has already
+            // opened a fresh credential GUI in the meantime. Two independent defenses close that:
+            // (1) presentCredentialPrompt cancels this exact task via
+            // loginService.cancelPendingCredentialGuiReopen before opening its own GUI, and (2)
+            // this runnable re-checks isCredentialGuiTransitioning/isCredentialGuiOpen fresh, at
+            // the moment it actually fires, rather than trusting the state read 10 ticks ago.
+            BukkitTask task = org.bukkit.Bukkit.getScheduler().runTaskLater(
                 bukkitPlugin,
                 () -> {
-                    if (player.isOnline() && !loginService.isLoggedIn(player.getUniqueId())) {
+                    loginService.clearCredentialGuiReopenTask(uuid);
+                    if (player.isOnline()
+                            && !loginService.isCredentialGuiTransitioning(uuid)
+                            && !loginService.isCredentialGuiOpen(uuid)
+                            && loginService.isRegistered(uuid)
+                            && !loginService.isLoggedIn(uuid)) {
                         new LoginGUIPage(player, plugin, loginService).open();
                     }
                 },
                 10L
             );
+            loginService.registerCredentialGuiReopenTask(uuid, task);
         }
     }
     

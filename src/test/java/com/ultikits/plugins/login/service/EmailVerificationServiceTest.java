@@ -3,7 +3,6 @@ package com.ultikits.plugins.login.service;
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.config.EmailConfig;
 import com.ultikits.plugins.login.entity.AccountData;
-import com.ultikits.ultitools.context.ContextHolder;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.Query;
@@ -63,10 +62,14 @@ class EmailVerificationServiceTest {
         serverField.setAccessible(true); // NOPMD
         serverField.set(null, mockServer);
 
-        // Set up ContextHolder with EmailService
+        // Wire the email service through the module's own plugin context -- the idiom
+        // production now uses (plugin.getContext().getBean(...)), not the deleted
+        // framework-internal holder this test used to install a stub into.
+        // UltiToolsPlugin#getContext() is a Lombok @Getter on the mock, so stubbing it directly
+        // reproduces exactly how the framework wires a plugin's child container in production.
         SimpleContainer mockContext = mock(SimpleContainer.class);
         when(mockContext.getBean(EmailService.class)).thenReturn(emailService);
-        ContextHolder.setContext(mockContext);
+        when(UltiLoginTestHelper.getMockPlugin().getContext()).thenReturn(mockContext);
 
         // Set up DataOperator mock
         when(UltiLoginTestHelper.getMockPlugin().getDataOperator(AccountData.class)).thenReturn(dataOperator);
@@ -91,14 +94,13 @@ class EmailVerificationServiceTest {
         // Default LoginService behavior
         when(loginService.getPlayerIp(any(Player.class))).thenReturn("127.0.0.1");
 
-        // Create service
+        // Create service. getEmailService()'s lazy-init lookup now resolves through
+        // plugin.getContext().getBean(EmailService.class) -- the mockContext stub above -- on
+        // first use, exactly as production does. No reflection injection: a test that sets the
+        // private field directly bypasses the lookup entirely and would satisfy a precondition
+        // production never satisfies (a precondition production never satisfies).
         service = new EmailVerificationService(
                 UltiLoginTestHelper.getMockPlugin(), emailConfig, loginService);
-
-        // Inject emailService via reflection (lazy init field)
-        Field emailSvcField = EmailVerificationService.class.getDeclaredField("emailService");
-        emailSvcField.setAccessible(true); // NOPMD
-        emailSvcField.set(service, emailService);
 
         // Create player
         playerUuid = UUID.randomUUID();
@@ -108,7 +110,6 @@ class EmailVerificationServiceTest {
     @AfterEach
     void tearDown() throws Exception {
         UltiLoginTestHelper.tearDown();
-        ContextHolder.clear();
         // Root-cause fix (PR #17 review): this class installs its own Bukkit.server mock directly
         // (see setUp() above) rather than going through UltiLoginTestHelper.bootstrapLiveServer(),
         // so it must clear the field itself instead of leaving it for the next Surefire-fork class
@@ -681,12 +682,12 @@ class EmailVerificationServiceTest {
             verified.put(playerUuid, "127.0.0.1");
 
             when(loginService.getPlayerIp(player)).thenReturn("127.0.0.1");
-            when(loginService.resetPassword(playerUuid, "newpass123")).thenReturn(true);
+            when(loginService.resetPasswordForRecovery(playerUuid, "newpass123")).thenReturn(true);
 
             boolean result = service.resetPasswordAfterRecovery(player, "newpass123");
 
             assertThat(result).isTrue();
-            verify(loginService).resetPassword(playerUuid, "newpass123");
+            verify(loginService).resetPasswordForRecovery(playerUuid, "newpass123");
             assertThat(verified).doesNotContainKey(playerUuid);
         }
 
@@ -696,7 +697,7 @@ class EmailVerificationServiceTest {
             boolean result = service.resetPasswordAfterRecovery(player, "newpass123");
 
             assertThat(result).isFalse();
-            verify(loginService, never()).resetPassword(any(UUID.class), anyString());
+            verify(loginService, never()).resetPasswordForRecovery(any(UUID.class), anyString());
         }
 
         @Test
@@ -713,11 +714,11 @@ class EmailVerificationServiceTest {
             boolean result = service.resetPasswordAfterRecovery(player, "newpass123");
 
             assertThat(result).isFalse();
-            verify(loginService, never()).resetPassword(any(UUID.class), anyString());
+            verify(loginService, never()).resetPasswordForRecovery(any(UUID.class), anyString());
         }
 
         @Test
-        @DisplayName("Should return false when loginService.resetPassword fails")
+        @DisplayName("Should return false when loginService.resetPasswordForRecovery fails")
         void resetFails() throws Exception {
             Field verifiedField = EmailVerificationService.class.getDeclaredField("recoveryVerified");
             verifiedField.setAccessible(true); // NOPMD
@@ -726,7 +727,7 @@ class EmailVerificationServiceTest {
             verified.put(playerUuid, "127.0.0.1");
 
             when(loginService.getPlayerIp(player)).thenReturn("127.0.0.1");
-            when(loginService.resetPassword(playerUuid, "newpass123")).thenReturn(false);
+            when(loginService.resetPasswordForRecovery(playerUuid, "newpass123")).thenReturn(false);
 
             boolean result = service.resetPasswordAfterRecovery(player, "newpass123");
 
