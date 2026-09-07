@@ -20,6 +20,7 @@ import org.bukkit.Server;
 import org.bukkit.World;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
+import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryView;
 import org.bukkit.plugin.Plugin;
@@ -897,6 +898,124 @@ class LoginServiceTest {
                     .as("checkTimeouts() must see this newly unauthenticated player, or the"
                             + " configured login timeout is never enforced while they stay connected")
                     .containsKey(playerUuid);
+        }
+    }
+
+    // ==================== credential GUI transition (round 9, thread 3946574852) ====================
+
+    @Nested
+    @DisplayName("Credential GUI transition (round 9, Codex PR #18 thread 3946574852)")
+    class CredentialGuiTransition {
+
+        @Test
+        @DisplayName("Unregistering an online player with LoginGUIPage open opens exactly one"
+                + " RegisterGUIPage, and the login GUI's own close hook -- fired synchronously by"
+                + " that open, exactly as real Bukkit would -- does not reopen a login GUI"
+                + " (no ping-pong)")
+        void unregisterWhileLoginGuiOpenOpensExactlyOneRegisterGuiWithoutPingPong() throws Exception {
+            when(config.isGuiModeEnabled()).thenReturn(true);
+            when(config.getGuiLoginTitle()).thenReturn("&aLogin");
+
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            // First call (LoginService.getAccount(), inside unregister()) sees the account;
+            // every call after that (isRegistered(), reached via presentCredentialPrompt() and,
+            // if the fix regresses, the login GUI's own close-hook re-check) sees it gone -- the
+            // account really was deleted by dataOperator.delById() before invalidateSession()
+            // ever runs.
+            when(mockQuery.list())
+                    .thenReturn(Collections.singletonList(account))
+                    .thenReturn(Collections.emptyList());
+
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+            doReturn(player).when(server).getPlayer(playerUuid);
+
+            // The GUI the player currently has open -- constructed directly (not via .open()),
+            // matching this module's established "does not test open()/InventoryAPI rendering"
+            // convention for Gui-page unit tests. Only its onClose() hook is exercised.
+            com.ultikits.plugins.login.gui.LoginGUIPage openLoginGui =
+                    new com.ultikits.plugins.login.gui.LoginGUIPage(
+                            player, UltiLoginTestHelper.getMockPlugin(), service);
+
+            BukkitScheduler fakeScheduler = spy(server.getScheduler());
+            doAnswer(invocation -> {
+                Runnable runnable = invocation.getArgument(1);
+                runnable.run();
+                return mock(BukkitTask.class);
+            }).when(fakeScheduler).runTask(any(Plugin.class), any(Runnable.class));
+            doReturn(fakeScheduler).when(server).getScheduler();
+
+            try (MockedStatic<com.ultikits.plugins.login.gui.LoginGUIPage> loginGui =
+                         mockStatic(com.ultikits.plugins.login.gui.LoginGUIPage.class);
+                 MockedStatic<com.ultikits.plugins.login.gui.RegisterGUIPage> registerGui =
+                         mockStatic(com.ultikits.plugins.login.gui.RegisterGUIPage.class)) {
+
+                // Simulate exactly what real Bukkit does when RegisterGUIPage.open() opens a new
+                // inventory while LoginGUIPage is still on screen: it implicitly fires an
+                // InventoryCloseEvent for the GUI being replaced, synchronously, as part of the
+                // same call -- i.e. drive the close hook explicitly, from inside the open() call
+                // it is a side effect of, not as a separate step afterward.
+                registerGui.when(() -> com.ultikits.plugins.login.gui.RegisterGUIPage.open(
+                        eq(player), eq(UltiLoginTestHelper.getMockPlugin()), eq(service)))
+                        .thenAnswer(invocation -> {
+                            openLoginGui.onClose(mock(InventoryCloseEvent.class));
+                            return null;
+                        });
+
+                boolean result = service.unregister(playerUuid);
+                assertThat(result).isTrue();
+
+                registerGui.verify(() -> com.ultikits.plugins.login.gui.RegisterGUIPage.open(
+                        player, UltiLoginTestHelper.getMockPlugin(), service), times(1));
+                loginGui.verify(() -> com.ultikits.plugins.login.gui.LoginGUIPage.open(
+                        any(), any(), any()), never());
+            }
+
+            verify(fakeScheduler, never()).runTaskLater(any(Plugin.class), any(Runnable.class), anyLong());
+        }
+
+        @Test
+        @DisplayName("Closing the login GUI while the player is still registered and"
+                + " unauthenticated still reopens it (normal case, unaffected by the fix)")
+        void closingLoginGuiWhileStillRegisteredAndUnauthenticatedStillReopensIt() throws Exception {
+            when(config.isGuiModeEnabled()).thenReturn(true);
+            when(config.getGuiLoginTitle()).thenReturn("&aLogin");
+
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            com.ultikits.plugins.login.gui.LoginGUIPage openLoginGui =
+                    new com.ultikits.plugins.login.gui.LoginGUIPage(
+                            player, UltiLoginTestHelper.getMockPlugin(), service);
+
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+
+            BukkitScheduler fakeScheduler = spy(server.getScheduler());
+            doAnswer(invocation -> {
+                Runnable runnable = invocation.getArgument(1);
+                runnable.run();
+                return mock(BukkitTask.class);
+            }).when(fakeScheduler).runTaskLater(any(Plugin.class), any(Runnable.class), anyLong());
+            doReturn(fakeScheduler).when(server).getScheduler();
+
+            // onClose()'s reopen path constructs a plain "new LoginGUIPage(...).open()" (an
+            // instance call to obliviate-invs' Gui#open(), not the static LoginGUIPage.open(...)
+            // convenience method LoginProtectionListener uses) -- mockConstruction() intercepts
+            // that specific "new" so the reopen can be verified without actually calling the real
+            // Gui#open(), which requires InventoryAPI to be initialized (it throws
+            // NullPointerException otherwise; this module's Gui-page tests deliberately do not
+            // exercise open()/InventoryAPI, per RemoteBagContentGUITest's own convention).
+            try (org.mockito.MockedConstruction<com.ultikits.plugins.login.gui.LoginGUIPage> construction =
+                         mockConstruction(com.ultikits.plugins.login.gui.LoginGUIPage.class)) {
+
+                openLoginGui.onClose(mock(InventoryCloseEvent.class));
+
+                assertThat(construction.constructed()).hasSize(1);
+                verify(construction.constructed().get(0)).open();
+            }
         }
     }
 

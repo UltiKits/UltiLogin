@@ -96,6 +96,13 @@ public class LoginService {
     // Active polling tasks per player (playerUUID -> task)
     private final Map<UUID, BukkitTask> pollingTasks = new ConcurrentHashMap<>();
 
+    // Players currently mid-transition between credential GUIs (e.g. LoginGUIPage ->
+    // RegisterGUIPage after an admin unregister revoked them while a GUI was open) -- consulted
+    // by LoginGUIPage/RegisterGUIPage's own onClose reopen hooks so the GUI being replaced does
+    // not schedule its own reopen while presentCredentialPrompt() is in the middle of opening the
+    // correct one. Round 9 (Codex PR #18 thread 3946574852, P2).
+    private final java.util.Set<UUID> credentialGuiTransitions = ConcurrentHashMap.newKeySet();
+
     private final Gson gson = new Gson();
 
     /**
@@ -127,6 +134,7 @@ public class LoginService {
         pendingPanelRequests.clear();
         pendingPanelTimestamps.clear();
         invalidationGenerations.clear();
+        credentialGuiTransitions.clear();
     }
     
     /**
@@ -652,6 +660,49 @@ public class LoginService {
      */
     public void presentCredentialPrompt(Player player) {
         LoginProtectionListener.presentCredentialPrompt(player, plugin, this, bukkitPlugin);
+    }
+
+    /**
+     * Mark a player as mid-transition between credential GUIs, so {@link
+     * com.ultikits.plugins.login.gui.LoginGUIPage#onClose} and {@link
+     * com.ultikits.plugins.login.gui.RegisterGUIPage#onClose} skip their own reopen logic for the
+     * GUI a deliberate transition is in the process of replacing.
+     * <p>
+     * Round 9 (Codex PR #18 thread 3946574852, P2): an online, registered-but-unauthenticated
+     * player with {@code LoginGUIPage} open, unregistered by an admin, had the revocation prompt
+     * open {@code RegisterGUIPage} over it -- which, in real Bukkit, implicitly fires an {@code
+     * InventoryCloseEvent} for the GUI being replaced, synchronously, as part of opening the new
+     * one. Without this marker, that close hook could schedule its own reopen of the GUI being
+     * replaced, which (once it fired) closed the new GUI in turn and triggered its own reopen --
+     * the two screens ping-ponging every 10 ticks until the player was kicked by the login
+     * timeout. See {@link #endCredentialGuiTransition(UUID)} and {@link
+     * #isCredentialGuiTransitioning(UUID)}.
+     *
+     * @param playerUuid the player whose credential GUI is about to be deliberately replaced
+     */
+    public void beginCredentialGuiTransition(UUID playerUuid) {
+        credentialGuiTransitions.add(playerUuid);
+    }
+
+    /**
+     * Clear the transition marker set by {@link #beginCredentialGuiTransition(UUID)}, once the
+     * replacement credential GUI has actually been opened.
+     *
+     * @param playerUuid the player whose credential GUI transition has finished
+     */
+    public void endCredentialGuiTransition(UUID playerUuid) {
+        credentialGuiTransitions.remove(playerUuid);
+    }
+
+    /**
+     * Whether a player is currently mid-transition between credential GUIs -- see {@link
+     * #beginCredentialGuiTransition(UUID)}.
+     *
+     * @param playerUuid the player to check
+     * @return true if a credential GUI transition is currently in progress for this player
+     */
+    public boolean isCredentialGuiTransitioning(UUID playerUuid) {
+        return credentialGuiTransitions.contains(playerUuid);
     }
 
     /**
@@ -1289,6 +1340,37 @@ public class LoginService {
             cleanupPanelRequest(requestId);
             plugin.getLogger().warn("Failed to request panel link: " + e.getMessage());
             return new PanelLinkResult(false, null, "Request failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Check whether a published panel link request is still current for its player, immediately
+     * before acting on a {@link PanelLinkResult} on the main thread.
+     * <p>
+     * Round 9 (Codex PR #18 thread 3946574845, P2): {@link #requestPanelLink(Player, long)}'s own
+     * post-POST re-check (round 7) only closes the gap up to the moment that method returns.
+     * {@code PanelCommand}'s result-delivery callback runs later still -- it is itself scheduled
+     * via {@code Bukkit.getScheduler().runTask(...)} after the worker thread's blocking HTTP call
+     * already returned -- so an invalidation landing in that final gap (between {@code
+     * requestPanelLink}'s return and this callback actually executing on the main thread) could
+     * still let a revoked player receive the magic link and start a new poll. Calling this at the
+     * top of that callback, under the same per-player lock {@link #invalidateSession(UUID)}
+     * synchronizes on, closes that last gap: a {@code false} result means the generation moved on
+     * or the request itself was already cancelled/completed elsewhere, and the caller must discard
+     * the result outright -- no link sent, no poll started.
+     *
+     * @param playerUuid the player the request was made for
+     * @param requestId the request id published in the {@link PanelLinkResult}, from {@link
+     *                  PanelLinkResult#getRequestId()}
+     * @param expectedGeneration the invalidation generation the caller captured before scheduling
+     *                           its asynchronous work, from {@link #getInvalidationGeneration
+     *                           (UUID)}
+     * @return true if the request is still current and safe to act on
+     */
+    public boolean isPanelRequestCurrent(UUID playerUuid, String requestId, long expectedGeneration) {
+        AtomicLong generationCell = invalidationGenerations.computeIfAbsent(playerUuid, k -> new AtomicLong());
+        synchronized (generationCell) {
+            return generationCell.get() == expectedGeneration && pendingPanelRequests.containsKey(requestId);
         }
     }
 

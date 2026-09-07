@@ -18,6 +18,7 @@ import org.bukkit.inventory.meta.ItemMeta;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * GUI page for player registration with numeric keypad.
@@ -90,12 +91,22 @@ public class RegisterGUIPage extends Gui {
     
     @Override
     public void onClose(InventoryCloseEvent event) {
+        UUID uuid = player.getUniqueId();
+
+        // Round 9 (Codex PR #18 thread 3946574852, P2): skip entirely while
+        // LoginProtectionListener.presentCredentialPrompt is mid-transition to a different
+        // credential GUI for this player -- see LoginGUIPage#onClose for the full explanation of
+        // why (this is the symmetric other half of that same fix).
+        if (loginService.isCredentialGuiTransitioning(uuid)) {
+            return;
+        }
+
         // If not registered, reopen GUI after a short delay
-        if (!loginService.isRegistered(player.getUniqueId())) {
+        if (!loginService.isRegistered(uuid)) {
             org.bukkit.Bukkit.getScheduler().runTaskLater(
                 bukkitPlugin,
                 () -> {
-                    if (player.isOnline() && !loginService.isRegistered(player.getUniqueId())) {
+                    if (player.isOnline() && !loginService.isRegistered(uuid)) {
                         new RegisterGUIPage(player, plugin, loginService).open();
                     }
                 },

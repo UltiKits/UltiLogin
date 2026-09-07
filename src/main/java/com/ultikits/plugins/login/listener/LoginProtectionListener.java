@@ -23,6 +23,8 @@ import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.*;
 
+import java.util.UUID;
+
 /**
  * Listener for login protection.
  *
@@ -237,10 +239,24 @@ public class LoginProtectionListener implements Listener {
             // Reopen GUI
             dispatchOnMainThread(player, plugin, bukkitPlugin, () -> {
                 if (player.isOnline() && !loginService.isLoggedIn(player.getUniqueId())) {
-                    if (loginService.isRegistered(player.getUniqueId())) {
-                        LoginGUIPage.open(player, plugin, loginService);
-                    } else {
-                        RegisterGUIPage.open(player, plugin, loginService);
+                    UUID uuid = player.getUniqueId();
+                    // Round 9 (Codex PR #18 thread 3946574852, P2): mark this player as
+                    // mid-transition before opening the new credential GUI. In real Bukkit,
+                    // opening a new inventory implicitly closes whatever the player currently has
+                    // open, which runs that GUI's own onClose reopen hook synchronously, on this
+                    // same call -- without this marker, that hook could schedule its own reopen
+                    // of the GUI being replaced, fighting (in the unregister case, permanently)
+                    // the GUI this method is deliberately opening. Cleared in the finally block
+                    // once the new GUI has actually been opened, so it never leaks past this call.
+                    loginService.beginCredentialGuiTransition(uuid);
+                    try {
+                        if (loginService.isRegistered(uuid)) {
+                            LoginGUIPage.open(player, plugin, loginService);
+                        } else {
+                            RegisterGUIPage.open(player, plugin, loginService);
+                        }
+                    } finally {
+                        loginService.endCredentialGuiTransition(uuid);
                     }
                 }
             });

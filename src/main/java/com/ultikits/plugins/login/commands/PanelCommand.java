@@ -70,7 +70,17 @@ public class PanelCommand extends BaseCommandExecutor {
                     return;
                 }
 
-                if (result.isSuccess()) {
+                // Revalidate the request one last time, right here, before acting on it. This
+                // callback is itself scheduled -- requestPanelLink()'s own post-POST re-check
+                // (round 7) only closes the gap up to the moment that method returned; an
+                // invalidation landing between that return and this callback actually running on
+                // the main thread would otherwise still let a revoked player receive the magic
+                // link and start a new poll for it. See Codex PR #18 thread 3946574845 (round 9).
+                boolean current = result.isSuccess()
+                        && loginService.isPanelRequestCurrent(player.getUniqueId(),
+                                result.getRequestId(), invalidationGeneration);
+
+                if (current) {
                     String url = result.getUrl();
                     // Send clickable link using Bungee chat API
                     TextComponent message = new TextComponent(

@@ -19,6 +19,7 @@ import org.bukkit.inventory.meta.ItemMeta;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * GUI page for player login with numeric keypad.
@@ -89,12 +90,27 @@ public class LoginGUIPage extends Gui {
     
     @Override
     public void onClose(InventoryCloseEvent event) {
-        // If not logged in, reopen GUI after a short delay
-        if (!loginService.isLoggedIn(player.getUniqueId())) {
+        UUID uuid = player.getUniqueId();
+
+        // Round 9 (Codex PR #18 thread 3946574852, P2): skip entirely while
+        // LoginProtectionListener.presentCredentialPrompt is mid-transition to a different
+        // credential GUI for this player. That call is the one deliberately closing this GUI --
+        // it is already about to open the correct one itself -- so this hook must not schedule a
+        // reopen of its own, regardless of what the state checks below would otherwise say.
+        if (loginService.isCredentialGuiTransitioning(uuid)) {
+            return;
+        }
+
+        // If still registered and not yet logged in, reopen after a short delay. Checking
+        // isRegistered too (not just isLoggedIn) closes the other half of the same defect: an
+        // admin unregistering this player while this GUI was open used to leave isLoggedIn false
+        // forever, so this hook kept reopening a login GUI for an account that no longer exists,
+        // fighting the register GUI the revocation prompt opened over it every 10 ticks.
+        if (loginService.isRegistered(uuid) && !loginService.isLoggedIn(uuid)) {
             org.bukkit.Bukkit.getScheduler().runTaskLater(
                 bukkitPlugin,
                 () -> {
-                    if (player.isOnline() && !loginService.isLoggedIn(player.getUniqueId())) {
+                    if (player.isOnline() && loginService.isRegistered(uuid) && !loginService.isLoggedIn(uuid)) {
                         new LoginGUIPage(player, plugin, loginService).open();
                     }
                 },
