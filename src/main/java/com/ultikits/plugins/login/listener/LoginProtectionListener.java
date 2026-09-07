@@ -269,12 +269,22 @@ public class LoginProtectionListener implements Listener {
         } else {
             // Send text prompt
             dispatchOnMainThread(player, plugin, bukkitPlugin, () -> {
-                if (loginService.isRegistered(player.getUniqueId())) {
-                    player.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                        loginService.getConfig().getLoginPrompt()));
-                } else {
-                    player.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                        loginService.getConfig().getRegisterPrompt()));
+                // Round 12 (Codex PR #18 thread 3947572910, P3): unlike the GUI branch above,
+                // this queued callback used to send unconditionally, with no re-check of the
+                // player's state at execution time. AsyncPlayerChatEvent already runs off the
+                // main thread, so this callback is *always* queued for a later tick here, not
+                // just occasionally -- if the player was force-logged-in (or otherwise
+                // authenticated) in the gap between queuing and this tick, it still sent the
+                // login/register instruction to an already-authenticated player. Re-check
+                // exactly what the GUI branch checks before sending anything.
+                if (player.isOnline() && !loginService.isLoggedIn(player.getUniqueId())) {
+                    if (loginService.isRegistered(player.getUniqueId())) {
+                        player.sendMessage(ChatColor.translateAlternateColorCodes('&',
+                            loginService.getConfig().getLoginPrompt()));
+                    } else {
+                        player.sendMessage(ChatColor.translateAlternateColorCodes('&',
+                            loginService.getConfig().getRegisterPrompt()));
+                    }
                 }
             });
         }

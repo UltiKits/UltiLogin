@@ -920,6 +920,64 @@ class LoginProtectionListenerTest {
     }
 
     @Nested
+    @DisplayName("sendLoginPrompt text-mode dispatch race (round 12, 13-REVIEW-UltiLogin.md Codex thread 3947572910)")
+    class SendLoginPromptTextModeCallback {
+
+        /**
+         * Blocks a chat message while GUI mode is disabled (routing through the text-prompt
+         * branch of {@link LoginProtectionListener#presentCredentialPrompt}) and captures the
+         * scheduled Runnable without invoking it, so each test below can choose what state
+         * (online/offline, logged-in/not) the queued callback observes when it finally runs on
+         * the main thread -- mirroring {@link SendLoginPromptGuiModeCallback#captureReopenTask}
+         * for the GUI branch.
+         */
+        private Runnable captureTextPromptTask() {
+            when(config.isGuiModeEnabled()).thenReturn(false);
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+            when(loginService.isRegistered(playerUuid)).thenReturn(true);
+
+            AsyncPlayerChatEvent event = new AsyncPlayerChatEvent(false, player, "message", java.util.Collections.emptySet());
+            listener.onPlayerChat(event);
+
+            ArgumentCaptor<Runnable> captor = ArgumentCaptor.forClass(Runnable.class);
+            verify(mockScheduler).runTask(any(), captor.capture());
+            return captor.getValue();
+        }
+
+        @Test
+        @DisplayName("Should not send the prompt if the player went offline before the queued task ran")
+        void skipsWhenOffline() {
+            Runnable task = captureTextPromptTask();
+            when(player.isOnline()).thenReturn(false);
+
+            task.run();
+
+            verify(player, never()).sendMessage(anyString());
+        }
+
+        @Test
+        @DisplayName("Should not send the prompt if the player became logged in (e.g. force-logged-in) before the queued task ran")
+        void skipsWhenAlreadyLoggedIn() {
+            Runnable task = captureTextPromptTask();
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(true);
+
+            task.run();
+
+            verify(player, never()).sendMessage(anyString());
+        }
+
+        @Test
+        @DisplayName("Should still send the prompt in the normal case where nothing changed before the queued task ran")
+        void sendsNormally() {
+            Runnable task = captureTextPromptTask();
+
+            task.run();
+
+            verify(player).sendMessage(anyString());
+        }
+    }
+
+    @Nested
     @DisplayName("onPlayerJoin GUI-mode delayed callback (refusal path: unauthenticated join popup)")
     class OnPlayerJoinGuiModeCallback {
 
