@@ -944,12 +944,15 @@ public class LoginService {
         // Remove blind effect
         player.removePotionEffect(PotionEffectType.BLINDNESS);
 
-        // Restore original location if we teleported to spawn
-        if (config.isSpawnLocationEnabled()) {
-            Location original = originalLocations.get(uuid);
-            if (original != null) {
-                player.teleport(original);
-            }
+        // Restore original location if we teleported to spawn. The check is on the entry's
+        // presence, not the *current* value of spawn-location.enabled: the entry is the record
+        // that a teleport actually happened (recorded by onPlayerJoin / applyNoSessionProtections
+        // at teleport time). Gating this on the current config instead stranded a player at spawn
+        // and discarded their saved location if the setting was flipped to false between the
+        // teleport and this call (Codex PR #18 round 13, thread 3947908093).
+        Location original = originalLocations.get(uuid);
+        if (original != null) {
+            player.teleport(original);
         }
         originalLocations.remove(uuid);
     }

@@ -2410,6 +2410,31 @@ class LoginServiceTest {
 
             verify(player, never()).teleport(any(org.bukkit.Location.class));
         }
+
+        @Test
+        @DisplayName("Should restore a revoked player's saved location even if spawn-location was disabled after the teleport")
+        void restoresSavedLocationRegardlessOfCurrentSpawnSetting() throws Exception {
+            // Codex PR #18 round 13, thread 3947908093: a player was teleported to spawn while
+            // spawn-location.enabled was true (the same recording onPlayerJoin/
+            // applyNoSessionProtections does), then an admin reload flips the setting to false
+            // before the player runs /login. completeLogin must restore the saved location
+            // regardless of the setting's *current* value -- the entry's presence in
+            // originalLocations is the record that a teleport actually happened, not the current
+            // config.
+            org.bukkit.Location originalLoc = mock(org.bukkit.Location.class);
+            @SuppressWarnings("unchecked")
+            Map<UUID, org.bukkit.Location> originalLocations =
+                    (Map<UUID, org.bukkit.Location>) getFieldValue(service, "originalLocations");
+            originalLocations.put(playerUuid, originalLoc);
+
+            // Setting flipped to false between the original teleport and this completeLogin call.
+            when(config.isSpawnLocationEnabled()).thenReturn(false);
+
+            service.completeLogin(player);
+
+            verify(player).teleport(originalLoc);
+            assertThat(originalLocations).doesNotContainKey(playerUuid);
+        }
     }
 
     // ==================== getConfig ====================
