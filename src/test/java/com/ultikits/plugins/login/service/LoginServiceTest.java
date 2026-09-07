@@ -1330,14 +1330,18 @@ class LoginServiceTest {
             Map<String, Long> pendingPanelTimestamps =
                     (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
             @SuppressWarnings("unchecked")
-            Map<UUID, BukkitTask> pollingTasks =
-                    (Map<UUID, BukkitTask>) getFieldValue(service, "pollingTasks");
+            Map<String, BukkitTask> pollingTasks =
+                    (Map<String, BukkitTask>) getFieldValue(service, "pollingTasks");
+            @SuppressWarnings("unchecked")
+            Map<UUID, String> currentPollingRequestId =
+                    (Map<UUID, String>) getFieldValue(service, "currentPollingRequestId");
 
             String requestId = "pending-panel-request";
             pendingPanelRequests.put(requestId, playerUuid);
             pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
             BukkitTask mockTask = mock(BukkitTask.class);
-            pollingTasks.put(playerUuid, mockTask);
+            pollingTasks.put(requestId, mockTask);
+            currentPollingRequestId.put(playerUuid, requestId);
 
             service.invalidateSession(playerUuid);
 
@@ -1347,6 +1351,9 @@ class LoginServiceTest {
             assertThat(pendingPanelTimestamps).doesNotContainKey(requestId);
             assertThat(pollingTasks)
                     .as("the polling task backing the cancelled request must be removed")
+                    .doesNotContainKey(requestId);
+            assertThat(currentPollingRequestId)
+                    .as("the player's current-poll index entry must also be cleared")
                     .doesNotContainKey(playerUuid);
             verify(mockTask).cancel();
         }
@@ -2707,16 +2714,22 @@ class LoginServiceTest {
         @DisplayName("Should cancel polling task on quit")
         void cancelPollingTask() throws Exception {
             @SuppressWarnings("unchecked")
-            Map<UUID, BukkitTask> pollingTasks =
-                    (Map<UUID, BukkitTask>) getFieldValue(service, "pollingTasks");
+            Map<String, BukkitTask> pollingTasks =
+                    (Map<String, BukkitTask>) getFieldValue(service, "pollingTasks");
+            @SuppressWarnings("unchecked")
+            Map<UUID, String> currentPollingRequestId =
+                    (Map<UUID, String>) getFieldValue(service, "currentPollingRequestId");
 
+            String requestId = "quit-request";
             BukkitTask mockTask = mock(BukkitTask.class);
-            pollingTasks.put(playerUuid, mockTask);
+            pollingTasks.put(requestId, mockTask);
+            currentPollingRequestId.put(playerUuid, requestId);
 
             service.onPlayerQuit(player);
 
             verify(mockTask).cancel();
-            assertThat(pollingTasks).doesNotContainKey(playerUuid);
+            assertThat(pollingTasks).doesNotContainKey(requestId);
+            assertThat(currentPollingRequestId).doesNotContainKey(playerUuid);
         }
 
         @Test
@@ -3619,6 +3632,183 @@ class LoginServiceTest {
                             + " completion was never entitled to consume it")
                     .containsKey("panel-req-new");
         }
+
+        @Test
+        @DisplayName("Must not cancel or remove a newer poll's own task when an older,"
+                + " superseded poll's stale HTTP response arrives")
+        void doesNotCancelANewerPollsTaskWhenAnOlderSupersededPollsStaleCompletionArrives() throws Exception {
+            // Codex PR #18 thread 3947189541 (round 11): starting poll B always cancels+replaces
+            // poll A's scheduled task for the same player -- correct, a new /panel request
+            // supersedes the previous one. But BukkitTask#cancel() only prevents a task's
+            // *future* scheduled executions; it does not interrupt an invocation already blocked
+            // inside its own HTTP call. If A's HTTP call was still in flight when B started, A's
+            // own "completed" observation -- arriving later, on that same in-flight invocation --
+            // used to remove and cancel whatever task pollingTasks currently held keyed on the
+            // player's UUID: B's task, not A's own (already-replaced) one.
+            // handlePanelPollCompleted correctly refused to complete A's own (never-published)
+            // request, but B's task was killed anyway, permanently stalling B's still-valid
+            // magic link. Reproduced by starting B from inside A's mocked HTTP call's answer --
+            // exactly the ordering the report describes.
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            // Request B is already published and pending; poll A's stale completion (for a
+            // request that was never itself made pending here) must never be able to consume it.
+            pendingPanelRequests.put("panel-req-new", playerUuid);
+
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+            doReturn(player).when(server).getPlayer(playerUuid);
+
+            BukkitTask taskA = mock(BukkitTask.class, "taskA");
+            BukkitTask taskB = mock(BukkitTask.class, "taskB");
+            Iterator<BukkitTask> taskIterator = Arrays.asList(taskA, taskB).iterator();
+            List<Runnable> capturedPollRunnables = new ArrayList<>();
+            BukkitScheduler fakeScheduler = spy(server.getScheduler());
+            // Capture each poll's scheduled runnable instead of running it inline (unlike
+            // makeSchedulerRunTasksSynchronously above): this test needs poll A's own
+            // startAuthPolling call to finish storing its task into pollingTasks *before* its
+            // runnable ever executes, exactly as real Bukkit guarantees via its initial
+            // scheduling delay. Running the runnable inline during scheduling would let the
+            // nested startAuthPolling(...) call for B run to completion before A's own outer
+            // call ever reached its own pollingTasks.put(...) -- an ordering that cannot happen
+            // against a real scheduler and would produce a false failure here.
+            doAnswer(invocation -> {
+                capturedPollRunnables.add(invocation.getArgument(1));
+                return taskIterator.next();
+            }).when(fakeScheduler)
+              .runTaskTimerAsynchronously(any(Plugin.class), any(Runnable.class), anyLong(), anyLong());
+            doAnswer(invocation -> {
+                Runnable runnable = invocation.getArgument(1);
+                runnable.run();
+                return mock(BukkitTask.class);
+            }).when(fakeScheduler).runTask(any(Plugin.class), any(Runnable.class));
+            doReturn(fakeScheduler).when(server).getScheduler();
+
+            YamlConfiguration env = mock(YamlConfiguration.class);
+            when(env.getString("api-url")).thenReturn("http://ulticloud.test");
+
+            String completedJson = "{\"data\":{\"status\":\"completed\",\"is_server_owner\":false}}";
+            SimpleHttpClient.Response completedResponse = new SimpleHttpClient.Response(200, completedJson);
+
+            try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
+                 MockedStatic<SimpleHttpClient> http = mockStatic(SimpleHttpClient.class)) {
+                ultiTools.when(UltiTools::getEnv).thenReturn(env);
+                http.when(() -> SimpleHttpClient.get(anyString())).thenAnswer(invocation -> {
+                    // Poll A's HTTP call is "in flight" here -- the player starts a fresh
+                    // /panel request while it's blocked, which cancels+replaces A's task with
+                    // B's (does not run B's own first tick -- irrelevant to this race).
+                    service.startAuthPolling(playerUuid.toString(), player, "panel-req-new");
+                    // Poll A's own (now-stale) HTTP call finally returns "completed".
+                    return completedResponse;
+                });
+
+                service.startAuthPolling(playerUuid.toString(), player, "panel-req-old");
+                // Fire poll A's first tick manually -- this is where its HTTP call "blocks" and,
+                // from inside the mocked answer above, the player starts poll B.
+                capturedPollRunnables.get(0).run();
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, BukkitTask> pollingTasks =
+                    (Map<String, BukkitTask>) getFieldValue(service, "pollingTasks");
+
+            assertThat(pollingTasks)
+                    .as("poll A's stale completion must not remove poll B's own task")
+                    .containsEntry("panel-req-new", taskB);
+            assertThat(pollingTasks)
+                    .as("poll A's own (already-superseded) entry must be gone")
+                    .doesNotContainKey("panel-req-old");
+            verify(taskB, never()).cancel();
+
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("poll A's own (superseded, never-published) request must not be"
+                            + " completed")
+                    .isFalse();
+
+            boolean completed = service.completePanelLogin("panel-req-new");
+            assertThat(completed)
+                    .as("poll B's still-pending request must remain completable after poll A's"
+                            + " stale completion ran")
+                    .isTrue();
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("poll B must be able to authenticate the player normally")
+                    .isTrue();
+        }
+
+        @Test
+        @DisplayName("A normal (uncontested) completion still removes and cancels its own"
+                + " polling task")
+        void normalCompletionRemovesAndCancelsItsOwnTask() throws Exception {
+            // Regression guard for the fix above: a poll that is never superseded must still
+            // clean up its own entry in pollingTasks (and the currentPollingRequestId index) on
+            // completion, rather than becoming a permanent leak once tasks stopped being keyed
+            // by player UUID.
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            pendingPanelRequests.put("panel-req-solo", playerUuid);
+
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+            doReturn(player).when(server).getPlayer(playerUuid);
+
+            BukkitTask fakeTask = mock(BukkitTask.class);
+            List<Runnable> capturedPollRunnables = new ArrayList<>();
+            BukkitScheduler fakeScheduler = spy(server.getScheduler());
+            // Same capture-then-run-manually ordering as the race test above: pollingTasks.put(
+            // ...) for this poll must happen before its runnable ever executes.
+            doAnswer(invocation -> {
+                capturedPollRunnables.add(invocation.getArgument(1));
+                return fakeTask;
+            }).when(fakeScheduler)
+              .runTaskTimerAsynchronously(any(Plugin.class), any(Runnable.class), anyLong(), anyLong());
+            doAnswer(invocation -> {
+                Runnable runnable = invocation.getArgument(1);
+                runnable.run();
+                return mock(BukkitTask.class);
+            }).when(fakeScheduler).runTask(any(Plugin.class), any(Runnable.class));
+            doReturn(fakeScheduler).when(server).getScheduler();
+
+            YamlConfiguration env = mock(YamlConfiguration.class);
+            when(env.getString("api-url")).thenReturn("http://ulticloud.test");
+
+            String pollResponseJson = "{\"data\":{\"status\":\"completed\",\"is_server_owner\":false}}";
+            SimpleHttpClient.Response completedResponse = new SimpleHttpClient.Response(200, pollResponseJson);
+
+            try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
+                 MockedStatic<SimpleHttpClient> http = mockStatic(SimpleHttpClient.class)) {
+                ultiTools.when(UltiTools::getEnv).thenReturn(env);
+                http.when(() -> SimpleHttpClient.get(anyString())).thenReturn(completedResponse);
+
+                service.startAuthPolling(playerUuid.toString(), player, "panel-req-solo");
+                capturedPollRunnables.get(0).run();
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, BukkitTask> pollingTasks =
+                    (Map<String, BukkitTask>) getFieldValue(service, "pollingTasks");
+            @SuppressWarnings("unchecked")
+            Map<UUID, String> currentPollingRequestId =
+                    (Map<UUID, String>) getFieldValue(service, "currentPollingRequestId");
+
+            assertThat(pollingTasks)
+                    .as("a poll must remove its own task from pollingTasks once it completes")
+                    .doesNotContainKey("panel-req-solo");
+            assertThat(currentPollingRequestId)
+                    .as("the player's current-poll index entry must also be cleared")
+                    .doesNotContainKey(playerUuid);
+            verify(fakeTask).cancel();
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+        }
     }
 
     // ==================== hasPendingPanelRequest ====================
@@ -3806,13 +3996,13 @@ class LoginServiceTest {
         @DisplayName("Should cancel all polling tasks on shutdown")
         void cancelAllPollingTasks() throws Exception {
             @SuppressWarnings("unchecked")
-            Map<UUID, BukkitTask> pollingTasks =
-                    (Map<UUID, BukkitTask>) getFieldValue(service, "pollingTasks");
+            Map<String, BukkitTask> pollingTasks =
+                    (Map<String, BukkitTask>) getFieldValue(service, "pollingTasks");
 
             BukkitTask task1 = mock(BukkitTask.class);
             BukkitTask task2 = mock(BukkitTask.class);
-            pollingTasks.put(UUID.randomUUID(), task1);
-            pollingTasks.put(UUID.randomUUID(), task2);
+            pollingTasks.put(UUID.randomUUID().toString(), task1);
+            pollingTasks.put(UUID.randomUUID().toString(), task2);
 
             service.shutdown();
 

@@ -93,8 +93,30 @@ public class LoginService {
     // Pending panel request timestamps (requestId -> creation time)
     private final Map<String, Long> pendingPanelTimestamps = new ConcurrentHashMap<>();
 
-    // Active polling tasks per player (playerUUID -> task)
-    private final Map<UUID, BukkitTask> pollingTasks = new ConcurrentHashMap<>();
+    // Active polling tasks per pending panel-link request (requestId -> task).
+    //
+    // Round 11 (Codex PR #18 thread 3947189541): this map used to be keyed by player UUID.
+    // Starting a new poll (B) for a player always cancels+replaces whatever task was previously
+    // stored under that UUID -- correct, since a new /panel request supersedes an old one. But
+    // BukkitTask#cancel() only prevents a task's *future* scheduled executions; it does not
+    // interrupt an execution already blocked inside its own HTTP call. If poll A's HTTP call was
+    // still in flight when B started and replaced A's map entry, A's own "completed" observation
+    // -- arriving later, on the same in-flight invocation -- would still run its cleanup step,
+    // which removed and cancelled *whatever task the map currently held for that UUID*: B's, not
+    // A's. handlePanelPollCompleted correctly refused to complete A's own (already-superseded)
+    // request, but B's task was killed anyway, permanently stalling B's still-valid magic link.
+    // Keying this map by request id instead means each poll's own cleanup can only ever touch
+    // its own entry, never a replacement's, regardless of which HTTP call returns first. See
+    // currentPollingRequestId below for how a player's *current* poll is still resolved for the
+    // unconditional-cancellation callers (cancelPendingPanelRequest, onPlayerQuit).
+    private final Map<String, BukkitTask> pollingTasks = new ConcurrentHashMap<>();
+
+    // The request id of whichever poll is currently active for a player (playerUUID ->
+    // requestId), maintained alongside pollingTasks above. Round 11: lets
+    // cancelPendingPanelRequest(UUID) and onPlayerQuit(Player) -- which must unconditionally stop
+    // whatever poll is active for a player, regardless of its request id -- resolve "the active
+    // poll for this player" without scanning pollingTasks.
+    private final Map<UUID, String> currentPollingRequestId = new ConcurrentHashMap<>();
 
     // Players currently mid-transition between credential GUIs (e.g. LoginGUIPage ->
     // RegisterGUIPage after an admin unregister revoked them while a GUI was open) -- consulted
@@ -144,6 +166,7 @@ public class LoginService {
             task.cancel();
         }
         pollingTasks.clear();
+        currentPollingRequestId.clear();
         // Cancel all queued credential-GUI reopen tasks (round 10).
         for (BukkitTask task : pendingCredentialGuiReopenTasks.values()) {
             task.cancel();
@@ -565,9 +588,32 @@ public class LoginService {
             }
             return false;
         });
-        BukkitTask task = pollingTasks.remove(playerUuid);
-        if (task != null) {
-            task.cancel();
+        cancelActivePollingTask(playerUuid);
+    }
+
+    /**
+     * Unconditionally cancel and remove whichever polling task is currently active for a player,
+     * if any.
+     * <p>
+     * Round 11 (Codex PR #18 thread 3947189541): {@code pollingTasks} is now keyed by request id
+     * (see its field javadoc), so an unconditional "stop this player's polling" caller cannot
+     * remove by player UUID directly. This resolves the player's current request id via {@link
+     * #currentPollingRequestId} first. Unlike the per-poll self-cleanup inside {@link
+     * #startAuthPolling(String, Player, String)} (which must only ever touch its own entry), this
+     * method is deliberately unconditional: it is only ever called by paths that mean to stop
+     * <em>all</em> polling for this player right now (an invalidation, or the player
+     * disconnecting), so removing "whatever is currently active" is exactly the intended
+     * behavior here, not the race the per-poll cleanup guards against.
+     *
+     * @param playerUuid the player whose active polling task, if any, should be cancelled
+     */
+    private void cancelActivePollingTask(UUID playerUuid) {
+        String requestId = currentPollingRequestId.remove(playerUuid);
+        if (requestId != null) {
+            BukkitTask task = pollingTasks.remove(requestId);
+            if (task != null) {
+                task.cancel();
+            }
         }
     }
 
@@ -869,10 +915,7 @@ public class LoginService {
         loggedInPlayers.remove(uuid);
         joinTimes.remove(uuid);
         originalLocations.remove(uuid);
-        BukkitTask pollingTask = pollingTasks.remove(uuid);
-        if (pollingTask != null) {
-            pollingTask.cancel();
-        }
+        cancelActivePollingTask(uuid);
     }
     
     /**
@@ -1509,6 +1552,13 @@ public class LoginService {
      * request happened to be pending for the same player by the time this poll's HTTP call
      * returned "completed", that scan would pick up the newer request and authenticate through
      * it instead of failing closed.
+     * <p>
+     * Round 11 (Codex PR #18 thread 3947189541): {@code requestId} is also this poll's own key
+     * into {@code pollingTasks} (see that field's javadoc) -- every removal/cancellation this
+     * method's own scheduled runnable performs below is scoped to {@code requestId} specifically,
+     * never to "whatever task is currently stored for this player". Cancelling a task that was
+     * already superseded by a newer poll for the same player must never remove or cancel that
+     * newer poll's own task.
      *
      * @param playerUuid the player's UUID string
      * @param player the online player
@@ -1518,10 +1568,15 @@ public class LoginService {
     public void startAuthPolling(String playerUuid, Player player, String requestId) {
         UUID uuid = player.getUniqueId();
 
-        // Cancel any existing polling task for this player
-        BukkitTask existing = pollingTasks.remove(uuid);
-        if (existing != null) {
-            existing.cancel();
+        // A new poll always supersedes whichever request was previously current for this
+        // player -- resolved via currentPollingRequestId (round 11), not by scanning
+        // pollingTasks, since pollingTasks is now keyed by request id rather than player UUID.
+        String previousRequestId = currentPollingRequestId.put(uuid, requestId);
+        if (previousRequestId != null) {
+            BukkitTask existing = pollingTasks.remove(previousRequestId);
+            if (existing != null) {
+                existing.cancel();
+            }
         }
 
         String apiUrl;
@@ -1540,10 +1595,13 @@ public class LoginService {
             pollCount[0]++;
 
             if (!player.isOnline() || pollCount[0] > maxPolls) {
-                BukkitTask self = pollingTasks.remove(uuid);
+                // Remove/cancel only this poll's own task, keyed by its own request id (round
+                // 11) -- never "whatever task pollingTasks currently holds for this player".
+                BukkitTask self = pollingTasks.remove(requestId);
                 if (self != null) {
                     self.cancel();
                 }
+                currentPollingRequestId.remove(uuid, requestId);
                 return;
             }
 
@@ -1565,11 +1623,14 @@ public class LoginService {
                     return;
                 }
 
-                // Auth completed — cancel polling
-                BukkitTask self = pollingTasks.remove(uuid);
+                // Auth completed -- remove/cancel only this poll's own task, keyed by its own
+                // request id (round 11): see the class-level javadoc on pollingTasks for why a
+                // stale, superseded poll's completion must never touch a replacement's task.
+                BukkitTask self = pollingTasks.remove(requestId);
                 if (self != null) {
                     self.cancel();
                 }
+                currentPollingRequestId.remove(uuid, requestId);
 
                 boolean isServerOwner = data.has("is_server_owner")
                     && !data.get("is_server_owner").isJsonNull()
@@ -1585,7 +1646,7 @@ public class LoginService {
             }
         }, 60L, 60L); // 60 ticks = 3 seconds
 
-        pollingTasks.put(uuid, task);
+        pollingTasks.put(requestId, task);
     }
 
     /**
