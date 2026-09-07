@@ -248,6 +248,12 @@ public class LoginProtectionListener implements Listener {
                     // of the GUI being replaced, fighting (in the unregister case, permanently)
                     // the GUI this method is deliberately opening. Cleared in the finally block
                     // once the new GUI has actually been opened, so it never leaks past this call.
+                    // Round 10 (Codex PR #18 thread 3946842965): a GUI the player already closed
+                    // for an unrelated reason may have a delayed reopen queued (see
+                    // LoginGUIPage/RegisterGUIPage#onClose). Cancel it before opening this fresh
+                    // GUI so it cannot fire afterward and stack a second credential GUI on top of
+                    // this one, whose own onClose would then queue yet another reopen in turn.
+                    loginService.cancelPendingCredentialGuiReopen(uuid);
                     loginService.beginCredentialGuiTransition(uuid);
                     try {
                         if (loginService.isRegistered(uuid)) {

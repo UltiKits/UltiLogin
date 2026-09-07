@@ -15,6 +15,7 @@ import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.scheduler.BukkitTask;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -67,6 +68,11 @@ public class RegisterGUIPage extends Gui {
     
     @Override
     public void onOpen(InventoryOpenEvent event) {
+        // Round 10 (Codex PR #18 thread 3946842965): mark this player as having a credential GUI
+        // open, so a delayed reopen queued by a previous close of this or the login GUI (see
+        // onClose below) refuses to stack a second one on top of this one.
+        loginService.markCredentialGuiOpen(player.getUniqueId());
+
         // Fill background
         Icon background = new Icon(XVersionUtils.getColoredPlaneGlass(Colors.BLACK));
         background.setName(" ");
@@ -93,6 +99,11 @@ public class RegisterGUIPage extends Gui {
     public void onClose(InventoryCloseEvent event) {
         UUID uuid = player.getUniqueId();
 
+        // Round 10 (Codex PR #18 thread 3946842965): this GUI is genuinely closing regardless of
+        // why -- clear the "credential GUI open" marker unconditionally, before the transition
+        // check below -- see LoginGUIPage#onClose for the full explanation (symmetric other half).
+        loginService.markCredentialGuiClosed(uuid);
+
         // Round 9 (Codex PR #18 thread 3946574852, P2): skip entirely while
         // LoginProtectionListener.presentCredentialPrompt is mid-transition to a different
         // credential GUI for this player -- see LoginGUIPage#onClose for the full explanation of
@@ -103,15 +114,22 @@ public class RegisterGUIPage extends Gui {
 
         // If not registered, reopen GUI after a short delay
         if (!loginService.isRegistered(uuid)) {
-            org.bukkit.Bukkit.getScheduler().runTaskLater(
+            // Round 10 (Codex PR #18 thread 3946842965): see LoginGUIPage#onClose for why this
+            // task is tracked and re-checked fresh at fire time (symmetric other half of that fix).
+            BukkitTask task = org.bukkit.Bukkit.getScheduler().runTaskLater(
                 bukkitPlugin,
                 () -> {
-                    if (player.isOnline() && !loginService.isRegistered(uuid)) {
+                    loginService.clearCredentialGuiReopenTask(uuid);
+                    if (player.isOnline()
+                            && !loginService.isCredentialGuiTransitioning(uuid)
+                            && !loginService.isCredentialGuiOpen(uuid)
+                            && !loginService.isRegistered(uuid)) {
                         new RegisterGUIPage(player, plugin, loginService).open();
                     }
                 },
                 10L
             );
+            loginService.registerCredentialGuiReopenTask(uuid, task);
         }
     }
     

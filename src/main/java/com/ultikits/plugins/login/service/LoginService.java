@@ -103,6 +103,25 @@ public class LoginService {
     // correct one. Round 9 (Codex PR #18 thread 3946574852, P2).
     private final java.util.Set<UUID> credentialGuiTransitions = ConcurrentHashMap.newKeySet();
 
+    // Players who currently have a LoginGUIPage or RegisterGUIPage open, set by that page's own
+    // onOpen and cleared by its onClose (or by markCredentialGuiClosed elsewhere). Consulted by
+    // the delayed reopen callback scheduled in onClose -- see pendingCredentialGuiReopenTasks --
+    // so a queued reopen from a GUI the player already closed for an unrelated reason cannot open
+    // a second credential GUI on top of one presentCredentialPrompt() already opened in the
+    // meantime. Round 10 (Codex PR #18 thread 3946842965).
+    private final java.util.Set<UUID> openCredentialGuiPlayers = ConcurrentHashMap.newKeySet();
+
+    // The delayed reopen task LoginGUIPage/RegisterGUIPage's onClose schedules for a player, if
+    // any. presentCredentialPrompt() cancels/replaces this before opening its own credential GUI
+    // (see LoginProtectionListener#presentCredentialPrompt), so a reopen queued by a GUI the
+    // player closed for an unrelated reason cannot fire after -- and land on top of -- a GUI a
+    // credential change has since opened. Round 10 (Codex PR #18 thread 3946842965): a registered,
+    // logged-out player closing LoginGUIPage schedules a reopen 10 ticks later; an admin password
+    // reset landing in that window used to leave the queued reopen live, so it opened a second
+    // credential GUI over the one the reset's own prompt had just opened, whose own onClose then
+    // queued another reopen -- replacing the GUI every 10 ticks indefinitely.
+    private final Map<UUID, BukkitTask> pendingCredentialGuiReopenTasks = new ConcurrentHashMap<>();
+
     private final Gson gson = new Gson();
 
     /**
@@ -125,6 +144,11 @@ public class LoginService {
             task.cancel();
         }
         pollingTasks.clear();
+        // Cancel all queued credential-GUI reopen tasks (round 10).
+        for (BukkitTask task : pendingCredentialGuiReopenTasks.values()) {
+            task.cancel();
+        }
+        pendingCredentialGuiReopenTasks.clear();
         loggedInPlayers.clear();
         joinTimes.clear();
         originalLocations.clear();
@@ -135,6 +159,7 @@ public class LoginService {
         pendingPanelTimestamps.clear();
         invalidationGenerations.clear();
         credentialGuiTransitions.clear();
+        openCredentialGuiPlayers.clear();
     }
     
     /**
@@ -703,6 +728,101 @@ public class LoginService {
      */
     public boolean isCredentialGuiTransitioning(UUID playerUuid) {
         return credentialGuiTransitions.contains(playerUuid);
+    }
+
+    /**
+     * Mark a player as currently having a {@link LoginGUIPage} or {@link RegisterGUIPage} open,
+     * called from that page's own {@code onOpen}.
+     * <p>
+     * Round 10 (Codex PR #18 thread 3946842965): the delayed reopen callback scheduled by {@code
+     * onClose} (see {@link #registerCredentialGuiReopenTask(UUID, BukkitTask)}) checks this before
+     * opening another credential GUI, so a reopen queued before a credential change cannot stack a
+     * second GUI on top of one {@link #presentCredentialPrompt(Player)} already opened while the
+     * reopen was pending.
+     *
+     * @param playerUuid the player whose credential GUI just opened
+     */
+    public void markCredentialGuiOpen(UUID playerUuid) {
+        openCredentialGuiPlayers.add(playerUuid);
+    }
+
+    /**
+     * Clear the marker set by {@link #markCredentialGuiOpen(UUID)}, called from a credential GUI
+     * page's own {@code onClose} regardless of whether that close hook goes on to schedule a
+     * reopen -- the GUI genuinely is closing either way.
+     *
+     * @param playerUuid the player whose credential GUI just closed
+     */
+    public void markCredentialGuiClosed(UUID playerUuid) {
+        openCredentialGuiPlayers.remove(playerUuid);
+    }
+
+    /**
+     * Whether a player currently has a {@link LoginGUIPage} or {@link RegisterGUIPage} open --
+     * see {@link #markCredentialGuiOpen(UUID)}.
+     *
+     * @param playerUuid the player to check
+     * @return true if a credential GUI is currently open for this player
+     */
+    public boolean isCredentialGuiOpen(UUID playerUuid) {
+        return openCredentialGuiPlayers.contains(playerUuid);
+    }
+
+    /**
+     * Register the delayed reopen task a credential GUI's {@code onClose} just scheduled for a
+     * player, cancelling whatever task was previously registered for them (a stale reopen this
+     * new one supersedes).
+     * <p>
+     * Round 10 (Codex PR #18 thread 3946842965).
+     *
+     * @param playerUuid the player the reopen task was scheduled for
+     * @param task the task {@code Bukkit.getScheduler().runTaskLater(...)} returned
+     */
+    public void registerCredentialGuiReopenTask(UUID playerUuid, BukkitTask task) {
+        BukkitTask previous = pendingCredentialGuiReopenTasks.put(playerUuid, task);
+        if (previous != null && previous != task) {
+            previous.cancel();
+        }
+    }
+
+    /**
+     * Remove the pending-reopen registry entry for {@code playerUuid}, called by a queued
+     * reopen's own runnable once it actually fires (whether or not it goes on to reopen a GUI).
+     * <p>
+     * Unconditional, rather than a conditional remove keyed on the specific task removing itself:
+     * {@link #registerCredentialGuiReopenTask(UUID, BukkitTask)} always cancels whatever task was
+     * previously registered for a player before storing a new one, and a cancelled {@link
+     * BukkitTask} is guaranteed by the scheduler contract to never run -- so at most one
+     * registered task per player can ever actually reach this method. A conditional remove keyed
+     * on task identity would additionally require the caller to already hold a reference to the
+     * exact {@link BukkitTask} {@code Bukkit.getScheduler().runTaskLater(...)} returns from
+     * *inside* the very runnable that call schedules, which is only well-defined once the
+     * scheduling call has returned -- true for every real Bukkit scheduler (delayed tasks cannot
+     * run synchronously as part of the call that schedules them), but not for a test double that
+     * chooses to invoke the runnable inline as part of stubbing {@code runTaskLater} itself.
+     *
+     * @param playerUuid the player whose queued reopen task is removing itself
+     */
+    public void clearCredentialGuiReopenTask(UUID playerUuid) {
+        pendingCredentialGuiReopenTasks.remove(playerUuid);
+    }
+
+    /**
+     * Cancel and remove any credential-GUI reopen task currently queued for a player, without
+     * scheduling a replacement.
+     * <p>
+     * Round 10 (Codex PR #18 thread 3946842965): called from {@link
+     * LoginProtectionListener#presentCredentialPrompt} before it opens a fresh credential GUI, so
+     * a reopen a player's own GUI close queued before this credential change cannot fire later and
+     * stack a second GUI on top of the one this call is about to open.
+     *
+     * @param playerUuid the player whose queued reopen should be cancelled
+     */
+    public void cancelPendingCredentialGuiReopen(UUID playerUuid) {
+        BukkitTask task = pendingCredentialGuiReopenTasks.remove(playerUuid);
+        if (task != null) {
+            task.cancel();
+        }
     }
 
     /**

@@ -29,6 +29,7 @@ import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scheduler.BukkitScheduler;
 import org.bukkit.scheduler.BukkitTask;
 import org.junit.jupiter.api.*;
+import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.mockito.stubbing.Answer;
 
@@ -1016,6 +1017,143 @@ class LoginServiceTest {
                 assertThat(construction.constructed()).hasSize(1);
                 verify(construction.constructed().get(0)).open();
             }
+        }
+
+        @Test
+        @DisplayName("An admin password reset landing during a queued login-GUI reopen's delay"
+                + " cancels the queued reopen, so it never opens a second credential GUI over the"
+                + " one the reset's own prompt already opened (round 10, Codex PR #18 thread"
+                + " 3946842965)")
+        void adminResetDuringQueuedReopenDelayCancelsTheQueuedReopenAndOpensExactlyOneGui() throws Exception {
+            when(config.isGuiModeEnabled()).thenReturn(true);
+            when(config.getGuiLoginTitle()).thenReturn("&aLogin");
+
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            // Reset password does not delete the account -- isRegistered(uuid) must keep seeing
+            // it, both from presentCredentialPrompt's GUI-type choice and from the queued
+            // reopen's own state re-check, exactly as it would for the real bug this reproduces.
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            // The GUI the player currently has open, closed for an unrelated reason (not a
+            // credential change) -- constructed directly, not via .open(), matching this module's
+            // established "does not test open()/InventoryAPI rendering" convention.
+            com.ultikits.plugins.login.gui.LoginGUIPage openLoginGui =
+                    new com.ultikits.plugins.login.gui.LoginGUIPage(
+                            player, UltiLoginTestHelper.getMockPlugin(), service);
+
+            BukkitTask queuedTask = mock(BukkitTask.class);
+
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class);
+                 MockedStatic<com.ultikits.plugins.login.gui.LoginGUIPage> loginGui =
+                         mockStatic(com.ultikits.plugins.login.gui.LoginGUIPage.class)) {
+
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+
+                BukkitScheduler fakeScheduler = mock(BukkitScheduler.class);
+                // Capture the reopen the player-initiated close schedules, without running it --
+                // this is the queued task an admin reset landing during its delay must supersede.
+                doReturn(queuedTask).when(fakeScheduler)
+                        .runTaskLater(any(Plugin.class), any(Runnable.class), eq(10L));
+                // The reset's own credential-prompt dispatch (and applyNoSessionProtections) runs
+                // via runTask (dispatchOnMainThread); run it inline like this class's other tests.
+                doAnswer(invocation -> {
+                    Runnable runnable = invocation.getArgument(1);
+                    runnable.run();
+                    return mock(BukkitTask.class);
+                }).when(fakeScheduler).runTask(any(Plugin.class), any(Runnable.class));
+                bukkitMock.when(Bukkit::getScheduler).thenReturn(fakeScheduler);
+
+                // Simulate LoginGUIPage.open() actually opening a GUI: mark the player as having
+                // a credential GUI open, matching this page's real onOpen() side effect (onOpen()
+                // itself never runs here since the static open() method is mocked).
+                loginGui.when(() -> com.ultikits.plugins.login.gui.LoginGUIPage.open(
+                                eq(player), eq(UltiLoginTestHelper.getMockPlugin()), eq(service)))
+                        .thenAnswer(invocation -> {
+                            service.markCredentialGuiOpen(playerUuid);
+                            return null;
+                        });
+
+                // t=0: the player closes LoginGUIPage for an unrelated reason -- the close hook
+                // schedules a reopen 10 ticks later.
+                openLoginGui.onClose(mock(InventoryCloseEvent.class));
+
+                // t=5 (within the queued reopen's delay): an admin resets the password.
+                String newPassword = service.resetPassword(playerUuid);
+                assertThat(newPassword).isNotNull();
+
+                // The reset's own credential prompt opened exactly one GUI.
+                loginGui.verify(() -> com.ultikits.plugins.login.gui.LoginGUIPage.open(
+                        player, UltiLoginTestHelper.getMockPlugin(), service), times(1));
+
+                // t=10: even if the queued task's runnable still ran despite the cancellation
+                // below, its own fresh guard checks (isCredentialGuiOpen) must refuse to stack a
+                // second GUI on top of the one the reset already opened.
+                ArgumentCaptor<Runnable> reopenCaptor = ArgumentCaptor.forClass(Runnable.class);
+                verify(fakeScheduler).runTaskLater(any(Plugin.class), reopenCaptor.capture(), eq(10L));
+                reopenCaptor.getValue().run();
+
+                loginGui.verify(() -> com.ultikits.plugins.login.gui.LoginGUIPage.open(
+                        player, UltiLoginTestHelper.getMockPlugin(), service), times(1));
+            }
+
+            verify(queuedTask, description("the reopen queued before the reset must be cancelled,"
+                    + " or it would open a second credential GUI over the one the reset's own"
+                    + " prompt just opened"))
+                    .cancel();
+        }
+
+        @Test
+        @DisplayName("Without an intervening credential change, the queued login-GUI reopen"
+                + " still fires normally after its delay, and removes its own bookkeeping so a"
+                + " later, unrelated reopen cannot be spuriously cancelled by a stale entry"
+                + " (round 10, Codex PR #18 thread 3946842965)")
+        void queuedReopenStillFiresNormallyAndSelfClearsItsBookkeeping() throws Exception {
+            when(config.isGuiModeEnabled()).thenReturn(true);
+            when(config.getGuiLoginTitle()).thenReturn("&aLogin");
+
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+
+            com.ultikits.plugins.login.gui.LoginGUIPage openLoginGui =
+                    new com.ultikits.plugins.login.gui.LoginGUIPage(
+                            player, UltiLoginTestHelper.getMockPlugin(), service);
+
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+
+            // Unlike this class's other onClose regression test, does NOT run the scheduled
+            // runnable inline as part of stubbing runTaskLater -- real Bukkit always returns from
+            // runTaskLater before a delayed runnable can fire, and this test specifically checks
+            // bookkeeping (registerCredentialGuiReopenTask must run, and only then can the
+            // runnable's own clearCredentialGuiReopenTask self-clear see it) whose correctness
+            // depends on that ordering.
+            BukkitScheduler fakeScheduler = spy(server.getScheduler());
+            doReturn(mock(BukkitTask.class)).when(fakeScheduler)
+                    .runTaskLater(any(Plugin.class), any(Runnable.class), anyLong());
+            doReturn(fakeScheduler).when(server).getScheduler();
+
+            try (org.mockito.MockedConstruction<com.ultikits.plugins.login.gui.LoginGUIPage> construction =
+                         mockConstruction(com.ultikits.plugins.login.gui.LoginGUIPage.class)) {
+
+                openLoginGui.onClose(mock(InventoryCloseEvent.class));
+
+                ArgumentCaptor<Runnable> reopenCaptor = ArgumentCaptor.forClass(Runnable.class);
+                verify(fakeScheduler).runTaskLater(any(Plugin.class), reopenCaptor.capture(), eq(10L));
+                reopenCaptor.getValue().run();
+
+                assertThat(construction.constructed()).hasSize(1);
+                verify(construction.constructed().get(0)).open();
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<UUID, BukkitTask> pending =
+                    (Map<UUID, BukkitTask>) getFieldValue(service, "pendingCredentialGuiReopenTasks");
+            assertThat(pending)
+                    .as("the fired reopen task must remove itself from the pending-reopen"
+                            + " registry, or a later, unrelated reopen for this player could be"
+                            + " spuriously cancelled by this stale entry")
+                    .doesNotContainKey(playerUuid);
         }
     }
 
