@@ -3,8 +3,6 @@
 
 # ==================== System Messages ====================
 login_enabled: "UltiLogin has been enabled!"
-login_disabled: "UltiLogin has been disabled!"
-login_reloaded: "UltiLogin configuration has been reloaded!"
 
 # ==================== Login/Register Messages ====================
 login_success: "Login successful! Welcome back!"

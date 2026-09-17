@@ -3,8 +3,6 @@
 
 # ==================== 系统消息 ====================
 login_enabled: "UltiLogin 已启用！"
-login_disabled: "UltiLogin 已禁用！"
-login_reloaded: "UltiLogin 配置已重载！"
 
 # ==================== 登录/注册消息 ====================
 login_success: "登录成功！欢迎回来！"
