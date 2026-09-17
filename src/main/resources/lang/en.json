@@ -1,7 +1,5 @@
 {
   "login_enabled": "UltiLogin has been enabled!",
-  "login_disabled": "UltiLogin has been disabled!",
-  "login_reloaded": "UltiLogin configuration has been reloaded!",
 
   "login_success": "Login successful! Welcome back!",
   "register_success": "Registration successful! Welcome to the server!",

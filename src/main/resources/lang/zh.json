@@ -1,7 +1,5 @@
 {
   "login_enabled": "UltiLogin 已启用！",
-  "login_disabled": "UltiLogin 已禁用！",
-  "login_reloaded": "UltiLogin 配置已重载！",
 
   "login_success": "登录成功！欢迎回来！",
   "register_success": "注册成功！欢迎加入服务器！",
