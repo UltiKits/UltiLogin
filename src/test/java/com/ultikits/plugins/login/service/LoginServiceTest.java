@@ -9,7 +9,6 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.Query;
-import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.utils.CommonUtils;
 import com.ultikits.ultitools.utils.SimpleHttpClient;
@@ -1627,10 +1626,6 @@ class LoginServiceTest {
                 }
                 return RETURNS_DEFAULTS.answer(invocation);
             });
-            PluginLogger logger = mock(PluginLogger.class);
-            when(realPlugin.getLogger()).thenReturn(logger);
-            when(realPlugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
-
             LoginConfig realConfig = new LoginConfig();
             ConfigManager realConfigManager = new ConfigManager();
             // Mirrors ConfigManager.registerAll's own addConfigEntity(): init() runs against the
