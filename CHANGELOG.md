@@ -9,15 +9,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Unloading this module (`/upm uninstall UltiLogin`, or server shutdown) now unregisters its
-  commands (`/login`, `/register`, `/changepassword`, `/logadmin`, `/recover`, `/regs`, `/panel`).
-  Previously this module replaced the framework's unload method with one that only logged a line, so
-  command unregistration was skipped on both paths, and `/upm uninstall` also skipped unregistering
-  its `LoginProtectionListener` (UltiKits/UltiLogin#29).
-- 卸载本模块（`/upm uninstall UltiLogin` 或关闭服务器）现在会注销其命令（`/login`、`/register`、
-  `/changepassword`、`/logadmin`、`/recover`、`/regs`、`/panel`）。此前本模块用一个只打印日志的方法替换了
-  框架的卸载方法，因此两条路径都跳过了命令注销，`/upm uninstall` 还跳过了 `LoginProtectionListener`
-  监听器的注销（UltiKits/UltiLogin#29）。
+- After `/upm uninstall UltiLogin`, this module's commands (`/login`, `/register`,
+  `/changepassword`, `/logadmin`, `/recover`, `/regs`, `/panel`) are now really removed and its
+  `LoginProtectionListener` stops firing. Previously this module replaced the framework's unload
+  method with one that only logged a line, so both stayed active until the server restarted
+  (UltiKits/UltiLogin#29).
+- 执行 `/upm uninstall UltiLogin` 后，本模块的命令（`/login`、`/register`、`/changepassword`、
+  `/logadmin`、`/recover`、`/regs`、`/panel`）现在会被真正移除，其 `LoginProtectionListener` 监听器也不再
+  触发。此前本模块用一个只打印日志的方法替换了框架的卸载方法，因此两者都会一直保持生效，直到服务器重启
+  （UltiKits/UltiLogin#29）。
 
 ### Removed
 
