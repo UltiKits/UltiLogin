@@ -1,14 +1,14 @@
 package com.ultikits.plugins.login;
 
-import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
-import com.ultikits.ultitools.manager.ConfigManager;
 
 import org.junit.jupiter.api.*;
-import org.mockito.MockedStatic;
+
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 @DisplayName("UltiLogin Main Class Tests")
@@ -34,65 +34,38 @@ class UltiLoginTest {
         verify(logger).info("UltiLogin enabled");
     }
 
-    @Test
-    @DisplayName("unregisterSelf should log message")
-    void unregisterSelf() throws Exception {
-        UltiLogin plugin = mock(UltiLogin.class);
-        PluginLogger logger = mock(PluginLogger.class);
-        when(plugin.getLogger()).thenReturn(logger);
-        when(plugin.i18n(anyString())).thenReturn("UltiLogin disabled");
-        doCallRealMethod().when(plugin).unregisterSelf();
+    /**
+     * UltiKits/UltiLogin#29: UltiTools 6.3.0 makes {@code unregisterSelf()} and
+     * {@code reloadSelf()} {@code final} template methods. This module's two overrides only
+     * logged a line (the reload one after calling the framework's own reload, UltiLogin#13), so
+     * both are deleted rather than renamed to a hook: unload and reload are performed entirely by
+     * the framework's final methods, and the reload one is what re-reads {@code login.yml} into
+     * {@code LoginConfig}. Neither template method may be declared here, and no hook is needed.
+     */
+    @Nested
+    @DisplayName("Lifecycle template methods (UltiKits/UltiLogin#29)")
+    class LifecycleTemplateMethods {
 
-        plugin.unregisterSelf();
-
-        verify(logger).info("UltiLogin disabled");
-    }
-
-    @Test
-    @DisplayName("reloadSelf should log message")
-    void reloadSelf() throws Exception {
-        UltiLogin plugin = mock(UltiLogin.class);
-        PluginLogger logger = mock(PluginLogger.class);
-        when(plugin.getLogger()).thenReturn(logger);
-        when(plugin.i18n(anyString())).thenReturn("UltiLogin reloaded");
-        doCallRealMethod().when(plugin).reloadSelf();
-
-        ConfigManager mockConfigManager = mock(ConfigManager.class);
-        try (MockedStatic<UltiToolsPlugin> staticMock =
-                mockStatic(UltiToolsPlugin.class, CALLS_REAL_METHODS)) {
-            staticMock.when(UltiToolsPlugin::getConfigManager).thenReturn(mockConfigManager);
-
-            plugin.reloadSelf();
+        @Test
+        @DisplayName("declares neither framework template method, unregisterSelf() nor reloadSelf()")
+        void declaresNoTemplateMethodOverride() {
+            assertThat(declaredMethodNames())
+                    .doesNotContain("unregisterSelf", "reloadSelf");
         }
 
-        verify(logger).info("UltiLogin reloaded");
-    }
+        @Test
+        @DisplayName("declares no onUnregister() or onReload() hook, because both overrides were log-only")
+        void declaresNoLifecycleHook() {
+            assertThat(declaredMethodNames())
+                    .doesNotContain("onUnregister", "onReload");
+        }
 
-    /**
-     * UltiLogin#13 (13-13): {@code reloadSelf()} used to log a success message without ever
-     * calling {@code super.reloadSelf()}, so {@code ConfigManager.reloadConfigs(this)} -- the
-     * only thing that re-reads {@code login.yml} into a running {@code LoginConfig} -- was never
-     * invoked. This is the direct regression guard at the bug's own site: it is RED against the
-     * pre-fix override (0 invocations measured in 13-LEDGER-UltiLogin.md's "Recovery command
-     * diagnosis" instrument 2) and GREEN once {@code reloadSelf()} calls {@code super.reloadSelf()}.
-     */
-    @Test
-    @DisplayName("reloadSelf should reach ConfigManager.reloadConfigs so login.yml is actually re-read")
-    void reloadSelfReachesConfigManager() throws Exception {
-        UltiLogin plugin = mock(UltiLogin.class);
-        PluginLogger logger = mock(PluginLogger.class);
-        when(plugin.getLogger()).thenReturn(logger);
-        when(plugin.i18n(anyString())).thenReturn("UltiLogin reloaded");
-        doCallRealMethod().when(plugin).reloadSelf();
-
-        ConfigManager mockConfigManager = mock(ConfigManager.class);
-        try (MockedStatic<UltiToolsPlugin> staticMock =
-                mockStatic(UltiToolsPlugin.class, CALLS_REAL_METHODS)) {
-            staticMock.when(UltiToolsPlugin::getConfigManager).thenReturn(mockConfigManager);
-
-            plugin.reloadSelf();
-
-            verify(mockConfigManager).reloadConfigs(plugin);
+        private List<String> declaredMethodNames() {
+            List<String> names = new ArrayList<>();
+            for (Method method : UltiLogin.class.getDeclaredMethods()) {
+                names.add(method.getName());
+            }
+            return names;
         }
     }
 }
