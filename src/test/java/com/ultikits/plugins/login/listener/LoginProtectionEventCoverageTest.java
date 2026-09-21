@@ -10,8 +10,10 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.Cancellable;
 import org.bukkit.event.Event;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.block.SignChangeEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.PlayerArmorStandManipulateEvent;
+import org.bukkit.event.player.PlayerEditBookEvent;
 import org.bukkit.event.player.PlayerInteractAtEntityEvent;
 import org.bukkit.event.player.PlayerSwapHandItemsEvent;
 import org.junit.jupiter.api.AfterEach;
@@ -85,6 +87,16 @@ import static org.mockito.Mockito.when;
  * that can only follow it, and cancelling {@code InventoryOpenEvent} already stops every container
  * event that needs an open container ({@code TradeSelectEvent}, anvil rename, and so on).
  *
+ * <p><strong>Two entries are in the set defensively, not because a bypass was observed.</strong>
+ * {@code PlayerEditBookEvent} and {@code SignChangeEvent} each arrive on their own client packet
+ * with their own {@code HandlerList}. Whether an unauthenticated player can reach either depends on
+ * whether the client opens those editors only after a server packet that itself follows an
+ * uncancelled {@code PlayerInteractEvent} — a chain that could not be measured here, only reasoned
+ * about. Rather than ship the reasoning, both are covered: if the chain holds, two handlers are
+ * unreachable code in a security net and cost nothing; if it does not, an unauthenticated player
+ * edits a book or a sign, which is the bypass class #24 exists to close. Do not read their presence
+ * here as evidence that either bypass exists.
+ *
  * <h2>Events this listener deliberately does not cover</h2>
  *
  * See {@link #DELIBERATELY_UNCOVERED}. Each entry carries the reason, and {@link
@@ -113,6 +125,8 @@ class LoginProtectionEventCoverageTest {
                     "org.bukkit.event.inventory.InventoryDragEvent",
                     "org.bukkit.event.inventory.InventoryOpenEvent",
                     "org.bukkit.event.player.PlayerSwapHandItemsEvent",
+                    "org.bukkit.event.player.PlayerEditBookEvent",
+                    "org.bukkit.event.block.SignChangeEvent",
                     "org.bukkit.event.entity.EntityDamageByEntityEvent")));
 
     /**
@@ -586,6 +600,56 @@ class LoginProtectionEventCoverageTest {
             when(event.getPlayer()).thenReturn(player);
 
             dispatch(PlayerSwapHandItemsEvent.class, event);
+
+            verify(event, never()).setCancelled(anyBoolean());
+        }
+
+        @Test
+        @DisplayName("Should cancel signing or editing a book for an unauthenticated player "
+                + "(covered defensively -- see this class's javadoc)")
+        void cancelsBookEdit() {
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+            PlayerEditBookEvent event = mock(PlayerEditBookEvent.class);
+            when(event.getPlayer()).thenReturn(player);
+
+            dispatch(PlayerEditBookEvent.class, event);
+
+            verify(event).setCancelled(true);
+        }
+
+        @Test
+        @DisplayName("Should not cancel editing a book once the player is authenticated")
+        void allowsBookEditWhenLoggedIn() {
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(true);
+            PlayerEditBookEvent event = mock(PlayerEditBookEvent.class);
+            when(event.getPlayer()).thenReturn(player);
+
+            dispatch(PlayerEditBookEvent.class, event);
+
+            verify(event, never()).setCancelled(anyBoolean());
+        }
+
+        @Test
+        @DisplayName("Should cancel writing a sign for an unauthenticated player "
+                + "(covered defensively -- see this class's javadoc)")
+        void cancelsSignChange() {
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+            SignChangeEvent event = mock(SignChangeEvent.class);
+            when(event.getPlayer()).thenReturn(player);
+
+            dispatch(SignChangeEvent.class, event);
+
+            verify(event).setCancelled(true);
+        }
+
+        @Test
+        @DisplayName("Should not cancel writing a sign once the player is authenticated")
+        void allowsSignChangeWhenLoggedIn() {
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(true);
+            SignChangeEvent event = mock(SignChangeEvent.class);
+            when(event.getPlayer()).thenReturn(player);
+
+            dispatch(SignChangeEvent.class, event);
 
             verify(event, never()).setCancelled(anyBoolean());
         }
