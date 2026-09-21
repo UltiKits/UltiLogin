@@ -16,10 +16,12 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.block.SignChangeEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.*;
 
@@ -27,6 +29,80 @@ import java.util.UUID;
 
 /**
  * Listener for login protection.
+ *
+ * <h2>Why each blocked interaction needs its own handler</h2>
+ *
+ * Bukkit registers and delivers an event on the {@code HandlerList} of its <em>registration
+ * class</em> — the nearest class, starting at the event's own class and walking up, that
+ * <em>declares</em> a static {@code getHandlerList()}. A subclass declaring its own
+ * {@code HandlerList} therefore has a separate dispatch list, and a handler registered for the
+ * superclass never receives it.
+ * <p>
+ * That is what UltiKits/UltiLogin#24 reported: an unauthenticated player could still equip an item
+ * onto an armor stand even though {@link PlayerInteractEntityEvent} was handled. Measured in the
+ * {@code paper-api} this module compiles against (1.21.11-R0.1-SNAPSHOT, {@code javap -p}):
+ * {@link PlayerInteractEntityEvent}, {@link PlayerInteractAtEntityEvent} and
+ * {@link PlayerArmorStandManipulateEvent} each declare their own {@code HANDLER_LIST}, and the
+ * latter two extend {@link PlayerInteractEntityEvent} <em>directly</em> — they are siblings, not a
+ * chain. So covering only the interact-at event (which #24's suggested fix named) would still not
+ * have covered the armor-stand event itself.
+ * <p>
+ * Because that gap cannot be seen by reading this class, the set of events an unauthenticated player
+ * must not act through is declared as data in
+ * {@code LoginProtectionEventCoverageTest}, which asserts this listener against it and fails when a
+ * future {@code paper-api} adds a new diverted subclass of anything handled here. Add a handler
+ * below and the entry there together.
+ *
+ * <h2>Sibling listener</h2>
+ *
+ * {@link LoginProtectionPaperListener} carries the handlers for events in Paper's own namespaces, kept
+ * in a separate class on purpose. That class's javadoc has the measurement: one handler whose parameter
+ * type is missing at runtime empties the <em>whole</em> listener's handler map, so isolating the
+ * Paper-only events bounds that failure to them. Both classes are in the coverage contract's
+ * {@code PROTECTION_LISTENERS}, so it does not matter to the tests which file a handler lives in.
+ *
+ * <h2>One event covered defensively</h2>
+ *
+ * {@link #onInventoryDrag} is here even though no reachable bypass was demonstrated for it: an
+ * unreachable handler in a security net costs nothing, while a wrong premise costs a bypass.
+ * <strong>Its presence is not evidence that the bypass existed.</strong> Its javadoc records what
+ * was and was not measured.
+ * <p>
+ * {@link #onSignChange} and {@link #onPlayerEditBook} were both in this group until their premises
+ * were measured and disproved — {@code onSignChange} by gate 1's {@code PLUGIN} sign-open finding,
+ * {@code onPlayerEditBook} by the wave-1 real-machine run of
+ * {@code ultilogin.protection.world-interaction-block}. Both are load-bearing, each is the only
+ * thing refusing its write, and neither may be deleted as unreachable. See their own javadoc.
+ *
+ * <h2>Priority, and who gets the last word</h2>
+ *
+ * Every handler here runs at {@link EventPriority#LOWEST} with no {@code ignoreCancelled}, which is
+ * this class's long-standing convention and is deliberate: it lets another plugin see these events
+ * after this listener and make its own decision. The consequence, recorded so it is not a surprise, is
+ * that a plugin listening at {@code HIGH}/{@code HIGHEST} can call {@code setCancelled(false)} and
+ * undo any protection here (gate 1 IN-08). Raising the priority would stop that, but would also start
+ * overriding other plugins' deliberate allowances, so it is not changed unilaterally.
+ *
+ * <h2>Events deliberately left uncovered</h2>
+ *
+ * Three subclasses of events handled here declare their own {@code HandlerList} and are left
+ * uncovered on purpose. The same three, with the same reasons, are listed in that test's
+ * {@code DELIBERATELY_UNCOVERED} map:
+ * <ul>
+ *   <li>{@link PlayerTeleportEvent} — this module teleports unauthenticated players itself
+ *   ({@code LoginService#applyNoSessionProtections} sends them to the configured spawn while still
+ *   unauthenticated, recording the original location to restore on login). Cancelling teleports for
+ *   unauthenticated players would break this module's own spawn protection, and would stop an
+ *   operator rescuing a stuck player with {@code /tp}. A teleport is not player-initiated world
+ *   mutation, and {@link #onPlayerMove} already freezes walking.</li>
+ *   <li>{@link PlayerPortalEvent} — a subclass of {@link PlayerTeleportEvent}, excluded for that
+ *   reason plus one of its own: with movement frozen, the only way to reach it is having quit inside
+ *   a portal block, where cancelling it would trap the player until they log in from inside the
+ *   portal.</li>
+ *   <li>{@code AsyncPlayerChatPreviewEvent} — a preview renders text and mutates no world or
+ *   inventory state. Chat itself is already cancelled by {@link #onPlayerChat}, and the class is
+ *   {@code @Deprecated} in {@code paper-api} 1.21.11.</li>
+ * </ul>
  *
  * @author wisdomme
  * @version 1.1.0
@@ -128,6 +204,41 @@ public class LoginProtectionListener implements Listener {
         }
     }
     
+    /**
+     * Cancel an inventory drag for an unauthenticated player.
+     * <p>
+     * Found by the same sweep as UltiKits/UltiLogin#24, and justified on the same structural ground:
+     * {@link InventoryDragEvent} is a sibling of {@link InventoryClickEvent} — both extend
+     * {@code InventoryInteractEvent} and both declare their own {@code HandlerList} — so
+     * {@link #onInventoryClick} never receives a drag, and a drag moves items.
+     * <p>
+     * <strong>Covered defensively: no reachable drag bypass was demonstrated.</strong> An earlier
+     * revision of this javadoc, and of the changelog entry, implied one was live. Gate 1 (WR-05)
+     * measured otherwise, and the measurement points the other way on both branches. A meaningful
+     * drag needs a non-empty cursor, and the only way to load the cursor is a pick-up click: with
+     * {@code gui-mode.enabled: false} (the shipped default) {@link #onInventoryClick} refuses every
+     * click, so the cursor can never be loaded; with it {@code true} the click is allowed inside the
+     * credential GUI, but obliviate-invs cancels <em>every</em> drag while one of its GUIs is open
+     * ({@code InvListener#onDrag} is {@code setCancelled(!gui.onDrag(event))} and the default
+     * {@code onDrag} returns {@code false}). So it is refused explicitly rather than left resting on
+     * the expectation that the click guard and a third-party library make it unreachable. It is now
+     * the only handler here in that register: {@link #onPlayerEditBook} was its peer until the
+     * wave-1 real-machine run measured that premise and disproved it.
+     * <p>
+     * Unlike {@link #onInventoryClick} this deliberately does <em>not</em> mirror the credential-GUI
+     * title allowance. A drag cannot enter a digit into {@code LoginGUIPage}/{@code RegisterGUIPage},
+     * so allowing it buys no functionality; and because the credential GUI's view includes the
+     * player's own inventory rows, allowing drags there would let an unauthenticated player
+     * rearrange their items and push stacks toward the GUI's container slots. Cancelling
+     * unconditionally is both simpler and strictly safer.
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onInventoryDrag(InventoryDragEvent event) {
+        if (event.getWhoClicked() instanceof Player) {
+            cancelIfNotLoggedIn((Player) event.getWhoClicked(), event);
+        }
+    }
+
     @EventHandler(priority = EventPriority.LOWEST)
     public void onInventoryOpen(InventoryOpenEvent event) {
         if (event.getPlayer() instanceof Player) {
@@ -151,7 +262,135 @@ public class LoginProtectionListener implements Listener {
     public void onPlayerInteractEntity(PlayerInteractEntityEvent event) {
         cancelIfNotLoggedIn(event.getPlayer(), event);
     }
-    
+
+    /**
+     * Cancel a precise-position entity interaction ("interact at") for an unauthenticated player.
+     * <p>
+     * {@link PlayerInteractAtEntityEvent} extends {@link PlayerInteractEntityEvent} but declares its
+     * own {@code HandlerList}, so {@link #onPlayerInteractEntity} never receives it
+     * (UltiKits/UltiLogin#24 — see this class's javadoc for the dispatch rule).
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onPlayerInteractAtEntity(PlayerInteractAtEntityEvent event) {
+        cancelIfNotLoggedIn(event.getPlayer(), event);
+    }
+
+    /**
+     * Cancel armor-stand equipping and un-equipping for an unauthenticated player — the interaction
+     * UltiKits/UltiLogin#24 was reported against.
+     * <p>
+     * {@link PlayerArmorStandManipulateEvent} is a sibling of {@link PlayerInteractAtEntityEvent},
+     * not a subclass of it: both extend {@link PlayerInteractEntityEvent} directly and both declare
+     * their own {@code HandlerList}. Cancelling the interact-at event above therefore does not make
+     * this handler redundant — it would only stop the equip when the server happens to fire
+     * interact-at first, which is a behavioural assumption about the server rather than a structural
+     * guarantee. This handler is what closes the reported hole.
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onPlayerArmorStandManipulate(PlayerArmorStandManipulateEvent event) {
+        cancelIfNotLoggedIn(event.getPlayer(), event);
+    }
+
+    /**
+     * Cancel an off-hand swap for an unauthenticated player.
+     * <p>
+     * Found by the same sweep as #24, and the same shape of hole: the swap arrives as its own client
+     * intent with its own {@code HandlerList}, and is not preceded by any event this listener
+     * handles — no {@link PlayerInteractEvent}, no {@link InventoryClickEvent} — so nothing else here
+     * stops an unauthenticated player rearranging their hands.
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onPlayerSwapHandItems(PlayerSwapHandItemsEvent event) {
+        cancelIfNotLoggedIn(event.getPlayer(), event);
+    }
+
+    /**
+     * Cancel writing or signing a book for an unauthenticated player.
+     * <p>
+     * <strong>This handler is load-bearing — do not delete it as unreachable.</strong> An earlier
+     * revision of this javadoc called it defensive, on the premise that the client opens the book
+     * editor only after a server packet following an uncancelled {@link PlayerInteractEvent}, so
+     * that {@link #onPlayerInteract} would already have stopped everything downstream. The wave-1
+     * real-machine run of {@code ultilogin.protection.world-interaction-block} measured that
+     * premise and it is false: an unauthenticated player right-clicking a writable book at air
+     * <em>does</em> get the editor, and the edit packet then arrives at the server on its own.
+     * <p>
+     * Three measurements on the server that ran it (Paper 1.21.11, mojang-mapped, {@code javap -c}):
+     * <ul>
+     *   <li>{@code Player#openItemGui(ItemStack, InteractionHand)} — the only thing
+     *   {@code WritableBookItem#use} calls to open the editor — has an empty body on the server
+     *   ({@code 0: return}). The screen is opened by the client's own override during its local
+     *   prediction of item use, so the server neither opens it, sends it, nor observes it, and
+     *   cancelling {@link PlayerInteractEvent} cannot suppress it. There is also no book-editor-open
+     *   event to cancel: {@code paper-api} 1.21.11 carries seven book events (recipe book, lectern,
+     *   and this one) and none of them is an "editor opened" — unlike signs, which have
+     *   {@code PlayerOpenSignEvent}, which is why {@link LoginProtectionPaperListener#onPlayerOpenSign}
+     *   can prevent that editor and nothing can prevent this one.</li>
+     *   <li>{@code ServerGamePacketListenerImpl#handleEditBook} reaches
+     *   {@code CraftEventFactory#handleEditBookEvent} — which fires this event unconditionally —
+     *   for a plain writable book in a hotbar slot. Its three earlier refusal sites were all
+     *   excluded by the recorded state of the run: the book-size and rate-limit checks disconnect
+     *   the player rather than refusing silently (the player stayed connected), and the
+     *   {@code isHotbarSlot(slot) || slot == 40} check passed because the book was in hotbar slot 2.
+     *   {@code signBook}'s own {@code has(WRITABLE_BOOK_CONTENT)} guard passes too:
+     *   {@code Items.WRITABLE_BOOK} registers that component as a <em>default</em>, and
+     *   {@code PatchedDataComponentMap#get} falls back to the prototype when the patch has no entry,
+     *   so it is present on a book with no NBT at all.</li>
+     *   <li>On cancellation {@code handleEditBookEvent} skips the write entirely and calls
+     *   {@code containerMenu.forceSlot(...)} to resync the slot — which is exactly what the run
+     *   observed: the book came back {@code writable_book}, count 1, with no text component.</li>
+     * </ul>
+     * So this handler is the <em>only</em> thing refusing that write. It was also the only handler
+     * on this event anywhere in that deployment (all 22 installed plugin jars scanned, nested jars
+     * included; {@code PlayerEditBookEvent} appears in this class and nowhere else).
+     * <p>
+     * The client-side editor opening is a documented limitation, not a defect — see the
+     * {@code ultilogin.protection.world-interaction-block} rows in {@code FEATURES.md} and
+     * {@code UAT-CHECKLIST.md}. <strong>Do not try to close it with a client-side suppression</strong>;
+     * there is no server-side hook to hang one on.
+     * <p>
+     * {@link PlayerEditBookEvent} declares its own {@code HandlerList} and is not a subclass of
+     * anything else handled here, so it is a separate client-intent entry point rather than an
+     * instance of #24's diverted-subclass shape.
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onPlayerEditBook(PlayerEditBookEvent event) {
+        cancelIfNotLoggedIn(event.getPlayer(), event);
+    }
+
+    /**
+     * Cancel writing a sign for an unauthenticated player.
+     * <p>
+     * <strong>This handler is load-bearing — do not delete it as unreachable.</strong> An earlier
+     * revision of this javadoc called it defensive, on the premise that a sign editor only ever opens
+     * after an uncancelled {@link PlayerInteractEvent} or
+     * {@link org.bukkit.event.block.BlockPlaceEvent}. Gate 1 (WR-06) measured that premise and it is
+     * false: {@link org.bukkit.event.player.PlayerSignOpenEvent}'s {@code Cause} enum has four
+     * constants — {@code INTERACT}, {@code PLACE}, <strong>{@code PLUGIN}</strong> and
+     * {@code UNKNOWN} — and {@code HumanEntity#openSign(Sign, Side)} is public API
+     * ("Opens an editor window for the specified sign"). {@code INTERACT} and {@code PLACE} are both
+     * already refused here; {@code PLUGIN} is not, and cannot be, because it follows no player
+     * interaction at all. So any co-installed plugin that opens a sign editor for a joining player
+     * reaches this event, and this handler is the only thing refusing the write.
+     * <p>
+     * {@link LoginProtectionPaperListener#onPlayerOpenSign} refuses the editor at the point it opens;
+     * the two are complementary rather than redundant — that one prevents, this one is the backstop.
+     * <p>
+     * {@code SignChangeEvent#getPlayer()} is annotated {@code @NotNull}, so the null branch below
+     * should be unreachable. It is there anyway because the annotation is not enforced at runtime and
+     * the wrong side of that bet is fail-open: an exception thrown out of a handler is logged and
+     * swallowed by Bukkit, leaving the event <em>uncancelled</em> (gate 1 IN-09).
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onSignChange(SignChangeEvent event) {
+        Player player = event.getPlayer();
+        if (player == null) {
+            event.setCancelled(true);
+            return;
+        }
+        cancelIfNotLoggedIn(player, event);
+    }
+
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerDropItem(PlayerDropItemEvent event) {
         cancelIfNotLoggedIn(event.getPlayer(), event);
