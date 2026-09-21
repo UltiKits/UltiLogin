@@ -106,6 +106,19 @@ public class LoginProtectionPaperListener implements Listener {
      * This is the front half of the sign protection; {@link LoginProtectionListener#onSignChange} is
      * the back half. Neither is redundant: the {@code PLUGIN} cause means another plugin can open a
      * sign editor without any player interaction, so the write has to be refused too.
+     * <p>
+     * <strong>Known limitation, deliberate — do not "fix" it by adding a second handler.</strong> The
+     * API also carries {@code org.bukkit.event.player.PlayerSignOpenEvent}, an <em>unrelated sibling</em>
+     * of this event: both extend {@code PlayerEvent} directly and each declares its own
+     * {@code HandlerList}, so a handler for one is never delivered the other. Which of the two a real
+     * server dispatches on a plugin-initiated open is <em>not established</em>, and the {@code org.bukkit}
+     * one is {@code @Deprecated(forRemoval = true)} — so a handler for it would be a standing dependency
+     * on a class whose removal empties this whole listener's handler map (see this class's own javadoc for
+     * that measurement), possibly for an event that never fires. A declared protection that does not
+     * execute is the defect class this work exists to remove. If a server does dispatch that type, the
+     * editor opens for an unauthenticated player and {@link LoginProtectionListener#onSignChange} still
+     * refuses the write, so no sign text is written either way. Deferred pending the measurement in
+     * {@code UltiKits/UltiLogin#36}.
      */
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerOpenSign(PlayerOpenSignEvent event) {
