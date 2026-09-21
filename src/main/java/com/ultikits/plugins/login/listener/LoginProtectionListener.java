@@ -53,13 +53,33 @@ import java.util.UUID;
  * future {@code paper-api} adds a new diverted subclass of anything handled here. Add a handler
  * below and the entry there together.
  *
+ * <h2>Sibling listener</h2>
+ *
+ * {@link LoginProtectionPaperListener} carries the handlers for events in Paper's own namespaces, kept
+ * in a separate class on purpose. That class's javadoc has the measurement: one handler whose parameter
+ * type is missing at runtime empties the <em>whole</em> listener's handler map, so isolating the
+ * Paper-only events bounds that failure to them. Both classes are in the coverage contract's
+ * {@code PROTECTION_LISTENERS}, so it does not matter to the tests which file a handler lives in.
+ *
  * <h2>Two events covered defensively</h2>
  *
- * {@link #onPlayerEditBook} and {@link #onSignChange} are in the set because the premise that would
- * justify leaving them out — that the client opens those editors only after a server packet
- * following an uncancelled {@link PlayerInteractEvent} — could not be measured when #24 was fixed.
- * An unreachable handler in a security net costs nothing; a wrong premise costs a bypass. Their
- * presence is not evidence that either bypass exists.
+ * {@link #onPlayerEditBook} and {@link #onInventoryDrag} are here even though no reachable bypass was
+ * demonstrated for either: an unreachable handler in a security net costs nothing, while a wrong
+ * premise costs a bypass. <strong>Their presence is not evidence that either bypass existed.</strong>
+ * Each javadoc records what was and was not measured.
+ * <p>
+ * {@link #onSignChange} was in this group until gate 1 measured its premise and disproved it. It is
+ * load-bearing — see its own javadoc for the {@code PLUGIN} sign-open cause — and must not be deleted
+ * as unreachable.
+ *
+ * <h2>Priority, and who gets the last word</h2>
+ *
+ * Every handler here runs at {@link EventPriority#LOWEST} with no {@code ignoreCancelled}, which is
+ * this class's long-standing convention and is deliberate: it lets another plugin see these events
+ * after this listener and make its own decision. The consequence, recorded so it is not a surprise, is
+ * that a plugin listening at {@code HIGH}/{@code HIGHEST} can call {@code setCancelled(false)} and
+ * undo any protection here (gate 1 IN-08). Raising the priority would stop that, but would also start
+ * overriding other plugins' deliberate allowances, so it is not changed unilaterally.
  *
  * <h2>Events deliberately left uncovered</h2>
  *
@@ -190,13 +210,17 @@ public class LoginProtectionListener implements Listener {
      * {@code InventoryInteractEvent} and both declare their own {@code HandlerList} — so
      * {@link #onInventoryClick} never receives a drag, and a drag moves items.
      * <p>
-     * {@link #onInventoryOpen} is not a second line of defence here. It can only refuse an inventory
-     * the server opens; it is Bukkit's documented behaviour that a player's own inventory is not
-     * opened through that path, and {@link #onInventoryClick} exists precisely because clicks inside
-     * an already-visible inventory still have to be refused one by one. Drags had no such handler.
-     * (Phase 10's real-machine run of {@code ultilogin.protection.inventory-block} exercised only the
-     * chest branch of that row's steps, so the own-inventory branch has never been observed either
-     * way on a live server — the checklist row now asks for both, with a per-branch observable.)
+     * <strong>Covered defensively: no reachable drag bypass was demonstrated.</strong> An earlier
+     * revision of this javadoc, and of the changelog entry, implied one was live. Gate 1 (WR-05)
+     * measured otherwise, and the measurement points the other way on both branches. A meaningful
+     * drag needs a non-empty cursor, and the only way to load the cursor is a pick-up click: with
+     * {@code gui-mode.enabled: false} (the shipped default) {@link #onInventoryClick} refuses every
+     * click, so the cursor can never be loaded; with it {@code true} the click is allowed inside the
+     * credential GUI, but obliviate-invs cancels <em>every</em> drag while one of its GUIs is open
+     * ({@code InvListener#onDrag} is {@code setCancelled(!gui.onDrag(event))} and the default
+     * {@code onDrag} returns {@code false}). So this handler is in the same honest register as
+     * {@link #onPlayerEditBook}: refused explicitly rather than left resting on the expectation that
+     * the click guard and a third-party library make it unreachable.
      * <p>
      * Unlike {@link #onInventoryClick} this deliberately does <em>not</em> mirror the credential-GUI
      * title allowance. A drag cannot enter a digit into {@code LoginGUIPage}/{@code RegisterGUIPage},
@@ -301,18 +325,34 @@ public class LoginProtectionListener implements Listener {
     /**
      * Cancel writing a sign for an unauthenticated player.
      * <p>
-     * <strong>Covered defensively, on the same reasoning as {@link #onPlayerEditBook} above</strong>
-     * — the client is expected to open the sign editor only after a server packet that follows an
-     * uncancelled {@link PlayerInteractEvent} or {@link org.bukkit.event.block.BlockPlaceEvent},
-     * both already cancelled, but that was not measurable, so it is not depended on. Not evidence of
-     * an observed bypass.
+     * <strong>This handler is load-bearing — do not delete it as unreachable.</strong> An earlier
+     * revision of this javadoc called it defensive, on the premise that a sign editor only ever opens
+     * after an uncancelled {@link PlayerInteractEvent} or
+     * {@link org.bukkit.event.block.BlockPlaceEvent}. Gate 1 (WR-06) measured that premise and it is
+     * false: {@link org.bukkit.event.player.PlayerSignOpenEvent}'s {@code Cause} enum has four
+     * constants — {@code INTERACT}, {@code PLACE}, <strong>{@code PLUGIN}</strong> and
+     * {@code UNKNOWN} — and {@code HumanEntity#openSign(Sign, Side)} is public API
+     * ("Opens an editor window for the specified sign"). {@code INTERACT} and {@code PLACE} are both
+     * already refused here; {@code PLUGIN} is not, and cannot be, because it follows no player
+     * interaction at all. So any co-installed plugin that opens a sign editor for a joining player
+     * reaches this event, and this handler is the only thing refusing the write.
      * <p>
-     * {@code SignChangeEvent#getPlayer()} is annotated {@code @NotNull}, so there is deliberately no
-     * null guard here — one would be a branch that can never be taken.
+     * {@link LoginProtectionPaperListener#onPlayerOpenSign} refuses the editor at the point it opens;
+     * the two are complementary rather than redundant — that one prevents, this one is the backstop.
+     * <p>
+     * {@code SignChangeEvent#getPlayer()} is annotated {@code @NotNull}, so the null branch below
+     * should be unreachable. It is there anyway because the annotation is not enforced at runtime and
+     * the wrong side of that bet is fail-open: an exception thrown out of a handler is logged and
+     * swallowed by Bukkit, leaving the event <em>uncancelled</em> (gate 1 IN-09).
      */
     @EventHandler(priority = EventPriority.LOWEST)
     public void onSignChange(SignChangeEvent event) {
-        cancelIfNotLoggedIn(event.getPlayer(), event);
+        Player player = event.getPlayer();
+        if (player == null) {
+            event.setCancelled(true);
+            return;
+        }
+        cancelIfNotLoggedIn(player, event);
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
