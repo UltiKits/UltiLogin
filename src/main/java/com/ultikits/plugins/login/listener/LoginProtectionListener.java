@@ -20,6 +20,7 @@ import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.*;
 
@@ -27,6 +28,50 @@ import java.util.UUID;
 
 /**
  * Listener for login protection.
+ *
+ * <h2>Why each blocked interaction needs its own handler</h2>
+ *
+ * Bukkit registers and delivers an event on the {@code HandlerList} of its <em>registration
+ * class</em> — the nearest class, starting at the event's own class and walking up, that
+ * <em>declares</em> a static {@code getHandlerList()}. A subclass declaring its own
+ * {@code HandlerList} therefore has a separate dispatch list, and a handler registered for the
+ * superclass never receives it.
+ * <p>
+ * That is what UltiKits/UltiLogin#24 reported: an unauthenticated player could still equip an item
+ * onto an armor stand even though {@link PlayerInteractEntityEvent} was handled. Measured in the
+ * {@code paper-api} this module compiles against (1.21.11-R0.1-SNAPSHOT, {@code javap -p}):
+ * {@link PlayerInteractEntityEvent}, {@link PlayerInteractAtEntityEvent} and
+ * {@link PlayerArmorStandManipulateEvent} each declare their own {@code HANDLER_LIST}, and the
+ * latter two extend {@link PlayerInteractEntityEvent} <em>directly</em> — they are siblings, not a
+ * chain. So covering only the interact-at event (which #24's suggested fix named) would still not
+ * have covered the armor-stand event itself.
+ * <p>
+ * Because that gap cannot be seen by reading this class, the set of events an unauthenticated player
+ * must not act through is declared as data in
+ * {@code LoginProtectionEventCoverageTest}, which asserts this listener against it and fails when a
+ * future {@code paper-api} adds a new diverted subclass of anything handled here. Add a handler
+ * below and the entry there together.
+ *
+ * <h2>Events deliberately left uncovered</h2>
+ *
+ * Three subclasses of events handled here declare their own {@code HandlerList} and are left
+ * uncovered on purpose. The same three, with the same reasons, are listed in that test's
+ * {@code DELIBERATELY_UNCOVERED} map:
+ * <ul>
+ *   <li>{@link PlayerTeleportEvent} — this module teleports unauthenticated players itself
+ *   ({@code LoginService#applyNoSessionProtections} sends them to the configured spawn while still
+ *   unauthenticated, recording the original location to restore on login). Cancelling teleports for
+ *   unauthenticated players would break this module's own spawn protection, and would stop an
+ *   operator rescuing a stuck player with {@code /tp}. A teleport is not player-initiated world
+ *   mutation, and {@link #onPlayerMove} already freezes walking.</li>
+ *   <li>{@link PlayerPortalEvent} — a subclass of {@link PlayerTeleportEvent}, excluded for that
+ *   reason plus one of its own: with movement frozen, the only way to reach it is having quit inside
+ *   a portal block, where cancelling it would trap the player until they log in from inside the
+ *   portal.</li>
+ *   <li>{@code AsyncPlayerChatPreviewEvent} — a preview renders text and mutates no world or
+ *   inventory state. Chat itself is already cancelled by {@link #onPlayerChat}, and the class is
+ *   {@code @Deprecated} in {@code paper-api} 1.21.11.</li>
+ * </ul>
  *
  * @author wisdomme
  * @version 1.1.0
@@ -128,6 +173,36 @@ public class LoginProtectionListener implements Listener {
         }
     }
     
+    /**
+     * Cancel an inventory drag for an unauthenticated player.
+     * <p>
+     * Found by the same sweep as UltiKits/UltiLogin#24, and justified on the same structural ground:
+     * {@link InventoryDragEvent} is a sibling of {@link InventoryClickEvent} — both extend
+     * {@code InventoryInteractEvent} and both declare their own {@code HandlerList} — so
+     * {@link #onInventoryClick} never receives a drag, and a drag moves items.
+     * <p>
+     * {@link #onInventoryOpen} is not a second line of defence here. It can only refuse an inventory
+     * the server opens; it is Bukkit's documented behaviour that a player's own inventory is not
+     * opened through that path, and {@link #onInventoryClick} exists precisely because clicks inside
+     * an already-visible inventory still have to be refused one by one. Drags had no such handler.
+     * (Phase 10's real-machine run of {@code ultilogin.protection.inventory-block} exercised only the
+     * chest branch of that row's steps, so the own-inventory branch has never been observed either
+     * way on a live server — the checklist row now asks for both, with a per-branch observable.)
+     * <p>
+     * Unlike {@link #onInventoryClick} this deliberately does <em>not</em> mirror the credential-GUI
+     * title allowance. A drag cannot enter a digit into {@code LoginGUIPage}/{@code RegisterGUIPage},
+     * so allowing it buys no functionality; and because the credential GUI's view includes the
+     * player's own inventory rows, allowing drags there would let an unauthenticated player
+     * rearrange their items and push stacks toward the GUI's container slots. Cancelling
+     * unconditionally is both simpler and strictly safer.
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onInventoryDrag(InventoryDragEvent event) {
+        if (event.getWhoClicked() instanceof Player) {
+            cancelIfNotLoggedIn((Player) event.getWhoClicked(), event);
+        }
+    }
+
     @EventHandler(priority = EventPriority.LOWEST)
     public void onInventoryOpen(InventoryOpenEvent event) {
         if (event.getPlayer() instanceof Player) {
@@ -151,7 +226,48 @@ public class LoginProtectionListener implements Listener {
     public void onPlayerInteractEntity(PlayerInteractEntityEvent event) {
         cancelIfNotLoggedIn(event.getPlayer(), event);
     }
-    
+
+    /**
+     * Cancel a precise-position entity interaction ("interact at") for an unauthenticated player.
+     * <p>
+     * {@link PlayerInteractAtEntityEvent} extends {@link PlayerInteractEntityEvent} but declares its
+     * own {@code HandlerList}, so {@link #onPlayerInteractEntity} never receives it
+     * (UltiKits/UltiLogin#24 — see this class's javadoc for the dispatch rule).
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onPlayerInteractAtEntity(PlayerInteractAtEntityEvent event) {
+        cancelIfNotLoggedIn(event.getPlayer(), event);
+    }
+
+    /**
+     * Cancel armor-stand equipping and un-equipping for an unauthenticated player — the interaction
+     * UltiKits/UltiLogin#24 was reported against.
+     * <p>
+     * {@link PlayerArmorStandManipulateEvent} is a sibling of {@link PlayerInteractAtEntityEvent},
+     * not a subclass of it: both extend {@link PlayerInteractEntityEvent} directly and both declare
+     * their own {@code HandlerList}. Cancelling the interact-at event above therefore does not make
+     * this handler redundant — it would only stop the equip when the server happens to fire
+     * interact-at first, which is a behavioural assumption about the server rather than a structural
+     * guarantee. This handler is what closes the reported hole.
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onPlayerArmorStandManipulate(PlayerArmorStandManipulateEvent event) {
+        cancelIfNotLoggedIn(event.getPlayer(), event);
+    }
+
+    /**
+     * Cancel an off-hand swap for an unauthenticated player.
+     * <p>
+     * Found by the same sweep as #24, and the same shape of hole: the swap arrives as its own client
+     * intent with its own {@code HandlerList}, and is not preceded by any event this listener
+     * handles — no {@link PlayerInteractEvent}, no {@link InventoryClickEvent} — so nothing else here
+     * stops an unauthenticated player rearranging their hands.
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onPlayerSwapHandItems(PlayerSwapHandItemsEvent event) {
+        cancelIfNotLoggedIn(event.getPlayer(), event);
+    }
+
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerDropItem(PlayerDropItemEvent event) {
         cancelIfNotLoggedIn(event.getPlayer(), event);

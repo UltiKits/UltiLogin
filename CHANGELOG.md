@@ -9,6 +9,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A player who has not logged in can no longer equip or remove an armor stand's items, interact with
+  an entity at a precise point on its body, drag items inside an inventory, or swap their main hand
+  and off hand. All four were still allowed: the login protection already refused ordinary entity
+  interaction and ordinary inventory clicks, but Bukkit delivers each of these four through a
+  separate event, so the existing guards never saw them. Armor-stand equipping is the one that was
+  reported and reproduced — an unauthenticated player placed a block onto an armor stand and their
+  held stack went down by one (UltiKits/UltiLogin#24).
+- 未登录的玩家现在无法再为盔甲架穿脱物品、对实体身体的精确位置进行交互、在物品栏内拖拽物品，也无法交换主手与
+  副手的物品。此前这四种操作均可执行：登录保护已经拦截了普通的实体交互和普通的物品栏点击，但 Bukkit 通过四个
+  独立的事件分发上述操作，因此原有的拦截从未收到它们。其中被报告并复现的是盔甲架穿戴——未登录玩家成功把一个
+  方块装备到盔甲架上，其手持物品数量随之减少一个（UltiKits/UltiLogin#24）。
+
 - After `/upm uninstall UltiLogin`, this module's commands (`/login`, `/register`,
   `/changepassword`, `/logadmin`, `/recover`, `/regs`, `/panel`) are now really removed and its
   `LoginProtectionListener` stops firing. Previously this module replaced the framework's unload
