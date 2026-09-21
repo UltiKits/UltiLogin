@@ -16,6 +16,7 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.block.SignChangeEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityPickupItemEvent;
@@ -51,6 +52,14 @@ import java.util.UUID;
  * {@code LoginProtectionEventCoverageTest}, which asserts this listener against it and fails when a
  * future {@code paper-api} adds a new diverted subclass of anything handled here. Add a handler
  * below and the entry there together.
+ *
+ * <h2>Two events covered defensively</h2>
+ *
+ * {@link #onPlayerEditBook} and {@link #onSignChange} are in the set because the premise that would
+ * justify leaving them out — that the client opens those editors only after a server packet
+ * following an uncancelled {@link PlayerInteractEvent} — could not be measured when #24 was fixed.
+ * An unreachable handler in a security net costs nothing; a wrong premise costs a bypass. Their
+ * presence is not evidence that either bypass exists.
  *
  * <h2>Events deliberately left uncovered</h2>
  *
@@ -265,6 +274,44 @@ public class LoginProtectionListener implements Listener {
      */
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerSwapHandItems(PlayerSwapHandItemsEvent event) {
+        cancelIfNotLoggedIn(event.getPlayer(), event);
+    }
+
+    /**
+     * Cancel writing or signing a book for an unauthenticated player.
+     * <p>
+     * <strong>Covered defensively, not because a bypass was observed.</strong> Whether an
+     * unauthenticated player can reach this event at all depends on whether the client opens the
+     * book editor only after a server packet that itself follows an uncancelled
+     * {@link PlayerInteractEvent} — if it does, {@link #onPlayerInteract} already stops this and the
+     * handler below is unreachable. That chain could not be measured when #24 was fixed, only
+     * reasoned about, so it is closed rather than relied on: an unreachable handler in a security
+     * net costs nothing, while a wrong premise costs an authentication bypass. Do not read this
+     * handler's existence as evidence that the bypass exists.
+     * <p>
+     * {@link PlayerEditBookEvent} declares its own {@code HandlerList} and is not a subclass of
+     * anything else handled here, so it is a separate client-intent entry point rather than an
+     * instance of #24's diverted-subclass shape.
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onPlayerEditBook(PlayerEditBookEvent event) {
+        cancelIfNotLoggedIn(event.getPlayer(), event);
+    }
+
+    /**
+     * Cancel writing a sign for an unauthenticated player.
+     * <p>
+     * <strong>Covered defensively, on the same reasoning as {@link #onPlayerEditBook} above</strong>
+     * — the client is expected to open the sign editor only after a server packet that follows an
+     * uncancelled {@link PlayerInteractEvent} or {@link org.bukkit.event.block.BlockPlaceEvent},
+     * both already cancelled, but that was not measurable, so it is not depended on. Not evidence of
+     * an observed bypass.
+     * <p>
+     * {@code SignChangeEvent#getPlayer()} is annotated {@code @NotNull}, so there is deliberately no
+     * null guard here — one would be a branch that can never be taken.
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onSignChange(SignChangeEvent event) {
         cancelIfNotLoggedIn(event.getPlayer(), event);
     }
 

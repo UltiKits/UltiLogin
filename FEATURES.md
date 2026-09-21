@@ -92,7 +92,8 @@ rather than an error:
    trustworthy unmodified against every repository in the fan-out.
 
 **Positive control:** the line-start form returns `@CmdExecutor` = 7, `@CmdMapping` = 17,
-`@EventListener` = 1 (class), `@EventHandler` = 15 (handler methods), `@Scheduled` = 2,
+`@EventListener` = 1 (class), `@EventHandler` = 21 (handler methods; 15 before UltiKits/UltiLogin#24
+added six to `LoginProtectionListener`), `@Scheduled` = 2,
 `@ConditionalOnConfig` = 0, `@ConfigEntity` = 2 (classes), `@ConfigEntry` = 52 (44 on
 `LoginConfig`, 8 on `EmailConfig`) — confirmed by reading every one of the 16 source files
 directly, not by trusting the count alone. `LoginAdminCommand`'s six `@CmdMapping` sites
@@ -207,18 +208,22 @@ literal word) reaches `#handleHelp` only through the framework's short-circuit, 
 ## Player Protection
 
 `LoginProtectionListener` — one `@EventListener`-annotated class (`grep -c '@EventListener'`
-confirms this: exactly 1), registering 15 `@EventHandler` methods, all at `EventPriority.LOWEST`
-except `#onPlayerQuit`. This section groups the 15 handler methods into 8 rows, one row per
+confirms this: exactly 1), registering 21 `@EventHandler` methods, all at `EventPriority.LOWEST`
+except `#onPlayerQuit`. This section groups the 21 handler methods into 8 rows, one row per
 distinct guarded behaviour rather than one row per Bukkit event type, following the same "one row
 per handler, bundled by behaviour" convention the framework's own `FEATURES.md` and UltiChat's
-`FEATURES.md` (`ChatListener#onChat`) already apply — six of the fifteen handlers
-(`onBlockBreak`/`onBlockPlace`/`onPlayerInteract`/`onPlayerInteractEntity`/`onPlayerDropItem`/
-`onPlayerPickupItem`) share the byte-identical single-line guard body (`cancelIfNotLoggedIn`), and
+`FEATURES.md` (`ChatListener#onChat`) already apply — eleven of the twenty-one handlers
+(`onBlockBreak`/`onBlockPlace`/`onPlayerInteract`/`onPlayerInteractEntity`/
+`onPlayerInteractAtEntity`/`onPlayerArmorStandManipulate`/`onPlayerSwapHandItems`/
+`onPlayerEditBook`/`onSignChange`/`onPlayerDropItem`/`onPlayerPickupItem`) share the
+byte-identical single-line guard body (`cancelIfNotLoggedIn`), and
 two more (`onPlayerDamage`/`onPlayerDamageEntity`) are the symmetric halves of one property (an
 unauthenticated player can neither take nor deal damage) — bundling these does not lose any
 distinguishable behaviour a reconciliation reviewer could find missing. The reconciliation table's
-`@EventHandler` line (15) and this section's row count (8) are reconciled by this paragraph, not
-by a 1:1 count.
+`@EventHandler` line (21) and this section's row count (8) are reconciled by this paragraph, not
+by a 1:1 count. UltiKits/UltiLogin#24 raised the handler count from 15 to 21 without adding a row:
+all six went into `ultilogin.protection.world-interaction-block` and
+`ultilogin.protection.inventory-block`, whose Feature cells name them.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
@@ -229,7 +234,7 @@ by a 1:1 count.
 | ultilogin.protection.join | On join: mark the player unauthenticated, record their pre-login location, auto-login if a valid session exists for their `ip:uuid` (announcing a hardcoded Simplified Chinese line, `LoginService.java:888`, regardless of `language` — `lang/en.json`'s `session_login` key declared but never read, UltiKits/UltiLogin#20), otherwise apply the configured blindness effect and spawn-location teleport and send the login/register prompt — opening `LoginGUIPage`/`RegisterGUIPage` after a 20-tick delay when `gui-mode.enabled`, or the equivalent text prompt otherwise | event | join the server | n/a | n/a | player | detailed | LoginProtectionListener#onPlayerJoin |
 | ultilogin.protection.movement-block | Cancel an unauthenticated player's block-to-block movement (looking around in place is deliberately allowed — only a change to `getBlockX`/`Y`/`Z` is reverted) | event | attempt to move while not logged in | n/a | n/a | player | brief | LoginProtectionListener#onPlayerMove |
 | ultilogin.protection.quit | Clear the quitting player's in-memory login/join-time/original-location state and cancel any in-flight `/panel` polling task for them | event | quit the server | n/a | n/a | internal | none | LoginProtectionListener#onPlayerQuit |
-| ultilogin.protection.world-interaction-block | Cancel block-break, block-place, block/air-interact, entity-interact, precise-position entity-interact ("interact at"), armor-stand equip/unequip, off-hand swap, item-drop and item-pickup for an unauthenticated player — nine handlers sharing the identical `cancelIfNotLoggedIn` guard body. The last three were added by UltiKits/UltiLogin#24: Bukkit dispatches an event on the `HandlerList` of the nearest class that *declares* `getHandlerList()`, so `PlayerInteractAtEntityEvent` and `PlayerArmorStandManipulateEvent` (siblings, both declaring their own list and both extending `PlayerInteractEntityEvent` directly) never reached the entity-interact handler, and `PlayerSwapHandItemsEvent` was preceded by no handled event at all. Which events belong to this set is declared as data in `LoginProtectionEventCoverageTest`, which fails when one is dropped and when a future `paper-api` adds another diverted subclass of anything handled here; `PlayerTeleportEvent`, `PlayerPortalEvent` and `AsyncPlayerChatPreviewEvent` are excluded there with their reasons | event | break/place a block, interact with a block or entity, equip an armor stand, swap hands, drop, or pick up an item while not logged in | n/a | n/a | player | brief | LoginProtectionListener#onBlockBreak, LoginProtectionListener#onBlockPlace, LoginProtectionListener#onPlayerInteract, LoginProtectionListener#onPlayerInteractEntity, LoginProtectionListener#onPlayerInteractAtEntity, LoginProtectionListener#onPlayerArmorStandManipulate, LoginProtectionListener#onPlayerSwapHandItems, LoginProtectionListener#onPlayerDropItem, LoginProtectionListener#onPlayerPickupItem |
+| ultilogin.protection.world-interaction-block | Cancel block-break, block-place, block/air-interact, entity-interact, precise-position entity-interact ("interact at"), armor-stand equip/unequip, off-hand swap, book-write, sign-write, item-drop and item-pickup for an unauthenticated player — eleven handlers sharing the identical `cancelIfNotLoggedIn` guard body. The last five were added by UltiKits/UltiLogin#24: Bukkit dispatches an event on the `HandlerList` of the nearest class that *declares* `getHandlerList()`, so `PlayerInteractAtEntityEvent` and `PlayerArmorStandManipulateEvent` (siblings, both declaring their own list and both extending `PlayerInteractEntityEvent` directly) never reached the entity-interact handler, and `PlayerSwapHandItemsEvent` was preceded by no handled event at all. Book-writing and sign-writing are refused by two further handlers added **defensively**: both are expected to be unreachable before login already (the client should open those editors only after a server packet following an uncancelled `PlayerInteractEvent`), but that chain was not measurable, so it is closed rather than relied on — their presence is not evidence of an observed bypass. Which events belong to this set is declared as data in `LoginProtectionEventCoverageTest`, which fails when one is dropped and when a future `paper-api` adds another diverted subclass of anything handled here; `PlayerTeleportEvent`, `PlayerPortalEvent` and `AsyncPlayerChatPreviewEvent` are excluded there with their reasons | event | break/place a block, interact with a block or entity, equip an armor stand, swap hands, write a book or a sign, drop, or pick up an item while not logged in | n/a | n/a | player | brief | LoginProtectionListener#onBlockBreak, LoginProtectionListener#onBlockPlace, LoginProtectionListener#onPlayerInteract, LoginProtectionListener#onPlayerInteractEntity, LoginProtectionListener#onPlayerInteractAtEntity, LoginProtectionListener#onPlayerArmorStandManipulate, LoginProtectionListener#onPlayerSwapHandItems, LoginProtectionListener#onPlayerEditBook, LoginProtectionListener#onSignChange, LoginProtectionListener#onPlayerDropItem, LoginProtectionListener#onPlayerPickupItem |
 
 ## GUI
 
@@ -258,7 +263,7 @@ This module declares no lifecycle override and no `onReload()`/`onUnregister()` 
 (`ConfigManager#reloadConfigs`) re-initialises, in place, the same `LoginConfig` instance the container
 injected into `LoginService`. The row below is `event`-Kind with no `@EventHandler` site behind it: a reload
 is a framework-invoked lifecycle step, not a command this repository maps or a config key of its own, so it
-is not counted in the reconciliation table's `@EventHandler` line (15).
+is not counted in the reconciliation table's `@EventHandler` line (21).
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
