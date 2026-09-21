@@ -18,18 +18,25 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Writing a sign is now refused before login. Another plugin can open a sign editor for a player who
   has not logged in yet, which follows no interaction of the player's own, so nothing else refused
   it. Opening the editor is refused as well as the write.
-- Also refused before login, though no way to reach them was demonstrated and none may exist:
-  dragging items inside an inventory, writing a book, middle-click item pick, swapping the held item
-  with an equipment slot, and recipe-book clicks. These are refused explicitly rather than left
-  resting on the expectation that other guards make them unreachable (UltiKits/UltiLogin#24).
+- Writing a book is now refused before login. A player who has not logged in really can reach the
+  book editor — the client opens it without asking the server, so no guard can stop it opening — and
+  the write then reaches the server on its own, where nothing else refused it. The editor still
+  opens; the text and the signature no longer do anything, and the book stays blank.
+- Also refused before login, though no way to reach it was demonstrated and none may exist: dragging
+  items inside an inventory, middle-click item pick, swapping the held item with an equipment slot,
+  and recipe-book clicks. These are refused explicitly rather than left resting on the expectation
+  that other guards make them unreachable (UltiKits/UltiLogin#24).
 - 未登录的玩家现在无法再为盔甲架穿脱物品、对实体身体的精确位置进行交互，也无法交换主手与副手的物品。此前这三种
   操作均可执行：登录保护已经拦截了普通的实体交互，但 Bukkit 通过各自独立的事件分发上述操作，因此原有的拦截从未
   收到它们。其中被报告并复现的是盔甲架穿戴——未登录玩家成功把一个方块装备到盔甲架上，其手持物品数量随之减少一个。
 - 登录前书写告示牌现在会被拒绝。其他插件可以为尚未登录的玩家打开告示牌编辑界面，这一路径不经过该玩家自身的任何
   交互，因此此前没有任何拦截。除写入之外，打开编辑界面本身也会被拒绝。
-- 以下操作在登录前同样会被拒绝，但并未证实存在可触发的路径，也可能本就不存在：在物品栏内拖拽物品、书写成书、
-  中键取物、将手持物品与装备栏互换，以及配方书点击。此处选择明确拒绝，而不是继续依赖"其他拦截使其无法触发"这一
-  预期（UltiKits/UltiLogin#24）。
+- 登录前书写成书现在会被拒绝。未登录玩家确实能打开成书编辑界面——该界面由客户端自行打开，不询问服务器，因此
+  任何拦截都无法阻止它打开——写入随后会独立到达服务器，而此前没有任何拦截。编辑界面仍会打开，但输入的正文与
+  签名不再产生任何效果，成书保持空白。
+- 以下操作在登录前同样会被拒绝，但并未证实存在可触发的路径，也可能本就不存在：在物品栏内拖拽物品、中键取物、
+  将手持物品与装备栏互换，以及配方书点击。此处选择明确拒绝，而不是继续依赖"其他拦截使其无法触发"这一预期
+  （UltiKits/UltiLogin#24）。
 - After `/upm uninstall UltiLogin`, this module's commands (`/login`, `/register`,
   `/changepassword`, `/logadmin`, `/recover`, `/regs`, `/panel`) are now really removed and its
   `LoginProtectionListener` stops firing. Previously this module replaced the framework's unload
