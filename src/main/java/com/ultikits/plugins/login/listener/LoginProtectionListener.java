@@ -61,16 +61,18 @@ import java.util.UUID;
  * Paper-only events bounds that failure to them. Both classes are in the coverage contract's
  * {@code PROTECTION_LISTENERS}, so it does not matter to the tests which file a handler lives in.
  *
- * <h2>Two events covered defensively</h2>
+ * <h2>One event covered defensively</h2>
  *
- * {@link #onPlayerEditBook} and {@link #onInventoryDrag} are here even though no reachable bypass was
- * demonstrated for either: an unreachable handler in a security net costs nothing, while a wrong
- * premise costs a bypass. <strong>Their presence is not evidence that either bypass existed.</strong>
- * Each javadoc records what was and was not measured.
+ * {@link #onInventoryDrag} is here even though no reachable bypass was demonstrated for it: an
+ * unreachable handler in a security net costs nothing, while a wrong premise costs a bypass.
+ * <strong>Its presence is not evidence that the bypass existed.</strong> Its javadoc records what
+ * was and was not measured.
  * <p>
- * {@link #onSignChange} was in this group until gate 1 measured its premise and disproved it. It is
- * load-bearing — see its own javadoc for the {@code PLUGIN} sign-open cause — and must not be deleted
- * as unreachable.
+ * {@link #onSignChange} and {@link #onPlayerEditBook} were both in this group until their premises
+ * were measured and disproved — {@code onSignChange} by gate 1's {@code PLUGIN} sign-open finding,
+ * {@code onPlayerEditBook} by the wave-1 real-machine run of
+ * {@code ultilogin.protection.world-interaction-block}. Both are load-bearing, each is the only
+ * thing refusing its write, and neither may be deleted as unreachable. See their own javadoc.
  *
  * <h2>Priority, and who gets the last word</h2>
  *
@@ -218,9 +220,10 @@ public class LoginProtectionListener implements Listener {
      * click, so the cursor can never be loaded; with it {@code true} the click is allowed inside the
      * credential GUI, but obliviate-invs cancels <em>every</em> drag while one of its GUIs is open
      * ({@code InvListener#onDrag} is {@code setCancelled(!gui.onDrag(event))} and the default
-     * {@code onDrag} returns {@code false}). So this handler is in the same honest register as
-     * {@link #onPlayerEditBook}: refused explicitly rather than left resting on the expectation that
-     * the click guard and a third-party library make it unreachable.
+     * {@code onDrag} returns {@code false}). So it is refused explicitly rather than left resting on
+     * the expectation that the click guard and a third-party library make it unreachable. It is now
+     * the only handler here in that register: {@link #onPlayerEditBook} was its peer until the
+     * wave-1 real-machine run measured that premise and disproved it.
      * <p>
      * Unlike {@link #onInventoryClick} this deliberately does <em>not</em> mirror the credential-GUI
      * title allowance. A drag cannot enter a digit into {@code LoginGUIPage}/{@code RegisterGUIPage},
@@ -304,14 +307,47 @@ public class LoginProtectionListener implements Listener {
     /**
      * Cancel writing or signing a book for an unauthenticated player.
      * <p>
-     * <strong>Covered defensively, not because a bypass was observed.</strong> Whether an
-     * unauthenticated player can reach this event at all depends on whether the client opens the
-     * book editor only after a server packet that itself follows an uncancelled
-     * {@link PlayerInteractEvent} — if it does, {@link #onPlayerInteract} already stops this and the
-     * handler below is unreachable. That chain could not be measured when #24 was fixed, only
-     * reasoned about, so it is closed rather than relied on: an unreachable handler in a security
-     * net costs nothing, while a wrong premise costs an authentication bypass. Do not read this
-     * handler's existence as evidence that the bypass exists.
+     * <strong>This handler is load-bearing — do not delete it as unreachable.</strong> An earlier
+     * revision of this javadoc called it defensive, on the premise that the client opens the book
+     * editor only after a server packet following an uncancelled {@link PlayerInteractEvent}, so
+     * that {@link #onPlayerInteract} would already have stopped everything downstream. The wave-1
+     * real-machine run of {@code ultilogin.protection.world-interaction-block} measured that
+     * premise and it is false: an unauthenticated player right-clicking a writable book at air
+     * <em>does</em> get the editor, and the edit packet then arrives at the server on its own.
+     * <p>
+     * Three measurements on the server that ran it (Paper 1.21.11, mojang-mapped, {@code javap -c}):
+     * <ul>
+     *   <li>{@code Player#openItemGui(ItemStack, InteractionHand)} — the only thing
+     *   {@code WritableBookItem#use} calls to open the editor — has an empty body on the server
+     *   ({@code 0: return}). The screen is opened by the client's own override during its local
+     *   prediction of item use, so the server neither opens it, sends it, nor observes it, and
+     *   cancelling {@link PlayerInteractEvent} cannot suppress it. There is also no book-editor-open
+     *   event to cancel: {@code paper-api} 1.21.11 carries seven book events (recipe book, lectern,
+     *   and this one) and none of them is an "editor opened" — unlike signs, which have
+     *   {@code PlayerOpenSignEvent}, which is why {@link LoginProtectionPaperListener#onPlayerOpenSign}
+     *   can prevent that editor and nothing can prevent this one.</li>
+     *   <li>{@code ServerGamePacketListenerImpl#handleEditBook} reaches
+     *   {@code CraftEventFactory#handleEditBookEvent} — which fires this event unconditionally —
+     *   for a plain writable book in a hotbar slot. Its three earlier refusal sites were all
+     *   excluded by the recorded state of the run: the book-size and rate-limit checks disconnect
+     *   the player rather than refusing silently (the player stayed connected), and the
+     *   {@code isHotbarSlot(slot) || slot == 40} check passed because the book was in hotbar slot 2.
+     *   {@code signBook}'s own {@code has(WRITABLE_BOOK_CONTENT)} guard passes too:
+     *   {@code Items.WRITABLE_BOOK} registers that component as a <em>default</em>, and
+     *   {@code PatchedDataComponentMap#get} falls back to the prototype when the patch has no entry,
+     *   so it is present on a book with no NBT at all.</li>
+     *   <li>On cancellation {@code handleEditBookEvent} skips the write entirely and calls
+     *   {@code containerMenu.forceSlot(...)} to resync the slot — which is exactly what the run
+     *   observed: the book came back {@code writable_book}, count 1, with no text component.</li>
+     * </ul>
+     * So this handler is the <em>only</em> thing refusing that write. It was also the only handler
+     * on this event anywhere in that deployment (all 22 installed plugin jars scanned, nested jars
+     * included; {@code PlayerEditBookEvent} appears in this class and nowhere else).
+     * <p>
+     * The client-side editor opening is a documented limitation, not a defect — see the
+     * {@code ultilogin.protection.world-interaction-block} rows in {@code FEATURES.md} and
+     * {@code UAT-CHECKLIST.md}. <strong>Do not try to close it with a client-side suppression</strong>;
+     * there is no server-side hook to hang one on.
      * <p>
      * {@link PlayerEditBookEvent} declares its own {@code HandlerList} and is not a subclass of
      * anything else handled here, so it is a separate client-intent entry point rather than an

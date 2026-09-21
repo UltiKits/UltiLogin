@@ -93,18 +93,21 @@ import static org.mockito.Mockito.when;
  * that can only follow it, and cancelling {@code InventoryOpenEvent} already stops every container
  * event that needs an open container ({@code TradeSelectEvent}, anvil rename, and so on).
  *
- * <p><strong>Two entries are in the set defensively, not because a bypass was observed.</strong>
- * {@code PlayerEditBookEvent} and {@code InventoryDragEvent} are covered without a reachable bypass
- * having been demonstrated for either — the book editor is expected to open only after an uncancelled
- * {@code PlayerInteractEvent}, and a drag needs a cursor that the click guard and obliviate-invs
- * between them never let it have. Both are covered anyway: an unreachable handler in a security net
- * costs nothing, a wrong premise costs a bypass. <strong>Do not read their presence here as evidence
- * that either bypass existed.</strong>
+ * <p><strong>One entry is in the set defensively, not because a bypass was observed.</strong>
+ * {@code InventoryDragEvent} is covered without a reachable bypass having been demonstrated — a drag
+ * needs a cursor that the click guard and obliviate-invs between them never let it have. It is
+ * covered anyway: an unreachable handler in a security net costs nothing, a wrong premise costs a
+ * bypass. <strong>Do not read its presence here as evidence that the bypass existed.</strong>
  *
- * <p>{@code SignChangeEvent} was in that group until gate 1 measured its premise and disproved it:
+ * <p>{@code SignChangeEvent} and {@code PlayerEditBookEvent} were both in that group until their
+ * premises were measured and disproved. For the sign it was gate 1:
  * {@code PlayerSignOpenEvent.Cause.PLUGIN} and the public {@code HumanEntity#openSign} give a
- * documented path with no player interaction at all. It is load-bearing, and its handler must not be
- * deleted as unreachable.
+ * documented path with no player interaction at all. For the book it was the wave-1 real-machine run
+ * of {@code ultilogin.protection.world-interaction-block}: an unauthenticated player does get the
+ * book editor (the client opens it locally — the server's {@code Player#openItemGui} body is empty),
+ * the edit packet then reaches {@code PlayerEditBookEvent} on its own, and
+ * {@code LoginProtectionListener#onPlayerEditBook} is the only handler on that event anywhere in the
+ * tested deployment. Both are load-bearing, and neither handler may be deleted as unreachable.
  *
  * <h2>Events this listener deliberately does not cover</h2>
  *
@@ -808,7 +811,8 @@ class LoginProtectionEventCoverageTest {
 
         @Test
         @DisplayName("Should cancel signing or editing a book for an unauthenticated player "
-                + "(covered defensively -- see this class's javadoc)")
+                + "(load-bearing: this cancel is the only thing refusing the write -- see this "
+                + "class's javadoc)")
         void cancelsBookEdit() {
             when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
             PlayerEditBookEvent event = mock(PlayerEditBookEvent.class);
@@ -833,7 +837,8 @@ class LoginProtectionEventCoverageTest {
 
         @Test
         @DisplayName("Should cancel writing a sign for an unauthenticated player "
-                + "(covered defensively -- see this class's javadoc)")
+                + "(load-bearing since gate 1's PLUGIN sign-open finding -- see this class's "
+                + "javadoc)")
         void cancelsSignChange() {
             when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
             SignChangeEvent event = mock(SignChangeEvent.class);
