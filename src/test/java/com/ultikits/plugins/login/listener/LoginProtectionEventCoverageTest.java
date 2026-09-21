@@ -16,6 +16,12 @@ import org.bukkit.event.player.PlayerArmorStandManipulateEvent;
 import org.bukkit.event.player.PlayerEditBookEvent;
 import org.bukkit.event.player.PlayerInteractAtEntityEvent;
 import org.bukkit.event.player.PlayerSwapHandItemsEvent;
+
+import com.destroystokyo.paper.event.player.PlayerRecipeBookClickEvent;
+import com.ultikits.ultitools.context.MergedAnnotationResolver;
+import io.papermc.paper.event.player.PlayerOpenSignEvent;
+import io.papermc.paper.event.player.PlayerPickItemEvent;
+import io.papermc.paper.event.player.PlayerSwapWithEquipmentSlotEvent;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -88,23 +94,51 @@ import static org.mockito.Mockito.when;
  * event that needs an open container ({@code TradeSelectEvent}, anvil rename, and so on).
  *
  * <p><strong>Two entries are in the set defensively, not because a bypass was observed.</strong>
- * {@code PlayerEditBookEvent} and {@code SignChangeEvent} each arrive on their own client packet
- * with their own {@code HandlerList}. Whether an unauthenticated player can reach either depends on
- * whether the client opens those editors only after a server packet that itself follows an
- * uncancelled {@code PlayerInteractEvent} — a chain that could not be measured here, only reasoned
- * about. Rather than ship the reasoning, both are covered: if the chain holds, two handlers are
- * unreachable code in a security net and cost nothing; if it does not, an unauthenticated player
- * edits a book or a sign, which is the bypass class #24 exists to close. Do not read their presence
- * here as evidence that either bypass exists.
+ * {@code PlayerEditBookEvent} and {@code InventoryDragEvent} are covered without a reachable bypass
+ * having been demonstrated for either — the book editor is expected to open only after an uncancelled
+ * {@code PlayerInteractEvent}, and a drag needs a cursor that the click guard and obliviate-invs
+ * between them never let it have. Both are covered anyway: an unreachable handler in a security net
+ * costs nothing, a wrong premise costs a bypass. <strong>Do not read their presence here as evidence
+ * that either bypass existed.</strong>
+ *
+ * <p>{@code SignChangeEvent} was in that group until gate 1 measured its premise and disproved it:
+ * {@code PlayerSignOpenEvent.Cause.PLUGIN} and the public {@code HumanEntity#openSign} give a
+ * documented path with no player interaction at all. It is load-bearing, and its handler must not be
+ * deleted as unreachable.
  *
  * <h2>Events this listener deliberately does not cover</h2>
  *
- * See {@link #DELIBERATELY_UNCOVERED}. Each entry carries the reason, and {@link
- * EveryDeliberateExclusionIsRealAndExplained} asserts the entry is a genuinely diverted subclass of a
- * handled event, so the map cannot quietly accumulate stale or invented entries.
+ * See {@link #DELIBERATELY_UNCOVERED}, which is keyed on the dispatch list rather than the class name.
+ * {@link EveryDeliberateExclusionIsRealAndExplained} asserts each entry names a list some diverted
+ * class really rides and is not also handled, so the map cannot accumulate stale or invented entries.
+ *
+ * <h2>What a green run here does and does not prove</h2>
+ *
+ * Two limits, stated so the next reader does not over-trust it:
+ * <ul>
+ *   <li>An exclusion's only content check is that its reason is non-blank, so a future gap <em>can</em>
+ *   be silenced by one map entry with any text in it. That is the intended workflow — the entry is a
+ *   decision record — but it means the guarantee is "somebody wrote down why", not "the gap is safe"
+ *   (gate 1 IN-05).</li>
+ *   <li>The behavioural tests build each event as a bare mock with only its player accessor stubbed,
+ *   so a guard that grew a further condition — {@code && !player.hasPermission(...)},
+ *   {@code && !event.isCancelled()} — would keep them green while changing behaviour on a real server.
+ *   They prove the handler is reached and cancels, not that it cancels unconditionally
+ *   (gate 1 IN-07). {@link ProtectionListenersAreRegistered#aRealFiredEventIsCancelled} is the one
+ *   assertion here that goes through Bukkit's real dispatch.</li>
+ * </ul>
  */
 @DisplayName("LoginProtectionListener event-coverage contract (#24)")
 class LoginProtectionEventCoverageTest {
+
+    /**
+     * Every listener class that carries part of the login protection. The structural checks below take
+     * the union of these, so moving a handler from one to the other is invisible to them — which is the
+     * point, because the guarantee is about coverage, not about which file a handler sits in.
+     */
+    private static final List<Class<?>> PROTECTION_LISTENERS =
+            Collections.unmodifiableList(Arrays.<Class<?>>asList(
+                    LoginProtectionListener.class, LoginProtectionPaperListener.class));
 
     /**
      * Events through which an unauthenticated player would otherwise mutate world, entity or
@@ -127,7 +161,14 @@ class LoginProtectionEventCoverageTest {
                     "org.bukkit.event.player.PlayerSwapHandItemsEvent",
                     "org.bukkit.event.player.PlayerEditBookEvent",
                     "org.bukkit.event.block.SignChangeEvent",
-                    "org.bukkit.event.entity.EntityDamageByEntityEvent")));
+                    "org.bukkit.event.entity.EntityDamageByEntityEvent",
+                    // Paper's own namespaces, added after gate 1 WR-03 measured them as uncovered
+                    // client-intent entry points. They live in LoginProtectionPaperListener, for the
+                    // reason that class's javadoc records.
+                    "io.papermc.paper.event.player.PlayerPickItemEvent",
+                    "io.papermc.paper.event.player.PlayerSwapWithEquipmentSlotEvent",
+                    "com.destroystokyo.paper.event.player.PlayerRecipeBookClickEvent",
+                    "io.papermc.paper.event.player.PlayerOpenSignEvent")));
 
     /**
      * The rest of the protection surface — not state mutation, so not part of #24's defect class,
@@ -144,15 +185,37 @@ class LoginProtectionEventCoverageTest {
                     "org.bukkit.event.entity.EntityDamageEvent")));
 
     /**
-     * Subclasses of a handled event that declare their own {@code HandlerList} — so they are NOT
-     * delivered to that handler — and are nevertheless left uncovered on purpose, with the reason.
+     * The two lifecycle handlers that carry the protection's state rather than enforcing it:
+     * {@code onPlayerJoin} establishes the unauthenticated state, the blindness effect, the spawn
+     * teleport and the prompt, and {@code onPlayerQuit} clears it. Held in the net as their own group
+     * (gate 1 IN-01) so that "required" plus "other" plus "lifecycle" accounts for every handler
+     * without any set's comment overstating what it covers.
+     */
+    private static final Set<String> REQUIRED_LIFECYCLE_EVENTS =
+            Collections.unmodifiableSet(new LinkedHashSet<String>(Arrays.asList(
+                    "org.bukkit.event.player.PlayerJoinEvent",
+                    "org.bukkit.event.player.PlayerQuitEvent")));
+
+    /**
+     * Dispatch lists that are deliberately left uncovered, with the reason.
+     *
+     * <p><strong>Keyed on the registration class — the {@code HandlerList} an event is dispatched on —
+     * not on the exact event class name</strong> (gate 1 WR-01). An exclusion is a decision about a
+     * dispatch list, because a single handler on that list would receive every event that rides it; so
+     * keying on the class name enumerated instances of one decision and needed a new entry every time
+     * Paper added a family member. Keyed this way, one entry for {@code PlayerTeleportEvent}'s list
+     * covers {@code PlayerTeleportEvent} and {@code PlayerTeleportEndGatewayEvent} today and the next
+     * member automatically.
      */
     private static final Map<String, String> DELIBERATELY_UNCOVERED;
 
     static {
         Map<String, String> uncovered = new LinkedHashMap<String, String>();
         uncovered.put("org.bukkit.event.player.PlayerTeleportEvent",
-                "This module teleports unauthenticated players itself: LoginService"
+                "Everything dispatched on PlayerTeleportEvent's HandlerList, which at paper-api"
+                        + " 1.21.11 is PlayerTeleportEvent itself and"
+                        + " com.destroystokyo.paper.event.player.PlayerTeleportEndGatewayEvent."
+                        + " This module teleports unauthenticated players itself: LoginService"
                         + "#applyNoSessionProtections sends them to the configured spawn while they are"
                         + " still unauthenticated, and records the original location to restore on"
                         + " login. Cancelling teleports for unauthenticated players would break the"
@@ -195,16 +258,18 @@ class LoginProtectionEventCoverageTest {
         return null;
     }
 
-    /** Every event type the listener declares an {@code @EventHandler} for. */
+    /** Every event type any protection listener declares an {@code @EventHandler} for. */
     private static Set<Class<?>> handledEventTypes() {
         Set<Class<?>> handled = new LinkedHashSet<Class<?>>();
-        for (Method method : LoginProtectionListener.class.getDeclaredMethods()) {
-            if (!method.isAnnotationPresent(EventHandler.class)) {
-                continue;
-            }
-            Class<?>[] parameters = method.getParameterTypes();
-            if (parameters.length == 1 && Event.class.isAssignableFrom(parameters[0])) {
-                handled.add(parameters[0]);
+        for (Class<?> listener : PROTECTION_LISTENERS) {
+            for (Method method : listener.getDeclaredMethods()) {
+                if (!method.isAnnotationPresent(EventHandler.class)) {
+                    continue;
+                }
+                Class<?>[] parameters = method.getParameterTypes();
+                if (parameters.length == 1 && Event.class.isAssignableFrom(parameters[0])) {
+                    handled.add(parameters[0]);
+                }
             }
         }
         return handled;
@@ -227,25 +292,46 @@ class LoginProtectionEventCoverageTest {
     private static List<Method> deliveredHandlersFor(Class<?> eventType) {
         List<Method> delivered = new ArrayList<Method>();
         Class<?> eventList = registrationClass(eventType);
-        for (Method method : LoginProtectionListener.class.getDeclaredMethods()) {
-            if (!method.isAnnotationPresent(EventHandler.class)) {
-                continue;
-            }
-            Class<?>[] parameters = method.getParameterTypes();
-            if (parameters.length != 1 || !Event.class.isAssignableFrom(parameters[0])) {
-                continue;
-            }
-            if (registrationClass(parameters[0]) == eventList
-                    && parameters[0].isAssignableFrom(eventType)) {
-                delivered.add(method);
+        // Gate 1 IN-06: a null registration class would make every such event compare equal to every
+        // other under the == below, reporting them all as delivered. Unreachable against today's
+        // paper-api; refusing it outright is cheaper than reasoning about it again later.
+        assertThat(eventList)
+                .as("%s declares no getHandlerList() anywhere in its hierarchy, so Bukkit could not "
+                        + "dispatch it at all — the required set names a type that is not an event",
+                        eventType.getName())
+                .isNotNull();
+        for (Class<?> listener : PROTECTION_LISTENERS) {
+            for (Method method : listener.getDeclaredMethods()) {
+                if (!method.isAnnotationPresent(EventHandler.class)) {
+                    continue;
+                }
+                Class<?>[] parameters = method.getParameterTypes();
+                if (parameters.length != 1 || !Event.class.isAssignableFrom(parameters[0])) {
+                    continue;
+                }
+                if (eventList.equals(registrationClass(parameters[0]))
+                        && parameters[0].isAssignableFrom(eventType)) {
+                    delivered.add(method);
+                }
             }
         }
         return delivered;
     }
 
     /**
-     * Load every {@code org.bukkit.event} class from the {@code paper-api} jar on the test
-     * classpath, without initialising any of them.
+     * Load every {@link Event} subclass in the {@code paper-api} jar on the test classpath, without
+     * initialising any of them.
+     *
+     * <p><strong>The whole jar, with no package filter</strong> (gate 1 WR-01). This scan used to
+     * filter entries on {@code org/bukkit/event/}, which silently hid 170 of the jar's 449 event
+     * classes — including the 40 in {@code io.papermc.paper.event.player} and the 19 in
+     * {@code com.destroystokyo.paper.event.player}, which are precisely where Paper adds new player
+     * events. The filter made this test's own guarantee false: {@code
+     * com.destroystokyo.paper.event.player.PlayerTeleportEndGatewayEvent} satisfied the divert
+     * predicate, was in neither the handled set nor the exclusion map, and the sweep passed anyway.
+     * The filter was a scope claim nobody had checked, which is the same defect the sweep exists to
+     * catch, one level up. Measured: the unfiltered scan produces 449 event classes and <em>zero</em>
+     * load failures, so dropping the filter costs nothing.
      *
      * <p>Loading failures are collected and returned to the caller rather than skipped: a scan that
      * silently shrinks would turn {@link NoHandledEventHasASilentlyDivertedSubclass} into a test
@@ -263,7 +349,7 @@ class LoginProtectionEventCoverageTest {
             Enumeration<JarEntry> entries = jar.entries();
             while (entries.hasMoreElements()) {
                 String entry = entries.nextElement().getName();
-                if (!entry.startsWith("org/bukkit/event/") || !entry.endsWith(".class")) {
+                if (!entry.endsWith(".class")) {
                     continue;
                 }
                 String name = entry.substring(0, entry.length() - ".class".length()).replace('/', '.');
@@ -352,18 +438,23 @@ class LoginProtectionEventCoverageTest {
             ScanResult scan = scanBukkitEventClasses();
 
             assertThat(scan.failures)
-                    .as("every org.bukkit.event class must load, or the sweep below is scanning "
+                    .as("every event class in the jar must load, or the sweep below is scanning "
                             + "a silently shrunken set")
                     .isEmpty();
             assertThat(scan.eventClasses)
-                    .as("paper-api's org.bukkit.event package holds hundreds of event classes; a "
-                            + "near-empty scan means the jar was not read (source: " + scan.source + ")")
-                    .hasSizeGreaterThan(200);
+                    .as("the whole paper-api jar holds 449 event classes at 1.21.11; a smaller count "
+                            + "means either the jar was not read or a package filter crept back in "
+                            + "(source: " + scan.source + ")")
+                    .hasSizeGreaterThan(400);
             assertThat(classNames(scan.eventClasses))
-                    .as("positive control: the scan must find both the class #24 was reported "
-                            + "against and a class this listener already handled before #24")
+                    .as("positive control: the scan must find the class #24 was reported against, a "
+                            + "class this listener already handled before #24, and -- since gate 1 "
+                            + "WR-01 -- at least one class from each namespace the old package filter "
+                            + "hid, so a reintroduced filter fails here rather than passing quietly")
                     .contains("org.bukkit.event.player.PlayerArmorStandManipulateEvent",
-                            "org.bukkit.event.player.PlayerInteractEntityEvent");
+                            "org.bukkit.event.player.PlayerInteractEntityEvent",
+                            "io.papermc.paper.event.player.PlayerPickItemEvent",
+                            "com.destroystokyo.paper.event.player.PlayerTeleportEndGatewayEvent");
             assertThat(divertedSubclassesOfHandledEvents(scan))
                     .as("positive control: the divert-detecting sweep itself must be able to find "
                             + "something -- if it returns nothing at all it would pass vacuously")
@@ -379,36 +470,53 @@ class LoginProtectionEventCoverageTest {
 
             List<String> untriaged = new ArrayList<String>();
             for (String diverted : divertedSubclassesOfHandledEvents(scan)) {
-                if (!handled.contains(diverted) && !DELIBERATELY_UNCOVERED.containsKey(diverted)) {
-                    untriaged.add(diverted);
+                if (handled.contains(diverted)) {
+                    continue;
                 }
+                // Excluded by the dispatch list it rides, not by its own name (WR-01): one entry
+                // therefore covers a whole event family, including members added later.
+                Class<?> divertedList = registrationClass(classForName(diverted));
+                if (divertedList != null && DELIBERATELY_UNCOVERED.containsKey(divertedList.getName())) {
+                    continue;
+                }
+                untriaged.add(diverted + " (dispatched on "
+                        + (divertedList == null ? "NOTHING" : divertedList.getName()) + "'s HandlerList)");
             }
 
             assertThat(untriaged)
-                    .as("each of these is a subclass of an event LoginProtectionListener handles, "
-                            + "but declares its own HandlerList, so the existing handler never "
-                            + "receives it -- exactly the shape of UltiKits/UltiLogin#24. Add an "
-                            + "@EventHandler for it, or add it to DELIBERATELY_UNCOVERED with the "
-                            + "reason it is safe to leave open.")
+                    .as("each of these is a subclass of an event a protection listener handles, but "
+                            + "declares its own HandlerList, so the existing handler never receives "
+                            + "it -- exactly the shape of UltiKits/UltiLogin#24. Add an @EventHandler "
+                            + "for it, or add its dispatch list to DELIBERATELY_UNCOVERED with the "
+                            + "reason the whole family is safe to leave open.")
                     .isEmpty();
         }
 
         @Test
-        @DisplayName("Should keep the deliberately-uncovered list honest: every entry is a real "
-                + "diverted subclass of a handled event, and carries a reason")
+        @DisplayName("Should keep the deliberately-uncovered list honest: every entry is a dispatch "
+                + "list some diverted subclass really rides, and carries a reason")
         void everyDeliberateExclusionIsRealAndExplained() throws Exception {
             ScanResult scan = scanBukkitEventClasses();
-            Set<String> diverted = new LinkedHashSet<String>(divertedSubclassesOfHandledEvents(scan));
+
+            // The dispatch lists actually ridden by the diverted classes the sweep found. An
+            // exclusion naming a list that nothing rides is stale and must go.
+            Set<String> divertedLists = new LinkedHashSet<String>();
+            for (String diverted : divertedSubclassesOfHandledEvents(scan)) {
+                Class<?> list = registrationClass(classForName(diverted));
+                if (list != null) {
+                    divertedLists.add(list.getName());
+                }
+            }
 
             for (Map.Entry<String, String> exclusion : DELIBERATELY_UNCOVERED.entrySet()) {
-                assertThat(diverted)
-                        .as(exclusion.getKey() + " is listed as deliberately uncovered, but it is "
-                                + "not a diverted subclass of any handled event -- the entry is "
-                                + "stale and must be removed")
+                assertThat(divertedLists)
+                        .as(exclusion.getKey() + " is listed as a deliberately uncovered dispatch "
+                                + "list, but no diverted subclass of any handled event rides it -- "
+                                + "the entry is stale and must be removed")
                         .contains(exclusion.getKey());
                 assertThat(exclusion.getValue())
-                        .as("every exclusion must say why " + exclusion.getKey() + " is safe to "
-                                + "leave uncovered")
+                        .as("every exclusion must say why everything on " + exclusion.getKey()
+                                + "'s list is safe to leave uncovered")
                         .isNotBlank();
                 assertThat(handledEventTypeNames())
                         .as(exclusion.getKey() + " is both handled and listed as deliberately "
@@ -439,6 +547,98 @@ class LoginProtectionEventCoverageTest {
         }
     }
 
+    @Nested
+    @DisplayName("every protection listener is actually registered, not merely written")
+    class ProtectionListenersAreRegistered {
+
+        @Test
+        @DisplayName("Should carry @EventListener with manualRegister = false on every protection "
+                + "listener, resolved exactly the way the framework resolves it")
+        void everyProtectionListenerIsAutoRegistered() {
+            for (Class<?> listener : PROTECTION_LISTENERS) {
+                com.ultikits.ultitools.annotations.EventListener annotation =
+                        MergedAnnotationResolver.find(
+                                listener, com.ultikits.ultitools.annotations.EventListener.class);
+
+                assertThat(annotation)
+                        .as("%s carries no @EventListener, so ListenerManager#registerAll skips it "
+                                + "(`if (annotation == null || annotation.manualRegister()) continue;`) "
+                                + "and every @EventHandler in it is dead code. This module registers "
+                                + "no listener by hand, so nothing else would pick it up. Deleting "
+                                + "that one annotation is the largest bypass reachable while the rest "
+                                + "of this class is green -- gate 1 WR-02 measured all 544 tests "
+                                + "passing with it removed.", listener.getName())
+                        .isNotNull();
+                assertThat(annotation.manualRegister())
+                        .as("%s asks for manual registration, but this module registers no listener "
+                                + "by hand, so its handlers would never be wired up",
+                                listener.getName())
+                        .isFalse();
+            }
+        }
+
+        @Test
+        @DisplayName("Should be reachable through Bukkit's own dispatch: a real event fired at a "
+                + "registered listener comes back cancelled for an unauthenticated player")
+        void aRealFiredEventIsCancelled() throws Exception {
+            // The assertion above covers the annotation the framework reads. This one covers the rest
+            // of the chain -- that the handler signatures are ones Bukkit will accept and dispatch to,
+            // and that the event really arrives -- by registering with the live MockBukkit server and
+            // firing through Bukkit.getPluginManager().callEvent rather than calling the method.
+            UltiLoginTestHelper.bootstrapLiveServer();
+            try {
+                // bootstrapLiveServer loads a mock plugin under this exact name, which is also the
+                // owner the production code resolves its scheduler against.
+                org.bukkit.plugin.Plugin plugin =
+                        org.bukkit.Bukkit.getPluginManager().getPlugin("UltiTools");
+                assertThat(plugin)
+                        .as("control: the live MockBukkit server must have the UltiTools plugin "
+                                + "loaded, or registerEvents below would have no owner to bind to")
+                        .isNotNull();
+                LoginService service = mock(LoginService.class);
+                LoginConfig config = UltiLoginTestHelper.createDefaultConfig();
+                lenient().when(service.getConfig()).thenReturn(config);
+                UUID uuid = UUID.randomUUID();
+                when(service.isLoggedIn(uuid)).thenReturn(false);
+                Player unauthenticated = UltiLoginTestHelper.createMockPlayer("Unauthenticated", uuid);
+
+                LoginProtectionListener listener =
+                        new LoginProtectionListener(UltiLoginTestHelper.getMockPlugin(), service);
+                org.bukkit.Bukkit.getPluginManager().registerEvents(listener, plugin);
+
+                org.bukkit.block.Block block = mock(org.bukkit.block.Block.class);
+                org.bukkit.event.block.BlockBreakEvent event =
+                        new org.bukkit.event.block.BlockBreakEvent(block, unauthenticated);
+
+                assertThat(event.isCancelled())
+                        .as("control: the event must start uncancelled, or the assertion below would "
+                                + "pass without the listener doing anything")
+                        .isFalse();
+
+                org.bukkit.Bukkit.getPluginManager().callEvent(event);
+
+                assertThat(event.isCancelled())
+                        .as("a BlockBreakEvent fired through Bukkit at a registered "
+                                + "LoginProtectionListener must come back cancelled for an "
+                                + "unauthenticated player -- this covers the handler signature, the "
+                                + "priority and the executor, not just the method body")
+                        .isTrue();
+            } finally {
+                UltiLoginTestHelper.tearDownLiveServer();
+            }
+        }
+    }
+
+    /** Load a scanned class by name without initialising it; the scan already proved it loads. */
+    private static Class<?> classForName(String name) {
+        try {
+            return Class.forName(name, false, LoginProtectionListener.class.getClassLoader());
+        } catch (ClassNotFoundException impossible) {
+            throw new IllegalStateException(
+                    name + " was found by the jar scan but cannot be loaded by name", impossible);
+        }
+    }
+
     private static Set<String> classNames(List<Class<?>> classes) {
         Set<String> names = new TreeSet<String>();
         for (Class<?> type : classes) {
@@ -462,6 +662,7 @@ class LoginProtectionEventCoverageTest {
     class AddedEventsAreCancelled {
 
         private LoginProtectionListener listener;
+        private LoginProtectionPaperListener paperListener;
         private LoginService loginService;
         private Player player;
         private UUID playerUuid;
@@ -485,6 +686,7 @@ class LoginProtectionEventCoverageTest {
             serverField.set(null, mockServer);
 
             listener = new LoginProtectionListener(UltiLoginTestHelper.getMockPlugin(), loginService);
+            paperListener = new LoginProtectionPaperListener(loginService);
             playerUuid = UUID.randomUUID();
             player = UltiLoginTestHelper.createMockPlayer("TestPlayer", playerUuid);
         }
@@ -654,6 +856,105 @@ class LoginProtectionEventCoverageTest {
             verify(event, never()).setCancelled(anyBoolean());
         }
 
+        @Test
+        @DisplayName("Should cancel a middle-click item pick for an unauthenticated player "
+                + "(gate 1 WR-03)")
+        void cancelsPickItem() {
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+            PlayerPickItemEvent event = mock(PlayerPickItemEvent.class);
+            when(event.getPlayer()).thenReturn(player);
+
+            dispatch(PlayerPickItemEvent.class, event);
+
+            verify(event).setCancelled(true);
+        }
+
+        @Test
+        @DisplayName("Should not cancel a middle-click item pick once the player is authenticated")
+        void allowsPickItemWhenLoggedIn() {
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(true);
+            PlayerPickItemEvent event = mock(PlayerPickItemEvent.class);
+            when(event.getPlayer()).thenReturn(player);
+
+            dispatch(PlayerPickItemEvent.class, event);
+
+            verify(event, never()).setCancelled(anyBoolean());
+        }
+
+        @Test
+        @DisplayName("Should cover both concrete pick subclasses through the one abstract handler, "
+                + "because neither declares a HandlerList of its own")
+        void oneHandlerCoversBothPickSubclasses() {
+            assertThat(deliveredHandlersFor(io.papermc.paper.event.player.PlayerPickBlockEvent.class))
+                    .as("PlayerPickBlockEvent must reach the PlayerPickItemEvent handler")
+                    .isNotEmpty();
+            assertThat(deliveredHandlersFor(io.papermc.paper.event.player.PlayerPickEntityEvent.class))
+                    .as("PlayerPickEntityEvent must reach the same handler")
+                    .isNotEmpty();
+        }
+
+        @Test
+        @DisplayName("Should cancel swapping the held item with an equipment slot for an "
+                + "unauthenticated player (gate 1 WR-03)")
+        void cancelsSwapWithEquipmentSlot() {
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+            PlayerSwapWithEquipmentSlotEvent event = mock(PlayerSwapWithEquipmentSlotEvent.class);
+            when(event.getPlayer()).thenReturn(player);
+
+            dispatch(PlayerSwapWithEquipmentSlotEvent.class, event);
+
+            verify(event).setCancelled(true);
+        }
+
+        @Test
+        @DisplayName("Should cancel a recipe-book click for an unauthenticated player (gate 1 WR-03)")
+        void cancelsRecipeBookClick() {
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+            PlayerRecipeBookClickEvent event = mock(PlayerRecipeBookClickEvent.class);
+            when(event.getPlayer()).thenReturn(player);
+
+            dispatch(PlayerRecipeBookClickEvent.class, event);
+
+            verify(event).setCancelled(true);
+        }
+
+        @Test
+        @DisplayName("Should refuse to open a sign editor for an unauthenticated player, whatever "
+                + "opened it -- including the PLUGIN cause that follows no interaction (gate 1 WR-06)")
+        void cancelsSignEditorOpen() {
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+            PlayerOpenSignEvent event = mock(PlayerOpenSignEvent.class);
+            when(event.getPlayer()).thenReturn(player);
+
+            dispatch(PlayerOpenSignEvent.class, event);
+
+            verify(event).setCancelled(true);
+        }
+
+        @Test
+        @DisplayName("Should not cancel opening a sign editor once the player is authenticated")
+        void allowsSignEditorOpenWhenLoggedIn() {
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(true);
+            PlayerOpenSignEvent event = mock(PlayerOpenSignEvent.class);
+            when(event.getPlayer()).thenReturn(player);
+
+            dispatch(PlayerOpenSignEvent.class, event);
+
+            verify(event, never()).setCancelled(anyBoolean());
+        }
+
+        @Test
+        @DisplayName("Should fail closed, not throw, if an event ever reports a null player "
+                + "(gate 1 IN-09: a thrown exception would leave the event uncancelled)")
+        void failsClosedOnNullPlayer() {
+            PlayerPickItemEvent event = mock(PlayerPickItemEvent.class);
+            when(event.getPlayer()).thenReturn(null);
+
+            dispatch(PlayerPickItemEvent.class, event);
+
+            verify(event).setCancelled(true);
+        }
+
         /**
          * Invoke every listener method Bukkit would deliver {@code event} to, failing the test when
          * there is none — which is what an uncovered event class looks like from the outside.
@@ -661,15 +962,16 @@ class LoginProtectionEventCoverageTest {
         private void dispatch(Class<? extends Cancellable> eventType, Object event) {
             List<Method> handlers = deliveredHandlersFor(eventType);
             if (handlers.isEmpty()) {
-                fail("LoginProtectionListener declares no @EventHandler that Bukkit would deliver "
+                fail("No protection listener declares an @EventHandler that Bukkit would deliver "
                         + eventType.getName() + " to. It is dispatched on "
                         + registrationClass(eventType).getName() + "'s HandlerList, so a handler "
                         + "for a superclass on a different HandlerList does not receive it.");
             }
             for (Method handler : handlers) {
+                Object target = instanceOf(handler.getDeclaringClass());
                 try {
                     handler.setAccessible(true);
-                    handler.invoke(listener, event);
+                    handler.invoke(target, event);
                 } catch (InvocationTargetException invocationFailure) {
                     throw new IllegalStateException(
                             handler.getName() + " threw", invocationFailure.getCause());
@@ -677,6 +979,18 @@ class LoginProtectionEventCoverageTest {
                     throw new IllegalStateException(accessFailure);
                 }
             }
+        }
+
+        /** The live instance of whichever protection listener declares the handler being invoked. */
+        private Object instanceOf(Class<?> declaringClass) {
+            if (declaringClass == LoginProtectionListener.class) {
+                return listener;
+            }
+            if (declaringClass == LoginProtectionPaperListener.class) {
+                return paperListener;
+            }
+            throw new IllegalStateException("PROTECTION_LISTENERS gained " + declaringClass.getName()
+                    + " but this test has no instance of it -- construct one in setUp()");
         }
     }
 }
