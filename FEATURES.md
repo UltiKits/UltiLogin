@@ -251,6 +251,19 @@ Both are 54-slot `Gui` pages presenting a numeric keypad; neither exists unless
 | ultilogin.task.timeout-check | Every second, kick any unauthenticated player whose join (or last invalidation) exceeded `login-timeout` seconds ago, and separately sweep expired (>5 minute) pending `/panel` link requests | scheduled | runs automatically every 20 ticks (1s) while the server is up | n/a | n/a | internal | brief | LoginService#checkTimeouts |
 | ultilogin.task.verification-cleanup | Every 60 seconds, discard pending email-bind and password-recovery verification entries older than `verification.code-expiry-seconds`, and discard resend-cooldown timestamps older than a fixed 10-minute TTL | scheduled | runs automatically every 1200 ticks (60s) while the server is up | n/a | n/a | internal | none | EmailVerificationService#cleanupExpired |
 
+## Lifecycle Hooks
+
+This module declares no lifecycle override and no `onReload()`/`onUnregister()` hook (UltiKits/UltiLogin#29):
+`/ul reload UltiLogin` runs only UltiTools' own final `reloadSelf()`, whose first step
+(`ConfigManager#reloadConfigs`) re-initialises, in place, the same `LoginConfig` instance the container
+injected into `LoginService`. The row below is `event`-Kind with no `@EventHandler` site behind it: a reload
+is a framework-invoked lifecycle step, not a command this repository maps or a config key of its own, so it
+is not counted in the reconciliation table's `@EventHandler` line (15).
+
+| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
+|---|---|---|---|---|---|---|---|---|
+| ultilogin.lifecycle.reload | `/ul reload UltiLogin` re-reads `config/login.yml` into the running module, so an edited `allowed-commands` list governs the very next command an unauthenticated player runs, in both directions (an added entry is permitted, a removed one is refused again), without a restart; this module adds no reload work of its own and prints no reload line of its own. A regression guard for UltiKits/UltiLogin#13, not a changed behaviour: before UltiKits/UltiLogin#29 the module's reload override already called the framework's reload first | event | `/ul reload UltiLogin` (framework calls `reloadSelf()`, which reloads configuration, refreshes language, reports `@ConditionalOnConfig` drift and logs its own per-module line) | n/a | n/a | admin | brief | LoginService#isCommandAllowed |
+
 ## Data persistence
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |

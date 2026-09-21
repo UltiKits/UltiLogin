@@ -9,7 +9,6 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.Query;
-import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.utils.CommonUtils;
 import com.ultikits.ultitools.utils.SimpleHttpClient;
@@ -1566,21 +1565,24 @@ class LoginServiceTest {
 
     /**
      * UltiLogin#13: on a server that installed UltiLogin before {@code regs}/{@code recover}
-     * were added to {@code allowedCommands}' default, those two commands stay unreachable even
-     * after an operator corrects {@code login.yml} and reloads. The plan 13-13 measurement
-     * (13-LEDGER-UltiLogin.md, "Recovery command diagnosis") found the cause is neither the
-     * {@code LoginConfig} field-binding (proven working in isolation) nor {@code isCommandAllowed}'s
-     * own string parsing (also proven working) -- it is {@code UltiLogin.reloadSelf()} itself,
-     * which overrides {@link UltiToolsPlugin#reloadSelf()} without calling {@code super.reloadSelf()},
-     * so {@code ConfigManager.reloadConfigs(...)} -- the only thing that re-reads {@code login.yml}
-     * into a running {@code LoginConfig} -- is never invoked, no matter how many times
-     * {@code /ul reload UltiLogin} runs or what the file says afterward.
+     * were added to {@code allowedCommands}' default, those two commands stay unreachable until
+     * an operator corrects {@code login.yml} and reloads. The plan 13-13 measurement
+     * (13-LEDGER-UltiLogin.md, "Recovery command diagnosis") found the cause was neither the
+     * {@code LoginConfig} field-binding nor {@code isCommandAllowed}'s own string parsing, but a
+     * reload override that never reached {@code ConfigManager.reloadConfigs(...)} -- the only
+     * thing that re-reads {@code login.yml} into a running {@code LoginConfig}.
      * <p>
-     * Every test here drives the REAL {@link ConfigManager}, the REAL
+     * UltiKits/UltiLogin#29: as of UltiTools 6.3.0 {@link UltiToolsPlugin#reloadSelf()} is a
+     * {@code final} framework method that always calls {@code ConfigManager.reloadConfigs(this)}
+     * first, and this module no longer declares any reload override (asserted structurally by
+     * {@code UltiLoginTest.LifecycleTemplateMethods}). The framework's own suite covers
+     * {@code reloadSelf()} reaching {@code reloadConfigs}; these tests cover the module-side rest
+     * of the chain by calling that same {@code reloadConfigs(plugin)} step directly. Every test
+     * drives the REAL {@link ConfigManager}, the REAL
      * {@link com.ultikits.plugins.login.config.LoginConfig#init}/{@code reloadConfigs} binding, and
-     * the REAL {@code UltiLogin.reloadSelf()} method body -- not a re-implementation or a stub of
-     * any of the three -- against a stored configuration in the shape an upgraded server actually
-     * has (missing {@code regs}/{@code recover}), exactly as 13-13's plan requires.
+     * a REAL {@link LoginService} bound to the same {@code LoginConfig} instance -- not a
+     * re-implementation or a stub of any of them -- against a stored configuration in the shape
+     * an upgraded server actually has (missing {@code regs}/{@code recover}).
      */
     @Nested
     @DisplayName("Recovery command reachability across an upgrade reload")
@@ -1624,11 +1626,6 @@ class LoginServiceTest {
                 }
                 return RETURNS_DEFAULTS.answer(invocation);
             });
-            PluginLogger logger = mock(PluginLogger.class);
-            when(realPlugin.getLogger()).thenReturn(logger);
-            when(realPlugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
-            doCallRealMethod().when(realPlugin).reloadSelf();
-
             LoginConfig realConfig = new LoginConfig();
             ConfigManager realConfigManager = new ConfigManager();
             // Mirrors ConfigManager.registerAll's own addConfigEntity(): init() runs against the
@@ -1656,11 +1653,8 @@ class LoginServiceTest {
             writeAllowedCommands(fixture.loginYml,
                     "login", "l", "register", "reg", "panel", "regs", "recover");
 
-            try (MockedStatic<UltiToolsPlugin> staticMock =
-                    mockStatic(UltiToolsPlugin.class, CALLS_REAL_METHODS)) {
-                staticMock.when(UltiToolsPlugin::getConfigManager).thenReturn(fixture.configManager);
-                fixture.plugin.reloadSelf();
-            }
+            // The step UltiToolsPlugin#reloadSelf() (final, 6.3.0) runs first on /ul reload UltiLogin.
+            fixture.configManager.reloadConfigs(fixture.plugin);
 
             assertThat(fixture.service.isCommandAllowed("/recover"))
                     .as("a corrected login.yml plus a reload must make /recover reachable")
@@ -1675,11 +1669,8 @@ class LoginServiceTest {
             writeAllowedCommands(fixture.loginYml,
                     "login", "l", "register", "reg", "panel", "regs", "recover");
 
-            try (MockedStatic<UltiToolsPlugin> staticMock =
-                    mockStatic(UltiToolsPlugin.class, CALLS_REAL_METHODS)) {
-                staticMock.when(UltiToolsPlugin::getConfigManager).thenReturn(fixture.configManager);
-                fixture.plugin.reloadSelf();
-            }
+            // The step UltiToolsPlugin#reloadSelf() (final, 6.3.0) runs first on /ul reload UltiLogin.
+            fixture.configManager.reloadConfigs(fixture.plugin);
 
             // The fix must not widen the gate into a hole (T-13-13-01): a command outside the
             // permitted set stays refused after the reload, exactly as before it.
@@ -1700,11 +1691,8 @@ class LoginServiceTest {
             writeAllowedCommands(fixture.loginYml,
                     "login", "l", "register", "reg", "panel", "regs", "recover");
 
-            try (MockedStatic<UltiToolsPlugin> staticMock =
-                    mockStatic(UltiToolsPlugin.class, CALLS_REAL_METHODS)) {
-                staticMock.when(UltiToolsPlugin::getConfigManager).thenReturn(fixture.configManager);
-                fixture.plugin.reloadSelf();
-            }
+            // The step UltiToolsPlugin#reloadSelf() (final, 6.3.0) runs first on /ul reload UltiLogin.
+            fixture.configManager.reloadConfigs(fixture.plugin);
 
             // Direct assertion on the list the running plugin holds -- the mechanism, not only the
             // symptom -- reproducing 13-LEDGER-UltiLogin.md's own measured second-init() output.
