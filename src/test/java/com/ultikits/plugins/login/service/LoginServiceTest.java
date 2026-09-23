@@ -466,6 +466,33 @@ class LoginServiceTest {
         }
 
         @Test
+        @DisplayName("a limited count below zero is still answered as locked when the attempt locks the account")
+        @SuppressWarnings("unchecked")
+        void negativeLimitedCountIsNotMistakenForUnlimited() throws Exception {
+            // Why the unlimited reply is chosen from the setting and not from
+            // getRemainingAttempts() == -1: a limited count can reach -1 too. With lockout-type
+            // UUID an expired lock is cleared without clearing the per-IP failure counter, so the
+            // first wrong password after expiry counts max + 1, locks again at once, and computes
+            // max - (max + 1) = -1. That lock is real, so the reply must be the locked one.
+            when(config.getMaxLoginAttempts()).thenReturn(2);
+            when(config.getLockoutType()).thenReturn("UUID");
+            service.login(player, "wrong1");
+            assertThat(service.login(player, "wrong2").getMessage()).isEqualTo("LOCKED 900");
+
+            Map<UUID, Long> lockedUuids = (Map<UUID, Long>) getFieldValue(service, "lockedUuids");
+            lockedUuids.put(playerUuid, System.currentTimeMillis() - 1000);
+            assertThat(service.isLocked(player)).as("scenario: the lock has expired").isFalse();
+
+            LoginService.LoginResult result = service.login(player, "wrong3");
+
+            assertThat(service.getRemainingAttempts(player))
+                    .as("scenario: this is the limited case whose count is -1")
+                    .isEqualTo(-1);
+            assertThat(service.isLocked(player)).isTrue();
+            assertThat(result.getMessage()).isEqualTo("LOCKED 900");
+        }
+
+        @Test
         @DisplayName("both bundled catalogues carry the wrong-password text, red like the replies beside it")
         void bundledCataloguesCarryTheText() throws Exception {
             for (String language : new String[] {"en", "zh"}) {
