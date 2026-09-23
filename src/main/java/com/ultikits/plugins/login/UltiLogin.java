@@ -1,5 +1,6 @@
 package com.ultikits.plugins.login;
 
+import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.config.RemovedConfigKeys;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
@@ -28,9 +29,6 @@ import java.io.File;
 @UltiToolsModule(scanBasePackages = {"com.ultikits.plugins.login"})
 public class UltiLogin extends UltiToolsPlugin {
 
-    /** The configuration file whose removed keys are reported, relative to this module's folder. */
-    private static final String CONFIG_FILE = "config/login.yml";
-
     @Override
     public boolean registerSelf() {
         getLogger().info(i18n("UltiLogin 已启用！"));
@@ -50,7 +48,25 @@ public class UltiLogin extends UltiToolsPlugin {
     }
 
     private void warnAboutRemovedConfigKeys() {
-        RemovedConfigKeys.warnAboutLeftovers(operatorConfigFile(), getLogger()::warn);
+        // Advisory only: this runs on the enable path of the module whose absence means nobody is
+        // asked to log in, so nothing it throws may cost the module its enable or its reload.
+        try {
+            RemovedConfigKeys.warnAboutLeftovers(operatorConfigFile(), getLogger()::warn);
+        } catch (RuntimeException e) {
+            getLogger().warn(e, "Could not check " + LoginConfig.CONFIG_FILE
+                    + " for removed configuration keys; the module continues without that check.");
+        }
+    }
+
+    /**
+     * The path of this module's configuration file, relative to its folder -- read from
+     * {@link LoginConfig#CONFIG_FILE}, the same constant that entity binds, never a copy of it.
+     * Package-private so a test can require the two to be equal.
+     *
+     * @return {@code config/login.yml}
+     */
+    String operatorConfigPath() {
+        return LoginConfig.CONFIG_FILE;
     }
 
     /**
@@ -64,6 +80,6 @@ public class UltiLogin extends UltiToolsPlugin {
      * @return the file {@code config/login.yml} resolves to for this installation
      */
     File operatorConfigFile() {
-        return getConfigFile(CONFIG_FILE);
+        return getConfigFile(operatorConfigPath());
     }
 }

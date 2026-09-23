@@ -20,8 +20,15 @@ import lombok.Setter;
  */
 @Getter
 @Setter
-@ConfigEntity("config/login.yml")
+@ConfigEntity(LoginConfig.CONFIG_FILE)
 public class LoginConfig extends AbstractConfigEntity {
+
+    /**
+     * This entity's file, relative to the module's folder. The one place the path is written: the
+     * annotation above, the constructor and the removed-key check in {@code UltiLogin} all read it
+     * from here, so they cannot drift apart (UltiKits/UltiLogin#23).
+     */
+    public static final String CONFIG_FILE = "config/login.yml";
     
     // ==================== 基础设置 ====================
 
@@ -207,7 +214,7 @@ public class LoginConfig extends AbstractConfigEntity {
     private String adminAccountNotFound = "&c玩家 {PLAYER} 尚未注册";
     
     public LoginConfig() {
-        super("config/login.yml");
+        super(CONFIG_FILE);
     }
     
     /**
