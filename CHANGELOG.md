@@ -46,6 +46,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `/logadmin`、`/recover`、`/regs`、`/panel`）现在会被真正移除，其 `LoginProtectionListener` 监听器也不再
   触发。此前本模块用一个只打印日志的方法替换了框架的卸载方法，因此两者都会一直保持生效，直到服务器重启
   （UltiKits/UltiLogin#29）。
+- On a server with `security.max-login-attempts: 0` (unlimited attempts), a wrong password is now
+  answered with "Wrong password! Please try again." Previously every wrong password on such a
+  server was answered with the account-locked message (`messages.account-locked`, "try again in
+  `{TIME}` seconds", with `{TIME}` set to `security.lockout-duration`), although nothing was ever
+  locked and the next attempt was always accepted. The new reply comes from this module's
+  language catalogue (key `wrong_password`), so it follows the server's `language` setting.
+  Servers with a limit are unchanged: a wrong password still shows the attempts remaining, and
+  the attempt that reaches the limit still shows the account-locked message and locks the account
+  (UltiKits/UltiLogin#23).
+- 在 `security.max-login-attempts: 0`（不限制尝试次数）的服务器上，输错密码现在会回复"密码错误！请重试。"。
+  此前这类服务器上的每一次输错密码都会回复账户锁定消息（`messages.account-locked`，"请在 `{TIME}` 秒后重试"，
+  `{TIME}` 取 `security.lockout-duration`），但实际上从未锁定任何账户，下一次尝试总是照常受理。新的回复来自
+  本模块的语言文件（键 `wrong_password`），因此会跟随服务器的 `language` 设置。设置了次数上限的服务器不受影响：
+  输错密码仍显示剩余尝试次数，达到上限的那一次仍显示账户锁定消息并锁定账户（UltiKits/UltiLogin#23）。
 
 ### Removed
 

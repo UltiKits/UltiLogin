@@ -415,6 +415,13 @@ public class LoginService {
         String hash = hashPassword(password, account.getSalt());
         if (!hashesMatch(hash, account.getPasswordHash())) {
             recordFailedAttempt(player);
+            // Unlimited attempts (max-login-attempts <= 0) records nothing and locks nothing, so
+            // the reply is the plain wrong-password text, never the locked one (UltiLogin#23).
+            // Tested on the setting itself, not on getRemainingAttempts() == -1: a limited count
+            // can also go negative. A lock is still refused above, before any password check.
+            if (config.getMaxLoginAttempts() <= 0) {
+                return new LoginResult(false, plugin.i18n("wrong_password"));
+            }
             int remaining = getRemainingAttempts(player);
             if (remaining > 0) {
                 return new LoginResult(false, config.getAttemptsRemaining()

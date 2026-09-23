@@ -3,7 +3,7 @@
 
   "login_success": "Login successful! Welcome back!",
   "register_success": "Registration successful! Welcome to the server!",
-  "wrong_password": "Wrong password! Please try again.",
+  "wrong_password": "&cWrong password! Please try again.",
   "already_logged": "You are already logged in!",
   "not_registered": "You are not registered! Please register first.",
   "already_registered": "You are already registered! Please login.",
