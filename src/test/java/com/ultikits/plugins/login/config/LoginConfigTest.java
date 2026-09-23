@@ -7,6 +7,31 @@ import static org.assertj.core.api.Assertions.*;
 @DisplayName("LoginConfig Tests")
 class LoginConfigTest {
 
+    /**
+     * UltiKits/UltiLogin#23: {@code messages.wrong-password} was declared, validated and written
+     * into every operator's {@code login.yml}, and never read. Its text now comes from the language
+     * catalogue ({@code wrong_password}), so the key is removed rather than wired -- the maintainer's
+     * message-text decision of 2026-09-22. Asserted over the declared surface, the only place the
+     * framework learns which keys to write: a field carrying this path would put the key back into
+     * every fresh {@code login.yml}. The sibling {@code messages.account-locked} is the positive
+     * control, proving the scan reads the annotations at all.
+     */
+    @Test
+    @DisplayName("declares no messages.wrong-password key, while still declaring its sibling messages.account-locked")
+    void declaresNoWrongPasswordKey() {
+        java.util.List<String> paths = new java.util.ArrayList<>();
+        for (java.lang.reflect.Field field : LoginConfig.class.getDeclaredFields()) {
+            com.ultikits.ultitools.annotations.ConfigEntry entry =
+                    field.getAnnotation(com.ultikits.ultitools.annotations.ConfigEntry.class);
+            if (entry != null) {
+                paths.add(entry.path());
+            }
+        }
+
+        assertThat(paths).contains("messages.account-locked");
+        assertThat(paths).doesNotContain("messages.wrong-password");
+    }
+
     @Nested
     @DisplayName("Default Values")
     class DefaultValues {
@@ -228,13 +253,6 @@ class LoginConfigTest {
         void loginSuccess() {
             LoginConfig config = createRealConfig();
             assertThat(config.getLoginSuccess()).isNotEmpty();
-        }
-
-        @Test
-        @DisplayName("Should have default wrong password message")
-        void wrongPassword() {
-            LoginConfig config = createRealConfig();
-            assertThat(config.getWrongPassword()).isNotEmpty();
         }
 
         @Test
@@ -525,9 +543,6 @@ class LoginConfigTest {
 
             config.setLoginSuccess("custom login success");
             assertThat(config.getLoginSuccess()).isEqualTo("custom login success");
-
-            config.setWrongPassword("custom wrong");
-            assertThat(config.getWrongPassword()).isEqualTo("custom wrong");
 
             config.setAlreadyLogged("custom already");
             assertThat(config.getAlreadyLogged()).isEqualTo("custom already");
