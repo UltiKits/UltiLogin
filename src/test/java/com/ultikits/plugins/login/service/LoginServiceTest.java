@@ -469,11 +469,12 @@ class LoginServiceTest {
         @DisplayName("a limited count below zero is still answered as locked when the attempt locks the account")
         @SuppressWarnings("unchecked")
         void negativeLimitedCountIsNotMistakenForUnlimited() throws Exception {
-            // Why the unlimited reply is chosen from the setting and not from
-            // getRemainingAttempts() == -1: a limited count can reach -1 too. With lockout-type
-            // UUID an expired lock is cleared without clearing the per-IP failure counter, so the
-            // first wrong password after expiry counts max + 1, locks again at once, and computes
-            // max - (max + 1) = -1. That lock is real, so the reply must be the locked one.
+            // A limited count can reach -1, the same value getRemainingAttempts() uses for
+            // "unlimited": with lockout-type UUID an expired lock is cleared without clearing the
+            // per-IP failure counter (UltiKits/UltiLogin#38), so the first wrong password after
+            // expiry counts max + 1, locks again at once, and computes max - (max + 1) = -1. That
+            // lock is real, so the reply must be the locked one -- which is why the reply is chosen
+            // from whether a lock was recorded, and never from the count's value.
             when(config.getMaxLoginAttempts()).thenReturn(2);
             when(config.getLockoutType()).thenReturn("UUID");
             service.login(player, "wrong1");
@@ -490,6 +491,36 @@ class LoginServiceTest {
                     .isEqualTo(-1);
             assertThat(service.isLocked(player)).isTrue();
             assertThat(result.getMessage()).isEqualTo("LOCKED 900");
+        }
+
+        @Test
+        @DisplayName("an unrecognised lockout-type is never answered as locked unless a lock was recorded")
+        void unrecognisedLockoutTypeIsNeverAnsweredAsLocked() {
+            // Gate 1 WR-01: the class this issue belongs to is "a wrong-password reply says the
+            // account is locked when no lock was recorded", and the unlimited setting was only one
+            // cause. A lockout-type other than IP / UUID / BOTH (a typo, or NONE) counts failures
+            // and records no lock, so the attempt that reaches the limit used to be answered
+            // "locked for 900 seconds" while the next attempt was accepted.
+            //
+            // Asserted as the invariant, not as today's lock semantics: whether such a value SHOULD
+            // lock is UltiKits/UltiLogin#37's open product question. If it is later made to lock,
+            // every reply here must be the locked one and this test still holds.
+            when(config.getMaxLoginAttempts()).thenReturn(2);
+            when(config.getLockoutType()).thenReturn("NONE");
+
+            assertThat(service.login(player, "wrong1").getMessage()).isEqualTo("REMAINING 1");
+            for (int attempt = 2; attempt <= 4; attempt++) {
+                String reply = service.login(player, "wrong" + attempt).getMessage();
+                boolean locked = service.isLocked(player);
+
+                assertThat(reply.startsWith("LOCKED "))
+                        .as("attempt %d: reply '%s' says locked iff a lock was recorded (%s)",
+                                attempt, reply, locked)
+                        .isEqualTo(locked);
+                if (!locked) {
+                    assertThat(reply).as("attempt %d", attempt).isEqualTo(CATALOGUE_WRONG_PASSWORD);
+                }
+            }
         }
 
         @Test
