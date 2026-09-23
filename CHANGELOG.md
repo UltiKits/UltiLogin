@@ -89,12 +89,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   ability to change the text; it moves it to the file that already held it in both languages.
   A server upgraded from an earlier version keeps the key in its `login.yml`, because the framework
   never deletes a key from an operator's file; while it is there, the module logs one warning at
-  startup and on each `/ul reload UltiLogin`, naming the file and the key, and the key can simply
+  startup and on every reload of this module (`/ul reload` or `/ul reload UltiLogin`), naming the
+  file and the key, and the key can simply
   be deleted (UltiKits/UltiLogin#23).
 - 移除 `config/login.yml` 中的 `messages.wrong-password` 设置项。它在任何版本中都从未生效：没有任何代码读取它，
   修改它从未改变玩家看到的内容。现在新增的"密码错误"回复（见 `### Fixed`）改为从本模块的语言文件读取文本——
   `config` 文件夹旁 `lang/<语言>.json` 中的 `wrong_password` 条目——因此会跟随服务器的 `language` 设置，
   也应在那里修改。移除该设置项并不意味着无法再修改这段文本，只是把它移到了早已以两种语言保存这段文本的文件中。
   从旧版本升级的服务器，其 `login.yml` 中仍会保留该键，因为框架从不删除运维文件中的键；只要该键还在，
-  本模块会在启动时以及每次执行 `/ul reload UltiLogin` 时记录一条警告，指出文件与键名，直接删除该键即可
+  本模块会在启动时以及每次重载本模块时（`/ul reload` 或 `/ul reload UltiLogin`）记录一条警告，指出文件与键名，直接删除该键即可
   （UltiKits/UltiLogin#23）。

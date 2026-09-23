@@ -39,8 +39,9 @@ public class UltiLogin extends UltiToolsPlugin {
     }
 
     /**
-     * Runs after the framework has re-read {@code login.yml}. Repeats the removed-key warning, so an
-     * operator who edits a key this version no longer reads and reloads is told it has no effect.
+     * Runs after the framework has re-read {@code login.yml}, on every reload of this module -- a bare
+     * {@code /ul reload} as well as {@code /ul reload UltiLogin}. Repeats the removed-key warning, so
+     * an operator who edits a key this version no longer reads and reloads is told it has no effect.
      */
     @Override
     protected void onReload() {
