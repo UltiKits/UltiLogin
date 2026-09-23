@@ -415,21 +415,21 @@ public class LoginService {
         String hash = hashPassword(password, account.getSalt());
         if (!hashesMatch(hash, account.getPasswordHash())) {
             recordFailedAttempt(player);
-            // Unlimited attempts (max-login-attempts <= 0) records nothing and locks nothing, so
-            // the reply is the plain wrong-password text, never the locked one (UltiLogin#23).
-            // Tested on the setting itself, not on getRemainingAttempts() == -1: a limited count
-            // can also go negative. A lock is still refused above, before any password check.
-            if (config.getMaxLoginAttempts() <= 0) {
-                return new LoginResult(false, plugin.i18n("wrong_password"));
+            // The reply says "locked" only when this attempt actually recorded a lock, never
+            // because of the count (UltiLogin#23): unlimited attempts and an unrecognised
+            // lockout-type both count without locking, and a limited count can reach -1 while
+            // locked (UltiLogin#38). A lock that existed before this attempt was refused above,
+            // before any password check, so the lock here is new and lasts lockout-duration.
+            if (isLocked(player)) {
+                return new LoginResult(false, config.getAccountLocked()
+                    .replace("{TIME}", String.valueOf(config.getLockoutDuration())));
             }
             int remaining = getRemainingAttempts(player);
             if (remaining > 0) {
                 return new LoginResult(false, config.getAttemptsRemaining()
                     .replace("{COUNT}", String.valueOf(remaining)));
-            } else {
-                return new LoginResult(false, config.getAccountLocked()
-                    .replace("{TIME}", String.valueOf(config.getLockoutDuration())));
             }
+            return new LoginResult(false, plugin.i18n("wrong_password"));
         }
         
         // Clear failed attempts on success
