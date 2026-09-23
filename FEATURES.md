@@ -46,7 +46,7 @@ for UAT execution and issue reconciliation — the public description of these f
   `requireOp = true`, so no row below carries the suffix. `n/a` is for every Kind that is not
   `command`.
 - **Source:** `ClassName#member` — the class and member that actually reads or applies the
-  feature — for every Kind, `config` included: all 52 `config` rows below cite the reading
+  feature — for every Kind, `config` included: all 51 `config` rows below cite the reading
   member. Unlike the framework's own `config.yml` (read directly via Bukkit's
   `FileConfiguration`, with no bound entity at all), both of this module's configuration files
   (`login.yml`, `email.yml`) are real `@ConfigEntity`/`@ConfigEntry`-bound classes, so a config
@@ -95,8 +95,9 @@ rather than an error:
 `@EventListener` = 2 (classes), `@EventHandler` = 25 (handler methods: 21 in
 `LoginProtectionListener`, 4 in `LoginProtectionPaperListener`; 1 class / 15 methods before
 UltiKits/UltiLogin#24), `@Scheduled` = 2,
-`@ConditionalOnConfig` = 0, `@ConfigEntity` = 2 (classes), `@ConfigEntry` = 52 (44 on
-`LoginConfig`, 8 on `EmailConfig`) — confirmed by reading every one of the 16 source files
+`@ConditionalOnConfig` = 0, `@ConfigEntity` = 2 (classes), `@ConfigEntry` = 51 (43 on
+`LoginConfig`, 8 on `EmailConfig`; 52 and 44 before UltiKits/UltiLogin#23 removed
+`messages.wrong-password`) — confirmed by reading every one of the 18 source files
 directly, not by trusting the count alone. `LoginAdminCommand`'s six `@CmdMapping` sites
 (`reset <player>` at line 44, `reset <player> <password>` at line 73, `forcelogin <player>` at
 line 111, `unregister <player>` at line 145, `info <player>` at line 169, and the bare `""` at
@@ -262,16 +263,19 @@ Both are 54-slot `Gui` pages presenting a numeric keypad; neither exists unless
 
 ## Lifecycle Hooks
 
-This module declares no lifecycle override and no `onReload()`/`onUnregister()` hook (UltiKits/UltiLogin#29):
-`/ul reload UltiLogin` runs only UltiTools' own final `reloadSelf()`, whose first step
+This module declares no lifecycle override and no `onUnregister()` hook (UltiKits/UltiLogin#29).
+`/ul reload UltiLogin` runs UltiTools' own final `reloadSelf()`, whose first step
 (`ConfigManager#reloadConfigs`) re-initialises, in place, the same `LoginConfig` instance the container
-injected into `LoginService`. The row below is `event`-Kind with no `@EventHandler` site behind it: a reload
-is a framework-invoked lifecycle step, not a command this repository maps or a config key of its own, so it
-is not counted in the reconciliation table's `@EventHandler` line (25).
+injected into `LoginService`; the module's one `onReload()` hook, added by UltiKits/UltiLogin#23, then does
+nothing but the removed-key check of `ultilogin.lifecycle.removed-key-warning`. Both rows below are
+`event`-Kind with no `@EventHandler` site behind them: module enable and reload are framework-invoked
+lifecycle steps, not commands this repository maps or config keys of its own, so neither is counted in the
+reconciliation table's `@EventHandler` line (25).
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
-| ultilogin.lifecycle.reload | `/ul reload UltiLogin` re-reads `config/login.yml` into the running module, so an edited `allowed-commands` list governs the very next command an unauthenticated player runs, in both directions (an added entry is permitted, a removed one is refused again), without a restart; this module adds no reload work of its own and prints no reload line of its own. A regression guard for UltiKits/UltiLogin#13, not a changed behaviour: before UltiKits/UltiLogin#29 the module's reload override already called the framework's reload first | event | `/ul reload UltiLogin` (framework calls `reloadSelf()`, which reloads configuration, refreshes language, reports `@ConditionalOnConfig` drift and logs its own per-module line) | n/a | n/a | admin | brief | LoginService#isCommandAllowed |
+| ultilogin.lifecycle.reload | `/ul reload UltiLogin` re-reads `config/login.yml` into the running module, so an edited `allowed-commands` list governs the very next command an unauthenticated player runs, in both directions (an added entry is permitted, a removed one is refused again), without a restart; this module adds no reload work of its own beyond the removed-key check of `ultilogin.lifecycle.removed-key-warning`, and prints no reload line of its own. A regression guard for UltiKits/UltiLogin#13, not a changed behaviour: before UltiKits/UltiLogin#29 the module's reload override already called the framework's reload first | event | `/ul reload UltiLogin` (framework calls `reloadSelf()`, which reloads configuration, refreshes language, reports `@ConditionalOnConfig` drift and logs its own per-module line) | n/a | n/a | admin | brief | LoginService#isCommandAllowed |
+| ultilogin.lifecycle.removed-key-warning | When the module is enabled and again on every `/ul reload UltiLogin`, read the operator's own `config/login.yml` and, for each key this version no longer reads that is still in it, log one console WARNING naming the file, the key, where the setting went and that the key can be deleted. The one such key is `messages.wrong-password`, removed by UltiKits/UltiLogin#23 (its text is the language catalogue's `wrong_password` now); the framework writes a declared default only for a missing key and never deletes one, so every server that ran an earlier version still has it. A missing or unparseable file produces no warning | event | module enable (server start, or loading the module) and `/ul reload UltiLogin` | n/a | n/a | admin | brief | UltiLogin#registerSelf, UltiLogin#onReload, RemovedConfigKeys#warnAboutLeftovers |
 
 ## Data persistence
 
@@ -282,18 +286,20 @@ is not counted in the reconciliation table's `@EventHandler` line (25).
 
 ## Configuration
 
-Every `@ConfigEntry`-annotated field across this module's two `@ConfigEntity` classes (52 keys
-total: `LoginConfig` 44, `EmailConfig` 8 — matching the reconciliation table's own `@ConfigEntry`
-count of 52 exactly). Several of these keys already have a behavioural row above (login/register/
+Every `@ConfigEntry`-annotated field across this module's two `@ConfigEntity` classes (51 keys
+total: `LoginConfig` 43, `EmailConfig` 8 — matching the reconciliation table's own `@ConfigEntry`
+count of 51 exactly). Several of these keys already have a behavioural row above (login/register/
 change-password validation, the security lockout, the GUI gate, the two scheduled tasks) — that
 row documents the *feature* the key drives, this row documents the *key* itself, at file-and-key
 granularity, so the reconciliation table can prove every key is accounted for without also making
 every behavioural row carry a `config` Kind.
 
-**Two `messages.*` keys are declared and validated but never read by the command path whose name
-they most resemble, each documented in its own row below with the filed issue number
-(UltiKits/UltiLogin#20) rather than a claim that editing it changes anything reachable from that
-command.**
+**One `messages.*` key is read by some command paths and not by another whose name it resembles:
+`messages.password-mismatch` is read by `/register` and the GUI register page but never by
+`/logadmin reset`, as its own row below states. A second key this paragraph used to count,
+`messages.wrong-password`, was never read by anything and is removed (UltiKits/UltiLogin#23);
+while an operator's `login.yml` still holds it, `ultilogin.lifecycle.removed-key-warning` reports
+it.**
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
@@ -335,7 +341,6 @@ command.**
 | ultilogin.config.login.messages.register-prompt-gui | GUI-mode registration prompt text shown on the same trigger as `messages.register-prompt` | config | `config/login.yml: messages.register-prompt-gui (default: Simplified Chinese text, not reproduced per D-02 -- see this same file's source line for the exact characters)` | n/a | n/a | admin | none | LoginService#onPlayerJoin |
 | ultilogin.config.login.messages.register-success | Message shown on successful `/register` (both text and GUI mode) | config | `config/login.yml: messages.register-success (default: Simplified Chinese text, not reproduced per D-02 -- see this same file's source line for the exact characters)` | n/a | n/a | admin | brief | RegisterCommand#register |
 | ultilogin.config.login.messages.timeout-kick | Kick message shown to a player removed by `ultilogin.task.timeout-check` | config | `config/login.yml: messages.timeout-kick (default: Simplified Chinese text, not reproduced per D-02 -- see this same file's source line for the exact characters)` | n/a | n/a | admin | brief | LoginService#checkTimeouts |
-| ultilogin.config.login.messages.wrong-password | Declared and validated, but never read by any production code — `LoginService#login`'s wrong-password branch returns `messages.attempts-remaining`, `messages.account-locked`, or, when `security.max-login-attempts` is `0` (unlimited), the language catalogue's `wrong_password` text (UltiKits/UltiLogin#23), never this key. A declared-but-dead key with no observable effect, editing it changes nothing an operator can see | config | `config/login.yml: messages.wrong-password (default: Simplified Chinese text, not reproduced per D-02 -- see this same file's source line for the exact characters, has no effect)` | n/a | n/a | admin | none | LoginService#login (declared, never read outside this class) |
 | ultilogin.config.login.password.max-length | Command-mode maximum password length | config | `config/login.yml: password.max-length (default: 32)` | n/a | n/a | admin | brief | LoginService#isPasswordValid |
 | ultilogin.config.login.password.min-length | Command-mode minimum password length | config | `config/login.yml: password.min-length (default: 6)` | n/a | n/a | admin | brief | LoginService#isPasswordValid |
 | ultilogin.config.login.security.lockout-duration | Seconds an IP/UUID stays locked out after exceeding `security.max-login-attempts` | config | `config/login.yml: security.lockout-duration (default: 900)` | n/a | n/a | admin | brief | LoginService#recordFailedAttempt |

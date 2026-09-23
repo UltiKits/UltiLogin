@@ -145,10 +145,6 @@ public class LoginConfig extends AbstractConfigEntity {
     private String loginSuccess = "&a登录成功！欢迎回来！";
 
     @NotEmpty
-    @ConfigEntry(path = "messages.wrong-password", comment = "密码错误")
-    private String wrongPassword = "&c密码错误！请重试。";
-
-    @NotEmpty
     @ConfigEntry(path = "messages.already-logged", comment = "已经登录")
     private String alreadyLogged = "&e你已经登录了！";
 
