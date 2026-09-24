@@ -225,7 +225,6 @@ public final class UltiLoginTestHelper {
         // Messages
         lenient().when(config.getRegisterSuccess()).thenReturn("&a注册成功！");
         lenient().when(config.getLoginSuccess()).thenReturn("&a登录成功！");
-        lenient().when(config.getWrongPassword()).thenReturn("&c密码错误！");
         lenient().when(config.getAlreadyLogged()).thenReturn("&e已经登录了！");
         lenient().when(config.getNotRegistered()).thenReturn("&c未注册！");
         lenient().when(config.getAlreadyRegistered()).thenReturn("&c已经注册过了！");

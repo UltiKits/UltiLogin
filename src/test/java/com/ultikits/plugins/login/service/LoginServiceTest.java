@@ -28,6 +28,8 @@ import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scheduler.BukkitScheduler;
 import org.bukkit.scheduler.BukkitTask;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.mockito.stubbing.Answer;
@@ -351,6 +353,204 @@ class LoginServiceTest {
             service.login(player, "wrong2");
 
             assertThat(service.isLocked(player)).isTrue();
+        }
+    }
+
+    // ==================== wrong-password reply by attempt limit (UltiLogin#23) ====================
+
+    /**
+     * UltiKits/UltiLogin#23. The reply to a wrong password is chosen from three configurations,
+     * and only one of them was wrong: with {@code security.max-login-attempts: 0} (declared
+     * "unlimited") {@code getRemainingAttempts} returns {@code -1}, which failed the
+     * {@code remaining > 0} test the same way {@code 0} does, so every wrong password on an
+     * unlimited server was answered with the account-locked message although nothing was locked.
+     * <p>
+     * The reply is only a message; the lock itself is enforced by {@code isLocked} at the top of
+     * {@code login}, ahead of any password check. So the two limited cases here are regression
+     * guards, not new behaviour: a limited account with attempts left is told how many, and an
+     * exhausted one is locked and <em>stays unable to log in with the correct password</em> for
+     * every lockout type (threat T-17-15-03). They are here so the fix to the unlimited branch
+     * cannot be made by loosening the branch the other two rely on.
+     */
+    @Nested
+    @DisplayName("wrong-password reply by attempt limit (UltiKits/UltiLogin#23)")
+    class WrongPasswordReplyByAttemptLimit {
+
+        private static final String PASSWORD = "password123";
+        private static final String CATALOGUE_WRONG_PASSWORD = "CATALOGUE wrong_password";
+
+        @BeforeEach
+        void distinctMessages() {
+            // Three distinct literals, so each assertion names exactly one reply and a reply
+            // cannot pass by containing a fragment of another.
+            when(config.getAttemptsRemaining()).thenReturn("REMAINING {COUNT}");
+            when(config.getAccountLocked()).thenReturn("LOCKED {TIME}");
+            when(config.getLockoutDuration()).thenReturn(900);
+            when(UltiLoginTestHelper.getMockPlugin().i18n("wrong_password"))
+                    .thenReturn(CATALOGUE_WRONG_PASSWORD);
+
+            String salt = "salt23";
+            AccountData account = UltiLoginTestHelper.createSampleAccount(
+                    playerUuid, "TestPlayer", hashPasswordForTest(PASSWORD, salt), salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+        }
+
+        @Test
+        @DisplayName("unlimited attempts: every wrong password gets the catalogue's wrong-password reply, never the locked one")
+        void unlimitedNeverSaysLocked() {
+            when(config.getMaxLoginAttempts()).thenReturn(0);
+
+            // More wrong attempts than any limited configuration allows (@Range max is 20).
+            for (int attempt = 1; attempt <= 25; attempt++) {
+                LoginService.LoginResult result = service.login(player, "wrong" + attempt);
+
+                assertThat(result.isSuccess()).isFalse();
+                assertThat(result.getMessage())
+                        .as("reply to wrong attempt %d on an unlimited server", attempt)
+                        .isEqualTo(CATALOGUE_WRONG_PASSWORD);
+                assertThat(service.isLocked(player)).isFalse();
+            }
+
+            // And it really was not locked: the correct password still logs in.
+            LoginService.LoginResult result = service.login(player, PASSWORD);
+            assertThat(result.isSuccess()).isTrue();
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+        }
+
+        @Test
+        @DisplayName("limited with attempts left: the reply counts the attempts remaining")
+        void limitedWithRemainingCountsDown() {
+            when(config.getMaxLoginAttempts()).thenReturn(3);
+
+            assertThat(service.login(player, "wrong1").getMessage()).isEqualTo("REMAINING 2");
+            assertThat(service.login(player, "wrong2").getMessage()).isEqualTo("REMAINING 1");
+            assertThat(service.isLocked(player)).isFalse();
+        }
+
+        @ParameterizedTest(name = "lockout-type {0}")
+        @ValueSource(strings = {"IP", "UUID", "BOTH"})
+        @DisplayName("limited and exhausted: the reply is the locked one, and the correct password is then refused")
+        void limitedExhaustedIsLockedAndCannotLogIn(String lockoutType) throws Exception {
+            when(config.getMaxLoginAttempts()).thenReturn(2);
+            when(config.getLockoutType()).thenReturn(lockoutType);
+
+            assertThat(service.login(player, "wrong1").getMessage()).isEqualTo("REMAINING 1");
+            assertThat(service.login(player, "wrong2").getMessage()).isEqualTo("LOCKED 900");
+            assertThat(service.isLocked(player)).isTrue();
+
+            LoginService.LoginResult result = service.login(player, PASSWORD);
+
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(result.getMessage()).startsWith("LOCKED ");
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            verify(dataOperator, never()).update(any(AccountData.class));
+        }
+
+        @Test
+        @DisplayName("a lock taken while limited still refuses the correct password after the limit is lifted to unlimited")
+        void liftingTheLimitDoesNotLiftAnExistingLock() throws Exception {
+            // The unlimited branch must not be a way around a lock that already exists: an
+            // operator who sets max-login-attempts to 0 and reloads while a player is locked out
+            // changes how FUTURE wrong passwords are answered, not whether the current lock holds.
+            when(config.getMaxLoginAttempts()).thenReturn(1);
+            when(config.getLockoutType()).thenReturn("IP");
+            assertThat(service.login(player, "wrong").getMessage()).isEqualTo("LOCKED 900");
+
+            when(config.getMaxLoginAttempts()).thenReturn(0);
+            LoginService.LoginResult result = service.login(player, PASSWORD);
+
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(result.getMessage()).startsWith("LOCKED ");
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            verify(dataOperator, never()).update(any(AccountData.class));
+        }
+
+        @Test
+        @DisplayName("a limited count below zero is still answered as locked when the attempt locks the account")
+        @SuppressWarnings("unchecked")
+        void negativeLimitedCountIsNotMistakenForUnlimited() throws Exception {
+            // A limited count can reach -1, the same value getRemainingAttempts() uses for
+            // "unlimited": with lockout-type UUID an expired lock is cleared without clearing the
+            // per-IP failure counter (UltiKits/UltiLogin#38), so the first wrong password after
+            // expiry counts max + 1, locks again at once, and computes max - (max + 1) = -1. That
+            // lock is real, so the reply must be the locked one -- which is why the reply is chosen
+            // from whether a lock was recorded, and never from the count's value.
+            when(config.getMaxLoginAttempts()).thenReturn(2);
+            when(config.getLockoutType()).thenReturn("UUID");
+            service.login(player, "wrong1");
+            assertThat(service.login(player, "wrong2").getMessage()).isEqualTo("LOCKED 900");
+
+            Map<UUID, Long> lockedUuids = (Map<UUID, Long>) getFieldValue(service, "lockedUuids");
+            lockedUuids.put(playerUuid, System.currentTimeMillis() - 1000);
+            assertThat(service.isLocked(player)).as("scenario: the lock has expired").isFalse();
+
+            LoginService.LoginResult result = service.login(player, "wrong3");
+
+            assertThat(service.getRemainingAttempts(player))
+                    .as("scenario: this is the limited case whose count is -1")
+                    .isEqualTo(-1);
+            assertThat(service.isLocked(player)).isTrue();
+            assertThat(result.getMessage()).isEqualTo("LOCKED 900");
+        }
+
+        @Test
+        @DisplayName("an unrecognised lockout-type is never answered as locked unless a lock was recorded")
+        void unrecognisedLockoutTypeIsNeverAnsweredAsLocked() {
+            // Gate 1 WR-01: the class this issue belongs to is "a wrong-password reply says the
+            // account is locked when no lock was recorded", and the unlimited setting was only one
+            // cause. A lockout-type other than IP / UUID / BOTH (a typo, or NONE) counts failures
+            // and records no lock, so the attempt that reaches the limit used to be answered
+            // "locked for 900 seconds" while the next attempt was accepted.
+            //
+            // Asserted as the invariant, not as today's lock semantics: whether such a value SHOULD
+            // lock is UltiKits/UltiLogin#37's open product question. If it is later made to lock,
+            // every reply here must be the locked one and this test still holds.
+            when(config.getMaxLoginAttempts()).thenReturn(2);
+            when(config.getLockoutType()).thenReturn("NONE");
+
+            assertThat(service.login(player, "wrong1").getMessage()).isEqualTo("REMAINING 1");
+            for (int attempt = 2; attempt <= 4; attempt++) {
+                String reply = service.login(player, "wrong" + attempt).getMessage();
+                boolean locked = service.isLocked(player);
+
+                assertThat(reply.startsWith("LOCKED "))
+                        .as("attempt %d: reply '%s' says locked iff a lock was recorded (%s)",
+                                attempt, reply, locked)
+                        .isEqualTo(locked);
+                if (!locked) {
+                    assertThat(reply).as("attempt %d", attempt).isEqualTo(CATALOGUE_WRONG_PASSWORD);
+                }
+            }
+        }
+
+        @Test
+        @DisplayName("both bundled catalogues carry the wrong-password text, red like the replies beside it")
+        void bundledCataloguesCarryTheText() throws Exception {
+            for (String language : new String[] {"en", "zh"}) {
+                for (String extension : new String[] {".json", ".yml"}) {
+                    String resource = "lang/" + language + extension;
+                    String value = catalogueValue(resource, "wrong_password");
+                    assertThat(value).as(resource).isNotNull().startsWith("&c");
+                    assertThat(value.substring(2).trim()).as(resource).isNotEmpty();
+                    assertThat(value).as(resource + " takes no placeholder").doesNotContain("{");
+                }
+            }
+            assertThat(catalogueValue("lang/en.json", "wrong_password"))
+                    .isNotEqualTo(catalogueValue("lang/zh.json", "wrong_password"));
+        }
+
+        private String catalogueValue(String resource, String key) throws Exception {
+            try (java.io.InputStream in =
+                         LoginServiceTest.class.getClassLoader().getResourceAsStream(resource)) {
+                assertThat(in).as(resource + " is on the classpath").isNotNull();
+                java.io.Reader reader = new java.io.InputStreamReader(in, StandardCharsets.UTF_8);
+                if (resource.endsWith(".json")) {
+                    com.google.gson.JsonObject object =
+                            com.google.gson.JsonParser.parseReader(reader).getAsJsonObject();
+                    return object.has(key) ? object.get(key).getAsString() : null;
+                }
+                return YamlConfiguration.loadConfiguration(reader).getString(key);
+            }
         }
     }
 

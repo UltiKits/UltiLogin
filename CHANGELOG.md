@@ -46,6 +46,26 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `/logadmin`、`/recover`、`/regs`、`/panel`）现在会被真正移除，其 `LoginProtectionListener` 监听器也不再
   触发。此前本模块用一个只打印日志的方法替换了框架的卸载方法，因此两者都会一直保持生效，直到服务器重启
   （UltiKits/UltiLogin#29）。
+- A wrong password is now answered with the account-locked message only when that attempt really
+  locks the account. Two configurations used to show it although nothing was locked and the next
+  attempt was always accepted: `security.max-login-attempts: 0` (unlimited attempts), on every
+  wrong password; and a `security.lockout-type` other than `IP`, `UUID` or `BOTH`, on every wrong
+  password from the one that reaches the limit onwards. Both now answer "Wrong password! Please
+  try again." The account-locked message was `messages.account-locked` ("try again in `{TIME}`
+  seconds", with `{TIME}` set to `security.lockout-duration`); the new reply comes from this
+  module's language catalogue (key `wrong_password`), so it follows the server's `language`
+  setting. Whether an unrecognised `lockout-type` should lock at all is unchanged here and is
+  tracked in UltiKits/UltiLogin#37. Servers with a limit and a recognised `lockout-type` are
+  unchanged: a wrong password still shows the attempts remaining, and the attempt that reaches the
+  limit still shows the account-locked message and locks the account (UltiKits/UltiLogin#23).
+- 输错密码时，只有该次尝试确实锁定了账户，才会回复账户锁定消息。此前有两种配置会在实际并未锁定、下一次尝试
+  也总是照常受理的情况下显示该消息：`security.max-login-attempts: 0`（不限制尝试次数）时的每一次输错；以及
+  `security.lockout-type` 不是 `IP`、`UUID` 或 `BOTH` 时，从达到上限的那一次起的每一次输错。两者现在都回复
+  "密码错误！请重试。"。账户锁定消息即 `messages.account-locked`（"请在 `{TIME}` 秒后重试"，`{TIME}` 取
+  `security.lockout-duration`）；新的回复来自本模块的语言文件（键 `wrong_password`），因此会跟随服务器的
+  `language` 设置。无法识别的 `lockout-type` 究竟是否应当锁定，本次不作改变，由 UltiKits/UltiLogin#37 跟踪。
+  设置了次数上限且 `lockout-type` 可识别的服务器不受影响：输错密码仍显示剩余尝试次数，达到上限的那一次仍
+  显示账户锁定消息并锁定账户（UltiKits/UltiLogin#23）。
 
 ### Removed
 
@@ -61,3 +81,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   UltiTools 6.3.0 会为每个模块输出一行重载日志（`Module 'UltiLogin' reloaded.`）。重载仍会像以前一样把
   `login.yml` 重新读入运行中的模块：此前本模块的重载方法已先调用框架的重载方法完成这一步
   （UltiKits/UltiLogin#29）。
+- The `messages.wrong-password` setting in `config/login.yml`. It never took effect in any version:
+  no code read it, so editing it never changed what a player saw. The wrong-password reply that
+  now exists (see `### Fixed`) takes its text from this module's language file instead — entry
+  `wrong_password` in `lang/<language>.json`, beside the `config` folder — so it follows the
+  server's `language` setting and is customised there. Removing the setting does not remove the
+  ability to change the text; it moves it to the file that already held it in both languages.
+  A server upgraded from an earlier version keeps the key in its `login.yml`, because the framework
+  never deletes a key from an operator's file; while it is there, the module logs one warning at
+  startup and on every reload of this module (`/ul reload` or `/ul reload UltiLogin`), naming the
+  file and the key, and the key can simply
+  be deleted (UltiKits/UltiLogin#23).
+- 移除 `config/login.yml` 中的 `messages.wrong-password` 设置项。它在任何版本中都从未生效：没有任何代码读取它，
+  修改它从未改变玩家看到的内容。现在新增的"密码错误"回复（见 `### Fixed`）改为从本模块的语言文件读取文本——
+  `config` 文件夹旁 `lang/<语言>.json` 中的 `wrong_password` 条目——因此会跟随服务器的 `language` 设置，
+  也应在那里修改。移除该设置项并不意味着无法再修改这段文本，只是把它移到了早已以两种语言保存这段文本的文件中。
+  从旧版本升级的服务器，其 `login.yml` 中仍会保留该键，因为框架从不删除运维文件中的键；只要该键还在，
+  本模块会在启动时以及每次重载本模块时（`/ul reload` 或 `/ul reload UltiLogin`）记录一条警告，指出文件与键名，直接删除该键即可
+  （UltiKits/UltiLogin#23）。
