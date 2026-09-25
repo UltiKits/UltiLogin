@@ -9,6 +9,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A wrong code in `/recover <code> <password> <confirm>` now says how many attempts are left, for
+  example `Invalid verification code! Remaining attempts: 2`. It used to show the placeholder itself,
+  `Remaining attempts: {COUNT}`, because the recovery path never filled it in; `/regs <code>`
+  already did (UltiKits/UltiLogin#21).
+- `/recover <验证码> <密码> <确认密码>` 输错验证码时，现在会显示剩余尝试次数，例如 `验证码错误！剩余尝试次数: 2`。
+  此前找回密码流程从未填入该值，直接显示占位符 `{COUNT}`；`/regs <验证码>` 一直是正常的（UltiKits/UltiLogin#21）。
+
 - A player who has not logged in can no longer equip or remove an armor stand's items, interact with
   an entity at a precise point on its body, or swap their main hand and off hand. All three were
   still allowed: the login protection already refused ordinary entity interaction, but Bukkit

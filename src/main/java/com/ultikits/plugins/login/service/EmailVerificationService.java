@@ -307,7 +307,8 @@ public class EmailVerificationService {
                 pendingRecoveries.remove(uuid);
                 return new RecoverVerifyResult(false, "email_code_max_attempts");
             }
-            return new RecoverVerifyResult(false, "email_code_invalid");
+            int remaining = emailConfig.getMaxAttempts() - pending.attempts;
+            return new RecoverVerifyResult(false, "email_code_invalid", "{COUNT}", String.valueOf(remaining));
         }
 
         // Store verified IP for IP restriction
@@ -484,13 +485,17 @@ public class EmailVerificationService {
     public static class RecoverVerifyResult {
         private final boolean success;
         private final String messageKey;
+        private final String[] replacements;
 
-        public RecoverVerifyResult(boolean success, String messageKey) {
+        public RecoverVerifyResult(boolean success, String messageKey, String... replacements) {
             this.success = success;
             this.messageKey = messageKey;
+            this.replacements = replacements;
         }
 
         public boolean isSuccess() { return success; }
         public String getMessageKey() { return messageKey; }
+        /** Placeholder/value pairs for the message, as {@link VerifyResult} carries them (UltiKits/UltiLogin#21). */
+        public String[] getReplacements() { return replacements; }
     }
 }
