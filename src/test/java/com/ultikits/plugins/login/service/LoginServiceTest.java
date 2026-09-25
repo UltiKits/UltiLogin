@@ -82,11 +82,11 @@ class LoginServiceTest {
         // Routed through UltiLoginTestHelper.bootstrapLiveServer() (rather than calling
         // MockBukkit.mock() inline here) so this class and UltiLoginRegistrySentinelTest share one
         // bootstrap entry point -- breaking that entry point fails both, not just whichever
-        // consumer happens to still call it directly. Reconciliation pattern per
-        // 14-LEDGER-UltiTrade.md, the phase's canary module, which hit the identical "test helper
-        // already touches Bukkit.server" shape. The live server this returns is already installed
-        // as Bukkit.server and wrapped in a Mockito spy, so the existing per-test
-        // doReturn(...).when(server).method(...) stubs later in this class keep working unchanged.
+        // consumer happens to still call it directly. Same reconciliation as UltiTrade, which hit
+        // the identical "test helper already touches Bukkit.server" shape. The live server this
+        // returns is already installed as Bukkit.server and wrapped in a Mockito spy, so the
+        // existing per-test doReturn(...).when(server).method(...) stubs later in this class keep
+        // working unchanged.
         UltiLoginTestHelper.bootstrapLiveServer();
 
         UltiLoginTestHelper.setUp();
@@ -374,8 +374,8 @@ class LoginServiceTest {
      * {@code login}, ahead of any password check. So the two limited cases here are regression
      * guards, not new behaviour: a limited account with attempts left is told how many, and an
      * exhausted one is locked and <em>stays unable to log in with the correct password</em> for
-     * every lockout type (threat T-17-15-03). They are here so the fix to the unlimited branch
-     * cannot be made by loosening the branch the other two rely on.
+     * every lockout type. They are here so the fix to the unlimited branch cannot be made by
+     * loosening the branch the other two rely on.
      */
     @Nested
     @DisplayName("wrong-password reply by attempt limit (UltiKits/UltiLogin#23)")
@@ -501,11 +501,11 @@ class LoginServiceTest {
         @Test
         @DisplayName("an unrecognised lockout-type is never answered as locked unless a lock was recorded")
         void unrecognisedLockoutTypeIsNeverAnsweredAsLocked() {
-            // Gate 1 WR-01: the class this issue belongs to is "a wrong-password reply says the
-            // account is locked when no lock was recorded", and the unlimited setting was only one
-            // cause. A lockout-type other than IP / UUID / BOTH (a typo, or NONE) counts failures
-            // and records no lock, so the attempt that reaches the limit used to be answered
-            // "locked for 900 seconds" while the next attempt was accepted.
+            // The class this issue belongs to is "a wrong-password reply says the account is locked
+            // when no lock was recorded", and the unlimited setting was only one cause. A lockout-type
+            // other than IP / UUID / BOTH (a typo, or NONE) counts failures and records no lock, so
+            // the attempt that reaches the limit used to be answered "locked for 900 seconds" while
+            // the next attempt was accepted.
             //
             // Asserted as the invariant, not as today's lock semantics: whether such a value SHOULD
             // lock is UltiKits/UltiLogin#37's open product question. If it is later made to lock,
@@ -606,9 +606,9 @@ class LoginServiceTest {
         @Test
         @DisplayName("Should revoke the online player's active login state after a successful change")
         void forcesReauthenticationForOnlinePlayerOnChangePassword() throws Exception {
-            // Real-machine finding F-L1 (13-uat-results.md #14, Laojun 2026-09-06): a real
-            // /changepassword reported success while the player stayed authenticated --
-            // /mail inbox still worked, /recover and /login both said already logged in.
+            // Real-server finding: a real /changepassword reported success while the player stayed
+            // authenticated -- /mail inbox still worked, /recover and /login both said already logged
+            // in.
             // invalidateSession only ended the remembered `sessions` entry; unlike unregister
             // and resetPassword it never called forceReauthenticationIfOnline, so
             // LoginProtectionListener (which authorizes actions through isLoggedIn, not
@@ -1085,9 +1085,9 @@ class LoginServiceTest {
 
                 assertThat(result).isTrue();
                 assertThat(service.isLoggedIn(playerUuid)).isFalse();
-                // 13-06/D-08: unregister() no longer replays onPlayerJoin(player) to force a
-                // logout -- that replay is the defect (it re-runs the session check, which found
-                // the never-cleared session and logged the deleted account straight back in).
+                // unregister() no longer replays onPlayerJoin(player) to force a logout -- that
+                // replay is the defect (it re-runs the session check, which found the
+                // never-cleared session and logged the deleted account straight back in).
                 // getLocation() (used by onPlayerJoin's original-location bookkeeping) is what
                 // proves the replay is still gone -- it is never called from this path.
                 //
@@ -1471,7 +1471,7 @@ class LoginServiceTest {
         }
     }
 
-    // ==================== session invalidation (13-06 / D-08, D-09) ====================
+    // ==================== session invalidation ====================
 
     @Nested
     @DisplayName("Session Invalidation")
@@ -1547,12 +1547,11 @@ class LoginServiceTest {
         @Test
         @DisplayName("invalidateSession cancels a pending panel magic-link request and its polling task")
         void invalidateSessionCancelsPendingPanelRequest() throws Exception {
-            // CR-01 (13-REVIEW-UltiLogin.md): unregister() ends `sessions` entries but, before
-            // this fix, left an in-flight /panel magic-link request live. Since invalidateSession
-            // is the single entry point every credential-changing path already routes through
-            // (13-06/D-08), the cancellation belongs here rather than duplicated at each call
-            // site -- covering unregister and both resetPassword overloads and changePassword in
-            // one place.
+            // unregister() ends `sessions` entries but, before this fix, left an in-flight /panel
+            // magic-link request live. Since invalidateSession is the single entry point every
+            // credential-changing path already routes through, the cancellation belongs here
+            // rather than duplicated at each call site -- covering unregister and both
+            // resetPassword overloads and changePassword in one place.
             @SuppressWarnings("unchecked")
             Map<String, UUID> pendingPanelRequests =
                     (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
@@ -1792,16 +1791,16 @@ class LoginServiceTest {
         }
     }
 
-    // ==================== recovery reachability across an upgrade reload (13-13, UltiLogin#13) ====================
+    // ==================== recovery reachability across an upgrade reload (UltiLogin#13) ====================
 
     /**
      * UltiLogin#13: on a server that installed UltiLogin before {@code regs}/{@code recover}
      * were added to {@code allowedCommands}' default, those two commands stay unreachable until
-     * an operator corrects {@code login.yml} and reloads. The plan 13-13 measurement
-     * (13-LEDGER-UltiLogin.md, "Recovery command diagnosis") found the cause was neither the
-     * {@code LoginConfig} field-binding nor {@code isCommandAllowed}'s own string parsing, but a
-     * reload override that never reached {@code ConfigManager.reloadConfigs(...)} -- the only
-     * thing that re-reads {@code login.yml} into a running {@code LoginConfig}.
+     * an operator corrects {@code login.yml} and reloads. Measurement found the cause was
+     * neither the {@code LoginConfig} field-binding nor {@code isCommandAllowed}'s own string
+     * parsing, but a reload override that never reached {@code
+     * ConfigManager.reloadConfigs(...)} -- the only thing that re-reads {@code login.yml} into
+     * a running {@code LoginConfig}.
      * <p>
      * UltiKits/UltiLogin#29: as of UltiTools 6.3.0 {@link UltiToolsPlugin#reloadSelf()} is a
      * {@code final} framework method that always calls {@code ConfigManager.reloadConfigs(this)}
@@ -1845,14 +1844,14 @@ class LoginServiceTest {
                     return configRoot.toFile().getAbsolutePath();
                 }
                 if ("getResourceFolderPath".equals(name)) {
-                    // WR-02 (13-REVIEW-UltiLogin.md): ConfigManager.register(...) reads this
-                    // Lombok-generated public getter (distinct from getConfigFolder/getConfigFile
-                    // above, both protected final) to build `new File(getResourceFolderPath(),
-                    // "config/login.yml")`. Left un-stubbed, it falls through to
-                    // RETURNS_DEFAULTS -> null, and File(null, child) happens to treat that as
-                    // "relative to the process CWD" -- so isDirectory() only returns false because
-                    // no such directory exists relative to wherever the test JVM's CWD is. Stub it
-                    // explicitly so this fixture does not depend on that accident.
+                    // ConfigManager.register(...) reads this Lombok-generated public getter
+                    // (distinct from getConfigFolder/getConfigFile above, both protected final)
+                    // to build `new File(getResourceFolderPath(), "config/login.yml")`. Left
+                    // un-stubbed, it falls through to RETURNS_DEFAULTS -> null, and File(null,
+                    // child) happens to treat that as "relative to the process CWD" -- so
+                    // isDirectory() only returns false because no such directory exists relative
+                    // to wherever the test JVM's CWD is. Stub it explicitly so this fixture does
+                    // not depend on that accident.
                     return configRoot.toFile().getAbsolutePath();
                 }
                 return RETURNS_DEFAULTS.answer(invocation);
@@ -1903,8 +1902,8 @@ class LoginServiceTest {
             // The step UltiToolsPlugin#reloadSelf() (final, 6.3.0) runs first on /ul reload UltiLogin.
             fixture.configManager.reloadConfigs(fixture.plugin);
 
-            // The fix must not widen the gate into a hole (T-13-13-01): a command outside the
-            // permitted set stays refused after the reload, exactly as before it.
+            // The fix must not widen the gate into a hole: a command outside the permitted set stays
+            // refused after the reload, exactly as before it.
             assertThat(fixture.service.isCommandAllowed("/definitelynotanallowedcommand"))
                     .as("the reload fix must not permit a command that was never on the list")
                     .isFalse();
@@ -1926,7 +1925,7 @@ class LoginServiceTest {
             fixture.configManager.reloadConfigs(fixture.plugin);
 
             // Direct assertion on the list the running plugin holds -- the mechanism, not only the
-            // symptom -- reproducing 13-LEDGER-UltiLogin.md's own measured second-init() output.
+            // symptom -- reproducing the measured second-init() output.
             assertThat(fixture.config.getAllowedCommands())
                     .as("in memory, after a correct file plus a reload, the list must match the file")
                     .containsExactly("login", "l", "register", "reg", "panel", "regs", "recover");
@@ -3217,21 +3216,20 @@ class LoginServiceTest {
             // completePanelLogin()'s registration check would later pass and re-authenticate the
             // revoked connection.
             //
-            // Round 5 (13-REVIEW-UltiLogin.md, own deep review of bcadfb5): the previous version
-            // of this test passed for the wrong reason. UltiTools.getInstance() is null in this
-            // unit test, so requestPanelLink's own try/catch around UltiTools.getEnv() refused
-            // the request via the unrelated "API URL not configured" branch regardless of
-            // whether the fence check above it existed at all -- removing the fence entirely
-            // left this test passing unchanged. Stubbing UltiTools.getEnv(), CommonUtils
-            // .getUltiToolsUUID(), and SimpleHttpClient.post() below makes the rest of the
-            // publish path succeed, so that with the fence removed this request WOULD be
-            // published; the assertions then pin the fence-specific outcome instead of a
-            // coincidental one. Verified locally: disabling the "if (generationCell.get() !=
-            // expectedGeneration)" check in requestPanelLink() turns the isSuccess() assertion
-            // below red -- org.opentest4j.AssertionFailedError: [a panel link request captured
-            // before an invalidation must not be published] Expecting value to be false but was
-            // true -- since the (fence-free) request then reaches the stubbed HTTP call and
-            // succeeds.
+            // The previous version of this test passed for the wrong reason.
+            // UltiTools.getInstance() is null in this unit test, so requestPanelLink's own
+            // try/catch around UltiTools.getEnv() refused the request via the unrelated "API
+            // URL not configured" branch regardless of whether the fence check above it existed
+            // at all -- removing the fence entirely left this test passing unchanged. Stubbing
+            // UltiTools.getEnv(), CommonUtils .getUltiToolsUUID(), and SimpleHttpClient.post()
+            // below makes the rest of the publish path succeed, so that with the fence removed
+            // this request WOULD be published; the assertions then pin the fence-specific
+            // outcome instead of a coincidental one. Verified locally: disabling the "if
+            // (generationCell.get() != expectedGeneration)" check in requestPanelLink() turns
+            // the isSuccess() assertion below red -- org.opentest4j.AssertionFailedError: [a
+            // panel link request captured before an invalidation must not be published]
+            // Expecting value to be false but was true -- since the (fence-free) request then
+            // reaches the stubbed HTTP call and succeeds.
             when(config.isUlticloudEnabled()).thenReturn(true);
 
             long capturedGeneration = service.getInvalidationGeneration(playerUuid);
@@ -3503,11 +3501,11 @@ class LoginServiceTest {
         @Test
         @DisplayName("Should refuse to complete login when the account is no longer registered")
         void refusesLoginForDeletedAccount() throws Exception {
-            // CR-01 (13-REVIEW-UltiLogin.md): a second, independent layer of defense alongside
-            // invalidateSession's cancellation. If a magic-link request survives account deletion
-            // for any reason (e.g. it was created after the account row was already gone, or the
-            // cancellation path itself regresses), completePanelLogin must still refuse to mark a
-            // non-existent account as logged in.
+            // A second, independent layer of defense alongside invalidateSession's cancellation.
+            // If a magic-link request survives account deletion for any reason (e.g. it was
+            // created after the account row was already gone, or the cancellation path itself
+            // regresses), completePanelLogin must still refuse to mark a non-existent account as
+            // logged in.
             @SuppressWarnings("unchecked")
             Map<String, UUID> pendingPanelRequests =
                     (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
@@ -3639,9 +3637,9 @@ class LoginServiceTest {
         @Test
         @DisplayName("Should refuse panel login when no account exists for the request")
         void nullAccountPanelLogin() throws Exception {
-            // CR-01 (13-REVIEW-UltiLogin.md): this test previously asserted the bug itself --
-            // that completePanelLogin "should still complete login" with no backing account.
-            // That is exactly the deleted-account-logs-back-in defect the phase closes, so the
+            // This test previously asserted the bug itself -- that completePanelLogin "should
+            // still complete login" with no backing account.
+            // That is exactly the deleted-account-logs-back-in defect this module fixes, so the
             // expectation is corrected here rather than left pinning the old behavior.
             @SuppressWarnings("unchecked")
             Map<String, UUID> pendingPanelRequests =
@@ -3752,10 +3750,10 @@ class LoginServiceTest {
             // inside its HTTP call. The pre-fix fallback in startAuthPolling treated "no pending
             // request found" as authorization to call completeLogin(player) directly, bypassing
             // every check completePanelLogin performs (including the isRegistered guard added
-            // for CR-01). Reproduced deterministically by unregistering the account from inside
-            // the mocked HTTP call's answer -- exactly the ordering the report describes -- with
-            // the scheduler wired to run both hops of the poll synchronously so the race is
-            // exact rather than best-effort.
+            // against a deleted account logging back in). Reproduced deterministically by
+            // unregistering the account from inside the mocked HTTP call's answer -- exactly the
+            // ordering the report describes -- with the scheduler wired to run both hops of the poll
+            // synchronously so the race is exact rather than best-effort.
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
             when(mockQuery.list()).thenReturn(Collections.singletonList(account));
 
@@ -4309,10 +4307,9 @@ class LoginServiceTest {
      * block to run {@code runTask(...)} synchronously on the calling thread, and returns the
      * fake scheduler so callers can add further stubs if needed.
      * <p>
-     * Round 5 (13-REVIEW-UltiLogin.md, own deep review of bcadfb5, Info finding): {@link
-     * LoginProtectionListener#presentCredentialPrompt} now dispatches its text-prompt branch
-     * through {@code Bukkit.getScheduler().runTask(...)} the same way its GUI branch already
-     * did, so every test that fully mocks {@code Bukkit} (which otherwise makes {@code
+     * {@link LoginProtectionListener#presentCredentialPrompt} now dispatches its text-prompt
+     * branch through {@code Bukkit.getScheduler().runTask(...)} the same way its GUI branch
+     * already did, so every test that fully mocks {@code Bukkit} (which otherwise makes {@code
      * Bukkit.getScheduler()} return {@code null}) and then exercises a credential-invalidating
      * path against an online player must stub the scheduler too, or the text branch NPEs.
      */

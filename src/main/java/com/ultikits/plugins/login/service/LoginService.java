@@ -500,13 +500,13 @@ public class LoginService {
      * address per player, so a scan over its key set is bounded and small, and a second
      * structure would itself need invalidating.
      * <p>
-     * Real-machine finding F-L1 (13-uat-results.md #14, Laojun 2026-09-06): a real
-     * {@code /changepassword} called only this method and reported success while the player
-     * stayed authenticated -- {@code LoginProtectionListener} authorizes in-game actions through
-     * {@link #isLoggedIn(UUID)}, not {@link #hasValidSession(Player)}, and only the unregister and
-     * resetPassword paths separately called {@code forceReauthenticationIfOnline}. This is
-     * now the single entry point every credential-changing path must be sufficient by calling
-     * alone: it forces re-authentication itself, so no caller can forget the step.
+     * Real-server finding: a real {@code /changepassword} called only this method and reported
+     * success while the player stayed authenticated -- {@code LoginProtectionListener} authorizes
+     * in-game actions through {@link #isLoggedIn(UUID)}, not {@link #hasValidSession(Player)}, and
+     * only the unregister and resetPassword paths separately called {@code
+     * forceReauthenticationIfOnline}. This is now the single entry point every credential-changing
+     * path must be sufficient by calling alone: it forces re-authentication itself, so no caller
+     * can forget the step.
      * <p>
      * Also advances this player's invalidation generation ({@link #getInvalidationGeneration
      * (UUID)}), first -- before {@link #cancelPendingPanelRequest(UUID)}, which can only cancel
@@ -517,19 +517,19 @@ public class LoginService {
      * requestPanelLink} checks to refuse publishing that now-stale request when its worker
      * finally runs.
      * <p>
-     * Round 5 (13-REVIEW-UltiLogin.md, own deep review of bcadfb5): the generation bump and the
-     * cancellation below run inside a {@code synchronized} block keyed on this player's own
-     * {@link AtomicLong} generation cell -- the same cell {@link #requestPanelLink(Player, long)}
-     * synchronizes on around its own check-then-insert. That is what closes the narrow window a
-     * plain read-then-write left open: without a shared lock, an invalidation landing between
-     * {@code requestPanelLink}'s generation read and its {@code pendingPanelRequests} insert
-     * would find nothing to cancel (nothing had been inserted yet) while the generation had
-     * already been read as matching, so the stale request would still get published. With both
-     * sides synchronized on the same per-player cell, either this method's bump-and-cancel runs
-     * completely before {@code requestPanelLink}'s check-and-insert (so the check then sees the
-     * bumped generation and refuses), or it runs completely after (so the cancellation finds the
-     * entry {@code requestPanelLink} just inserted and removes it) -- there is no interleaving
-     * that lets a stale request survive either path.
+     * The generation bump and the cancellation below run inside a {@code synchronized} block
+     * keyed on this player's own {@link AtomicLong} generation cell -- the same cell {@link
+     * #requestPanelLink(Player, long)} synchronizes on around its own check-then-insert. That
+     * is what closes the narrow window a plain read-then-write left open: without a shared
+     * lock, an invalidation landing between {@code requestPanelLink}'s generation read and its
+     * {@code pendingPanelRequests} insert would find nothing to cancel (nothing had been
+     * inserted yet) while the generation had already been read as matching, so the stale
+     * request would still get published. With both sides synchronized on the same per-player
+     * cell, either this method's bump-and-cancel runs completely before {@code
+     * requestPanelLink}'s check-and-insert (so the check then sees the bumped generation and
+     * refuses), or it runs completely after (so the cancellation finds the entry {@code
+     * requestPanelLink} just inserted and removes it) -- there is no interleaving that lets a
+     * stale request survive either path.
      *
      * @param playerUuid the player whose sessions should end, and whose active login state
      *                   should be revoked if they are online
@@ -594,7 +594,7 @@ public class LoginService {
      * credential-changing path (unregister, both resetPassword overloads, changePassword)
      * cancels a pending /panel request the same way -- rather than a deleted or credential-reset
      * account being logged back in when the worker later confirms an authentication that was
-     * requested before the account changed. See 13-REVIEW-UltiLogin.md CR-01.
+     * requested before the account changed.
      *
      * @param playerUuid the player whose pending panel request should be cancelled
      */
@@ -645,8 +645,8 @@ public class LoginService {
      * already-authenticated online connection stayed fully authorized with the old credentials
      * until it happened to disconnect, defeating an administrative password reset issued in
      * response to a compromised, currently-connected account. Deliberately does not replay
-     * {@link #onPlayerJoin(Player)}: that replay is a separate, already-fixed defect (13-06/D-08)
-     * because it re-runs the session auto-login check.
+     * {@link #onPlayerJoin(Player)}: that replay is a separate, already-fixed defect because it
+     * re-runs the session auto-login check.
      * <p>
      * As of the F-L1 fix, {@link #invalidateSession(UUID)} calls this itself, so this method no
      * longer needs a separate call from every credential-changing path -- kept {@code private}
@@ -1297,11 +1297,11 @@ public class LoginService {
     }
 
     /**
-     * Compare two Base64-encoded password hashes in constant time. WR-03
-     * (13-REVIEW-UltiLogin.md): {@code String.equals} short-circuits on the first mismatched
-     * character, which is a textbook timing side-channel for a stored-hash comparison. Decodes
-     * both to bytes and defers to {@link MessageDigest#isEqual(byte[], byte[])}, which always
-     * compares the full length of the shorter input regardless of where the first difference is.
+     * Compare two Base64-encoded password hashes in constant time. {@code String.equals}
+     * short-circuits on the first mismatched character, which is a textbook timing side-channel
+     * for a stored-hash comparison. Decodes both to bytes and defers to {@link
+     * MessageDigest#isEqual(byte[], byte[])}, which always compares the full length of the
+     * shorter input regardless of where the first difference is.
      */
     private boolean hashesMatch(String computedHash, String storedHash) {
         if (computedHash == null || storedHash == null) {
@@ -1361,14 +1361,13 @@ public class LoginService {
      * worker uses the two-argument overload instead, capturing the generation before it
      * schedules any asynchronous work. See {@link #requestPanelLink(Player, long)}.
      * <p>
-     * Round 5 (13-REVIEW-UltiLogin.md, own deep review of bcadfb5, Info finding): package-private
-     * rather than {@code public} -- its safety depends entirely on the caller staying on the
-     * same, uninterrupted call stack as the eventual publish, and nothing in the signature
-     * enforces that. A future caller wrapping this overload in its own asynchronous scheduling
-     * (as {@code PanelCommand} used to do before this fence existed) would silently reintroduce
-     * the very race {@link #requestPanelLink(Player, long)} exists to close, because the
-     * generation would then be captured inside the async worker instead of before it was
-     * scheduled. No caller outside this class needs it -- only this package's tests do.
+     * Package-private rather than {@code public} -- its safety depends entirely on the caller
+     * staying on the same, uninterrupted call stack as the eventual publish, and nothing in the
+     * signature enforces that. A future caller wrapping this overload in its own asynchronous
+     * scheduling (as {@code PanelCommand} used to do before this fence existed) would silently
+     * reintroduce the very race {@link #requestPanelLink(Player, long)} exists to close,
+     * because the generation would then be captured inside the async worker instead of before
+     * it was scheduled. No caller outside this class needs it -- only this package's tests do.
      *
      * @param player the player requesting the link
      * @return PanelLinkResult with the URL or error message
@@ -1399,16 +1398,15 @@ public class LoginService {
      * boolean)}'s request-id-keyed lookup (round 2, comment 3944418953; keyed by request id as of
      * round 7) -- so this is the one remaining fence, not a duplicate of either.
      * <p>
-     * Round 5 (13-REVIEW-UltiLogin.md, own deep review of bcadfb5): the generation check and the
-     * {@code pendingPanelRequests} insert below now run inside a {@code synchronized} block keyed
-     * on the same per-player {@link AtomicLong} generation cell {@link #invalidateSession(UUID)}
-     * synchronizes on. This closes the narrow window a plain read-then-insert left open: the
-     * check and the insert are now one atomic step from {@code invalidateSession}'s point of
-     * view, so an invalidation landing "in between" is impossible -- it either happens
-     * completely before this block (and the check sees it) or completely after (and {@code
-     * invalidateSession}'s own cancellation finds the entry this block just inserted). Only the
-     * publish decision and the map insert are inside the lock; the blocking HTTP call and
-     * everything after it run outside it.
+     * The generation check and the {@code pendingPanelRequests} insert below now run inside a
+     * {@code synchronized} block keyed on the same per-player {@link AtomicLong} generation cell
+     * {@link #invalidateSession(UUID)} synchronizes on. This closes the narrow window a plain
+     * read-then-insert left open: the check and the insert are now one atomic step from {@code
+     * invalidateSession}'s point of view, so an invalidation landing "in between" is impossible
+     * -- it either happens completely before this block (and the check sees it) or completely
+     * after (and {@code invalidateSession}'s own cancellation finds the entry this block just
+     * inserted). Only the publish decision and the map insert are inside the lock; the blocking
+     * HTTP call and everything after it run outside it.
      * <p>
      * Round 7 (Codex PR #18 thread 3946170644): an invalidation racing an in-flight publish was
      * still able to slip through, because nothing re-checked the generation or the pending-request
@@ -1690,16 +1688,16 @@ public class LoginService {
      * cleanup) runs on this same main thread, so whichever removal happened first is guaranteed
      * to be visible here.
      * <p>
-     * Fixes a P1 Codex reported on PR #18 (review comment 3944418953, against the CR-01 fix
-     * commits): the original implementation looked up the request ID once, on the same call
-     * stack as the async HTTP fetch, and treated "not found" as authorization to call {@link
-     * #completeLogin(Player)} directly -- bypassing {@link #completePanelLogin(String, boolean)}
-     * 's registration check entirely. {@link BukkitTask#cancel()} only prevents a scheduled
-     * task's future executions; it does not interrupt an invocation already inside its HTTP
-     * call. A poll that started before an admin reset or unregister could therefore still
-     * observe "completed" and re-authenticate an online player after their credentials were
-     * revoked or their account deleted -- undoing {@code forceReauthenticationIfOnline}
-     * in the same stroke.
+     * Fixes a P1 Codex reported on PR #18 (review comment 3944418953, against the
+     * deleted-account fix): the original implementation looked up the request ID once, on the
+     * same call stack as the async HTTP fetch, and treated "not found" as authorization to call
+     * {@link #completeLogin(Player)} directly -- bypassing {@link #completePanelLogin(String,
+     * boolean)} 's registration check entirely. {@link BukkitTask#cancel()} only prevents a
+     * scheduled task's future executions; it does not interrupt an invocation already inside
+     * its HTTP call. A poll that started before an admin reset or unregister could therefore
+     * still observe "completed" and re-authenticate an online player after their credentials
+     * were revoked or their account deleted -- undoing {@code forceReauthenticationIfOnline} in
+     * the same stroke.
      * <p>
      * Round 2's fix (comment 3944418953) replaced that with a fresh lookup at this main-thread
      * completion point, scanning {@code pendingPanelRequests} for whichever entry was pending for
@@ -1756,11 +1754,12 @@ public class LoginService {
             return false;
         }
 
-        // Second, independent layer of defense against CR-01: the account may have been
-        // unregistered after this request was created but before invalidateSession's
-        // cancellation reached it (or, in the future, through some other path that never calls
-        // invalidateSession). Refuse to grant the login rather than trust that the account still
-        // exists just because a pending request for it does.
+        // Second, independent layer of defense against a deleted account logging back in:
+
+        // the account may have been unregistered after this request was created but before
+        // invalidateSession's cancellation reached it (or, in the future, through some other
+        // path that never calls invalidateSession). Refuse to grant the login rather than trust
+        // that the account still exists just because a pending request for it does.
         if (!isRegistered(playerUuid)) {
             return false;
         }

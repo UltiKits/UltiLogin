@@ -49,8 +49,8 @@ import java.util.jar.JarFile;
  * language the framework loads ({@link #jarLanguage}), never the module's {@code i18n}, which reads the
  * operator's extracted language file first. Otherwise an edit of that file would be written into the
  * config file, would not be in the tracked set, and would stop following {@code language} -- a value
- * the module wrote itself would become unrecognisable (orchestrator ruling O3, 2026-09-25). So these
- * settings are customised in the config file, not in the language file.
+ * the module wrote itself would become unrecognisable. So these settings are customised in the config
+ * file, not in the language file.
  * <p>
  * The jar's texts are read from this module's own jar (its {@link CodeSource}), not through the
  * class loader and not from the language files on disk: every internal module shares one class

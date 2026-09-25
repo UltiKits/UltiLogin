@@ -57,13 +57,12 @@ class LoginProtectionListenerTest {
         mockServer = mock(Server.class);
         org.bukkit.plugin.PluginManager mockPm = mock(org.bukkit.plugin.PluginManager.class);
         mockScheduler = mock(BukkitScheduler.class);
-        // Round 6 (13-REVIEW-UltiLogin.md, own review of 29ba589): presentCredentialPrompt's new
-        // dispatchOnMainThread helper only schedules via runTask(...) when bukkitPlugin.isEnabled()
-        // is true (off the primary thread, which this mock Server always reports since
-        // isPrimaryThread() is never stubbed). Default to enabled so every pre-existing
-        // scheduler-capturing test below keeps exercising the runTask path; DisabledPlugin below
-        // overrides it back to false for its own case, and PrimaryThread stubs isPrimaryThread()
-        // true instead.
+        // presentCredentialPrompt's new dispatchOnMainThread helper only schedules via runTask(...)
+        // when bukkitPlugin.isEnabled() is true (off the primary thread, which this mock Server
+        // always reports since isPrimaryThread() is never stubbed). Default to enabled so every
+        // pre-existing scheduler-capturing test below keeps exercising the runTask path;
+        // DisabledPlugin below overrides it back to false for its own case, and PrimaryThread
+        // stubs isPrimaryThread() true instead.
         mockBukkitPlugin = mock(org.bukkit.plugin.Plugin.class);
         lenient().when(mockBukkitPlugin.isEnabled()).thenReturn(true);
         lenient().when(mockServer.getPluginManager()).thenReturn(mockPm);
@@ -108,7 +107,7 @@ class LoginProtectionListenerTest {
     }
 
     @Nested
-    @DisplayName("presentCredentialPrompt dispatch (round 6, 13-REVIEW-UltiLogin.md own review of 29ba589)")
+    @DisplayName("presentCredentialPrompt dispatch")
     class PresentCredentialPromptDispatch {
 
         @Test
@@ -771,10 +770,9 @@ class LoginProtectionListenerTest {
             listener.onPlayerChat(event);
 
             assertThat(event.isCancelled()).isTrue();
-            // Round 5 (13-REVIEW-UltiLogin.md, own deep review of bcadfb5, Info finding): the
-            // text-prompt branch is now dispatched via Bukkit.getScheduler().runTask(...), the
-            // same as the GUI branch already was, so this must capture and run that task rather
-            // than expect player.sendMessage(...) synchronously.
+            // The text-prompt branch is now dispatched via Bukkit.getScheduler().runTask(...),
+            // the same as the GUI branch already was, so this must capture and run that task
+            // rather than expect player.sendMessage(...) synchronously.
             ArgumentCaptor<Runnable> captor = ArgumentCaptor.forClass(Runnable.class);
             verify(mockScheduler).runTask(any(), captor.capture());
             captor.getValue().run();
@@ -793,9 +791,8 @@ class LoginProtectionListenerTest {
             listener.onPlayerChat(event);
 
             assertThat(event.isCancelled()).isTrue();
-            // Round 5 (13-REVIEW-UltiLogin.md, own deep review of bcadfb5, Info finding): see
-            // sendPromptRegistered() above -- the text-prompt branch now schedules onto the main
-            // thread the same way the GUI branch already did.
+            // See sendPromptRegistered() above -- the text-prompt branch now schedules onto the
+            // main thread the same way the GUI branch already did.
             ArgumentCaptor<Runnable> captor = ArgumentCaptor.forClass(Runnable.class);
             verify(mockScheduler).runTask(any(), captor.capture());
             captor.getValue().run();
@@ -912,9 +909,8 @@ class LoginProtectionListenerTest {
             listener.onPlayerCommand(event);
 
             assertThat(event.isCancelled()).isTrue();
-            // Round 5 (13-REVIEW-UltiLogin.md, own deep review of bcadfb5, Info finding): see
-            // OnPlayerChatExtended#sendPromptRegistered() above -- the text-prompt branch now
-            // schedules onto the main thread the same way the GUI branch already did.
+            // See OnPlayerChatExtended#sendPromptRegistered() above -- the text-prompt branch
+            // now schedules onto the main thread the same way the GUI branch already did.
             ArgumentCaptor<Runnable> captor = ArgumentCaptor.forClass(Runnable.class);
             verify(mockScheduler).runTask(any(), captor.capture());
             captor.getValue().run();
@@ -923,7 +919,7 @@ class LoginProtectionListenerTest {
     }
 
     @Nested
-    @DisplayName("sendLoginPrompt text-mode dispatch race (round 12, 13-REVIEW-UltiLogin.md Codex thread 3947572910)")
+    @DisplayName("sendLoginPrompt text-mode dispatch race")
     class SendLoginPromptTextModeCallback {
 
         /**
@@ -1088,9 +1084,8 @@ class LoginProtectionListenerTest {
          * Triggers onPlayerJoin with GUI mode enabled, captures the Runnable scheduled via
          * runTaskLater without invoking it, so each test below can choose which tick's state
          * (online/offline, logged-in/not, session valid/not) the delayed task observes when it
-         * finally runs -- the ArgumentCaptor<Runnable> capture-and-invoke idiom documented in
-         * 09-PATTERNS.md / 09-15-SUMMARY.md for this ecosystem's anonymous BukkitRunnable
-         * scheduler callbacks.
+         * finally runs -- the ArgumentCaptor<Runnable> capture-and-invoke idiom used for this
+         * ecosystem's anonymous BukkitRunnable scheduler callbacks.
          */
         private Runnable captureDelayedTask() {
             when(config.isGuiModeEnabled()).thenReturn(true);

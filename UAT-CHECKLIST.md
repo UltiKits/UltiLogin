@@ -14,21 +14,21 @@ for real-machine verification, not user-facing documentation.
 - **Columns:** `ID`, `Preconditions`, `Steps`, `Expected`, `Layer`, `Covers`.
 - **ID:** cites its `FEATURES.md` ID verbatim. A negative case suffixes the checklist ID only,
   as `.neg-<slug>` — a negative case still tests the same feature, so the base ID is unchanged.
-- **Layer**, copied verbatim from Laojun's own `ultitools-real-client-uat` skill so no
+- **Layer**, copied verbatim from the real-client acceptance tooling's fixed vocabulary so no
   translation step exists at dispatch time: `protocol`, `java-client`, `os-input`, `pixel`,
   `server`, `human`.
-- **Delegated-authorization UltiCloud rows (D-27b, corrected by Phase 15 D-01):** a row whose
+- **Delegated-authorization UltiCloud rows:** a row whose
   Steps can only be exercised through an authenticated UltiCloud panel session carries the fixed
   Preconditions phrase `an authorized UltiCloud session under the maintainer's delegated
   authorization` (appended to, not replacing, the row's own preconditions) and Layer `server`.
   This module's `/panel` command is such a row: it hands the player a real UltiCloud magic-link,
-  which the maintainer's delegated authorization (Phase 15 D-01) lets the dispatching agent
-  complete directly, scoped to the shared UAT server only.
-- **Mailpit-sink rows (this module's own addition to the D-27b pattern, corrected by Phase 15
-  D-02):** a row whose Steps can only be exercised by actually sending an email and reading the
+  which the maintainer's delegated authorization lets the acceptance tester complete
+  directly, scoped to the shared UAT server only.
+- **Mailpit-sink rows (this module's own addition to the authenticated-session pattern):** a
+  row whose Steps can only be exercised by actually sending an email and reading the
   resulting code from a real inbox carries the fixed Preconditions phrase `an SMTP server
-  reachable from the shared server with an inbox the executor can read` and Layer `server`. As of
-  Phase 15 D-02, the shared server's `config.yml` `email.*` block points at a local Mailpit sink
+  reachable from the shared server with an inbox the executor can read` and Layer `server`. The
+  shared server's `config.yml` `email.*` block points at a local Mailpit sink
   (no personal mail credentials involved, nothing leaves the machine), so these rows are
   executable and observed through the running server. Every row under `## Email Binding` and
   `## Password Recovery` that causes a real verification email to be sent is such a row. A
@@ -38,12 +38,12 @@ for real-machine verification, not user-facing documentation.
   matters.
 - **Expected** must name an observable truth — an exact chat line, a log line, a database row,
   an inventory slot — and never the words "it works".
-- **Covers** back-references a Phase 9 GUI-excluded class name; left blank when no such class
+- **Covers** back-references a GUI class excluded from the JaCoCo coverage gate; left blank when no such class
   applies.
 - A row whose Preconditions name a prior row must appear after that row in file order — asserted
   mechanically: for every row, every checklist ID cited in its Preconditions cell must have a
-  strictly smaller line number in this file than the row citing it (sweep class 8, D-27a).
-- **Config-per-file rule (D-06):** one checklist row per `@ConfigEntity`-annotated class, never
+  strictly smaller line number in this file than the row citing it.
+- **Config-per-file rule:** one checklist row per `@ConfigEntity`-annotated class, never
   one row per key. The row's ID is suffixed `-yml` (`ultilogin.config.login-yml`,
   `ultilogin.config.email-yml`), aggregating every per-key `ultilogin.config.<file-stem>.*` row
   for that file rather than citing a single one of them.
@@ -57,7 +57,7 @@ for real-machine verification, not user-facing documentation.
   `language: en` unless its own Preconditions set one.
 - **Config text rows:** `ultilogin.config.login.materialize-fresh` and `ultilogin.config.login.materialize-switch`
   exercise `FEATURES.md`'s `ultilogin.lifecycle.legacy-text-defaults` on a fresh file and across a `language`
-  switch; they are named by the phase's config-text convention (`<prefix>.config.<file stem>.materialize-*`)
+  switch; they are named by the config-text naming convention (`<prefix>.config.<file stem>.materialize-*`)
   rather than by that ID, and the upgrade case keeps the existing row `ultilogin.lifecycle.legacy-text-defaults`.
 - This module ships `login-timeout: 60`, `security.max-login-attempts: 5`,
   `security.lockout-duration: 900`, `max-register-per-ip: 3`, `password.min-length: 6`,
@@ -157,7 +157,7 @@ for real-machine verification, not user-facing documentation.
 | ultilogin.protection.command-block.neg-allowed | Not logged in | Run `/login <anything>` (a command ON the shipped `allowed-commands` list) | The command is NOT cancelled by this guard — it reaches `LoginCommand#login` normally (its own validation applies separately) | server | |
 | ultilogin.protection.damage-block | Not logged in (as the potential victim); a hostile mob or another player nearby able to deal damage | Attempt to take damage while not logged in | The damage event is cancelled — health is unchanged | server | |
 | ultilogin.protection.damage-block.neg-attacker | An unauthenticated player attacks an ONLINE, LOGGED-IN target | The unauthenticated player attacks the logged-in target | The damage event is cancelled — the logged-in target's health is unchanged, even though the target itself is authenticated | server | |
-| ultilogin.protection.inventory-block | Not logged in; `gui-mode.enabled: false` (so no credential GUI is open); a chest within reach holding at least one item; at least two distinguishable stacks in the player's own inventory, in known slots | Both branches, not either: (1) right-click the chest; (2) open the player's own inventory, click a stack to pick it up, then drag it across two other slots. Read the player's inventory NBT (`data get entity <player> Inventory`) before and after step 2 | (1) no container window is sent to the client — the chest does not open; (2) every stack named in the before-reading is still in the same slot with the same count, and the pick-up click in step 2 is itself refused, so the cursor never becomes non-empty and the drag cannot begin. **This row therefore does not observe `onInventoryDrag`**, and is not evidence about it either way: in this state the click guard refuses the pick-up first, which is exactly why that handler is documented as defensive. `LoginProtectionEventCoverageTest` is what proves the drag handler cancels. Both branches are still required because they exercise different guards — a chest is refused when the server opens it, while the player's own inventory is already visible, so its clicks have to be refused one at a time — and phase 10's run of this row exercised only branch (1) (UltiKits/UltiLogin#24's sweep, gate 1 WR-07) | server | |
+| ultilogin.protection.inventory-block | Not logged in; `gui-mode.enabled: false` (so no credential GUI is open); a chest within reach holding at least one item; at least two distinguishable stacks in the player's own inventory, in known slots | Both branches, not either: (1) right-click the chest; (2) open the player's own inventory, click a stack to pick it up, then drag it across two other slots. Read the player's inventory NBT (`data get entity <player> Inventory`) before and after step 2 | (1) no container window is sent to the client — the chest does not open; (2) every stack named in the before-reading is still in the same slot with the same count, and the pick-up click in step 2 is itself refused, so the cursor never becomes non-empty and the drag cannot begin. **This row therefore does not observe `onInventoryDrag`**, and is not evidence about it either way: in this state the click guard refuses the pick-up first, which is exactly why that handler is documented as defensive. `LoginProtectionEventCoverageTest` is what proves the drag handler cancels. Both branches are still required because they exercise different guards — a chest is refused when the server opens it, while the player's own inventory is already visible, so its clicks have to be refused one at a time — and an earlier run of this row exercised only branch (1) (UltiKits/UltiLogin#24) | server | |
 | ultilogin.protection.inventory-block.neg-credential-gui-allowed | Not logged in; `gui-mode.enabled: true`; `LoginGUIPage` or `RegisterGUIPage` currently open (recognised by which page is open, not by its title, UltiKits/UltiLogin#35) | Click a slot inside the open credential GUI | The click is NOT cancelled by this guard — the GUI's own `Icon#onClick` handler runs normally | pixel | LoginGUIPage, RegisterGUIPage |
 | ultilogin.protection.inventory-block.neg-own-rows | `language: en` in UltiTools' own `config.yml`; `gui-mode.enabled: true` and `session-enabled: false` in `plugins/UltiTools/pluginConfig/UltiLogin/config/login.yml`, applied with a server restart (record both values first; this row restores them); a registered test player whose four-digit keypad password is known (registered on the registration keypad with `gui-mode.enabled: true`, by entering the same four digits twice) and who is offline. Before the player joins, from the console: nothing; after the player joins and while the keypad is open, from the console: `item replace entity <player> hotbar.0 with minecraft:diamond 3` and `item replace entity <player> inventory.0 with minecraft:oak_log 16` | 1. The player joins; the login keypad opens (`ultilogin.gui.login-page`). 2. From the console, give the two stacks named in Preconditions, then run `data get entity <player> Inventory` and note it. 3. Inside the open keypad, in the player's OWN inventory rows (below the keypad): left-click the `DIAMOND` stack, then left-click an empty slot of the same rows; right-click the `OAK_LOG` stack; hover the `OAK_LOG` slot and press the number key `2`. 4. From the console, `data get entity <player> Inventory` again. 5. As a control, click the four keypad digits of the player's password. 6. Restore: from the console `clear <player>`; set `gui-mode.enabled` and `session-enabled` back to the values recorded in Preconditions and restart | After step 3 no stack was picked up: the step-4 reading is identical to the step-2 reading — `minecraft:diamond` count 3 at `Slot:0b` and `minecraft:oak_log` count 16 at `Slot:9b`, and nothing at `Slot:1b`. After step 5 the keypad closes and the player receives `Login successful! Welcome back!` (green): clicks on the keypad itself were allowed, so step 3's refusals are the guard refusing the player's own rows and not every click. Record `fail` if the step-4 reading differs from step 2 in any slot or count (UltiKits/UltiLogin#35: an unauthenticated player rearranged their own inventory). If step 5 does not log the player in, record `blocked` with both readings attached: the environment never delivered keypad clicks, so step 3 proves nothing | pixel | LoginGUIPage |
 | ultilogin.protection.inventory-block.custom-title | `language: en` in UltiTools' own `config.yml`; the same player, settings and restart as `ultilogin.protection.inventory-block.neg-own-rows` above, except that `gui-mode.title-login` in `login.yml` is set to `'&bWelcome back, traveller'` before the restart (record its previous value first) — a title containing none of the built-in keypad titles' words in either language | 1. The player joins. 2. Click the four keypad digits of the player's password. 3. Restore: set `gui-mode.title-login` back to the recorded value, and `gui-mode.enabled` and `session-enabled` as in `ultilogin.protection.inventory-block.neg-own-rows`, then restart | Step 1 opens the keypad titled `Welcome back, traveller` (aqua). Step 2 closes it and the player receives `Login successful! Welcome back!` (green): the credential GUI is recognised by which page is open, so a customised title neither blocks it from opening nor refuses its digits (UltiKits/UltiLogin#35). Record `fail` if the keypad does not open, or opens but the four digits do not log the player in while the same password logs them in through `/login` | pixel | LoginGUIPage |
@@ -218,7 +218,7 @@ the framework's reload first, so the configuration was re-read before this chang
 
 ## Configuration
 
-One row per `@ConfigEntity` class (D-06's config-per-file rule), not per key: `login.yml`
+One row per `@ConfigEntity` class (the config-per-file rule), not per key: `login.yml`
 (43 keys) and `email.yml` (8 keys) — 51 keys total, matching `FEATURES.md`'s `## Configuration`
 section exactly. Each row confirms every key in the file is present at its `FEATURES.md`-documented
 default, then flips one or more representative keys and observes the behaviour follow.
@@ -226,7 +226,7 @@ default, then flips one or more representative keys and observes the behaviour f
 | ID | Preconditions | Steps | Expected | Layer | Covers |
 |---|---|---|---|---|---|
 | ultilogin.config.login-yml | `language: en` in UltiTools' own `config.yml`; fresh `plugins/UltiTools/pluginConfig/UltiLogin/config/login.yml` (moved aside before the server started, so this build writes it; the titles and messages then hold the English text `FEATURES.md` quotes for each key) | Load the file; confirm all 43 keys listed under `FEATURES.md`'s `## Configuration` section are present at their documented defaults, and that the file has no `messages.wrong-password` key (UltiKits/UltiLogin#23 removed it, so a fresh file must not carry it); then set `gui-mode.enabled: true` (default `false`), restart, and confirm a fresh player join opens `RegisterGUIPage`/`LoginGUIPage` rather than the text prompt (see `ultilogin.gui.register-page`/`ultilogin.gui.login-page`); separately, set `security.max-login-attempts: 2` (default 5) and confirm lockout now triggers on the 2nd wrong `/login` attempt, not the 5th | All 43 keys present at their documented defaults before the change, and no `messages.wrong-password` key in the fresh file; after `gui-mode.enabled: true`, the GUI opens on join instead of the text prompt; after `security.max-login-attempts: 2`, `messages.account-locked` appears on the 2nd wrong attempt rather than the 5th | server | |
-| ultilogin.config.email-yml | Fresh `plugins/UltiTools/pluginConfig/UltiLogin/config/email.yml` at its shipped default; `email.enable: true` and the Mailpit sink configured per D-02 | Load the file; confirm all 8 keys listed under `FEATURES.md`'s `## Configuration` section are present at their documented defaults; then set `verification.code-length: 4` (default 6) and request a new email bind, reading the actual received code's length | All 8 keys present at their documented defaults before the change; after the change, the newly-sent code is 4 digits long, not 6 | server | |
+| ultilogin.config.email-yml | Fresh `plugins/UltiTools/pluginConfig/UltiLogin/config/email.yml` at its shipped default; `email.enable: true` and the Mailpit sink configured as described in the conventions above | Load the file; confirm all 8 keys listed under `FEATURES.md`'s `## Configuration` section are present at their documented defaults; then set `verification.code-length: 4` (default 6) and request a new email bind, reading the actual received code's length | All 8 keys present at their documented defaults before the change; after the change, the newly-sent code is 4 digits long, not 6 | server | |
 
 ## Language
 
