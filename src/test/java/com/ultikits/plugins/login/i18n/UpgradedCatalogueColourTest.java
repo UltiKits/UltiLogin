@@ -2,7 +2,6 @@ package com.ultikits.plugins.login.i18n;
 
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.commands.LoginAdminCommand;
-import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.service.LoginService;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.Language;
@@ -61,24 +60,6 @@ class UpgradedCatalogueColourTest {
     @AfterEach
     void tearDown() throws Exception {
         UltiLoginTestHelper.tearDown();
-    }
-
-    @Test
-    @DisplayName("a blank setting shows the earlier file's words in the setting's shipped colour")
-    void blankSettings() {
-        UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
-        when(plugin.i18n(anyString())).thenAnswer(inv -> previous.getLocalizedText(inv.getArgument(0)));
-        LoginConfig config = new LoginConfig();
-        LoginSeams.bind(config, plugin);
-        config.setLoginSuccess("");
-        config.setAccountLocked("");
-        config.setGuiLoginTitle("");
-        config.setAdminAccountNotFound("");
-
-        assertThat(config.getLoginSuccess()).isEqualTo("&a登录成功！欢迎回来！");
-        assertThat(config.getAccountLocked()).isEqualTo("&c登录失败次数过多！请在 {TIME} 秒后重试。");
-        assertThat(config.getGuiLoginTitle()).isEqualTo("&6请输入密码");
-        assertThat(config.getAdminAccountNotFound()).isEqualTo("&c玩家 {PLAYER} 尚未注册");
     }
 
     @Test

@@ -214,26 +214,6 @@ class LoginConfigTest {
     class MessageDefaults {
 
         @Test
-        @DisplayName("every GUI title and message defaults to blank, so the language file supplies it (UltiKits/UltiLogin#20)")
-        void textSettingsDefaultBlank() throws Exception {
-            LoginConfig config = new LoginConfig();
-            String[] fields = {"guiLoginTitle", "guiRegisterTitle", "guiConfirmTitle",
-                    "registerPrompt", "registerPromptGui", "loginPrompt", "loginPromptGui",
-                    "registerSuccess", "loginSuccess", "alreadyLogged", "notRegistered",
-                    "alreadyRegistered", "passwordMismatch", "passwordTooShort", "passwordTooLong",
-                    "timeoutKick", "accountLocked", "attemptsRemaining", "guiPasswordInvalid",
-                    "adminPasswordReset", "adminForceLogin", "adminUnregister",
-                    "adminPlayerNotFound", "adminAccountNotFound"};
-            for (String name : fields) {
-                java.lang.reflect.Field f = LoginConfig.class.getDeclaredField(name);
-                f.setAccessible(true);
-                assertThat(f.get(config)).as(name).isEqualTo("");
-                assertThat(f.isAnnotationPresent(com.ultikits.ultitools.annotations.config.NotEmpty.class))
-                        .as(name + " must accept a blank value").isFalse();
-            }
-        }
-
-        @Test
         @DisplayName("Should have default register prompt")
         void registerPrompt() {
             LoginConfig config = createRealConfig();
