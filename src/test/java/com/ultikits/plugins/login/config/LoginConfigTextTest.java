@@ -3,9 +3,10 @@ package com.ultikits.plugins.login.config;
 import com.ultikits.plugins.login.UltiLogin;
 import com.ultikits.plugins.login.commands.LoginAdminCommand;
 import com.ultikits.plugins.login.commands.LoginCommand;
+import com.ultikits.plugins.login.gui.LoginGUIPage;
+import com.ultikits.plugins.login.gui.RegisterGUIPage;
 import com.ultikits.plugins.login.i18n.CatalogueText;
 import com.ultikits.plugins.login.i18n.LoginSeams;
-import com.ultikits.plugins.login.listener.LoginProtectionListener;
 import com.ultikits.plugins.login.service.LoginService;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.annotations.config.NotEmpty;
@@ -17,8 +18,6 @@ import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
-import org.bukkit.event.inventory.InventoryClickEvent;
-import org.bukkit.inventory.InventoryView;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -502,8 +501,11 @@ class LoginConfigTextTest {
     }
 
     @Test
-    @DisplayName("the keypad GUI is still recognised by the three written titles, in both languages")
-    void credentialGuiRecognisesTheWrittenTitles() throws Exception {
+    @DisplayName("the keypad GUI pages are opened with the titles written in the file, in both languages")
+    void credentialGuiPagesUseTheWrittenTitles() throws Exception {
+        // The consumer of gui-mode.title-login and title-register is the page constructor. Before
+        // UltiKits/UltiLogin#35 the protection listener also compared view titles with these values;
+        // it now recognises the credential GUI by identity, so the title is read only to be shown.
         for (String code : LANGUAGES) {
             language[0] = code;
             Files.deleteIfExists(file().toPath());
@@ -514,33 +516,20 @@ class LoginConfigTextTest {
             LoginSeams.speak(service, code);
             when(service.getConfig()).thenReturn(config);
             Player player = mock(Player.class);
-            UUID id = UUID.randomUUID();
-            when(player.getUniqueId()).thenReturn(id);
-            when(service.isLoggedIn(id)).thenReturn(false);
-            LoginProtectionListener listener;
+            when(player.getUniqueId()).thenReturn(UUID.randomUUID());
+            LoginGUIPage login;
+            RegisterGUIPage register;
             try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
                 bukkit.when(Bukkit::getPluginManager).thenReturn(mock(org.bukkit.plugin.PluginManager.class));
-                listener = new LoginProtectionListener(plugin, service);
+                login = new LoginGUIPage(player, plugin, service);
+                register = new RegisterGUIPage(player, plugin, service);
             }
 
-            for (String path : new String[] {"gui-mode.title-login", "gui-mode.title-register", "gui-mode.title-confirm"}) {
-                InventoryClickEvent click = mock(InventoryClickEvent.class);
-                InventoryView view = mock(InventoryView.class);
-                when(click.getWhoClicked()).thenReturn(player);
-                when(click.getView()).thenReturn(view);
-                when(view.getTitle()).thenReturn(ChatColor.translateAlternateColorCodes('&', disk.getString(path)));
-
-                listener.onInventoryClick(click);
-
-                verify(click, never()).setCancelled(true);
-            }
-            InventoryClickEvent other = mock(InventoryClickEvent.class);
-            InventoryView chest = mock(InventoryView.class);
-            when(other.getWhoClicked()).thenReturn(player);
-            when(other.getView()).thenReturn(chest);
-            when(chest.getTitle()).thenReturn("Chest");
-            listener.onInventoryClick(other);
-            verify(other).setCancelled(true);
+            assertThat(login.getTitle())
+                    .isEqualTo(ChatColor.translateAlternateColorCodes('&', disk.getString("gui-mode.title-login")));
+            assertThat(register.getTitle())
+                    .isEqualTo(ChatColor.translateAlternateColorCodes('&', disk.getString("gui-mode.title-register")));
+            assertThat(config.getGuiConfirmTitle()).isEqualTo(disk.getString("gui-mode.title-confirm"));
         }
     }
 
