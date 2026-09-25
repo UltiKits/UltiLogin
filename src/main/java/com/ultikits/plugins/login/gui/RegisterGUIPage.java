@@ -68,9 +68,9 @@ public class RegisterGUIPage extends Gui {
     
     @Override
     public void onOpen(InventoryOpenEvent event) {
-        // Round 10 (Codex PR #18 thread 3946842965): mark this player as having a credential GUI
-        // open, so a delayed reopen queued by a previous close of this or the login GUI (see
-        // onClose below) refuses to stack a second one on top of this one.
+        // Mark this player as having a credential GUI open, so a delayed reopen queued by a
+        // previous close of this or the login GUI (see onClose below) refuses to stack a second
+        // one on top of this one.
         loginService.markCredentialGuiOpen(player.getUniqueId());
 
         // Fill background
@@ -99,23 +99,22 @@ public class RegisterGUIPage extends Gui {
     public void onClose(InventoryCloseEvent event) {
         UUID uuid = player.getUniqueId();
 
-        // Round 10 (Codex PR #18 thread 3946842965): this GUI is genuinely closing regardless of
-        // why -- clear the "credential GUI open" marker unconditionally, before the transition
-        // check below -- see LoginGUIPage#onClose for the full explanation (symmetric other half).
+        // This GUI is genuinely closing regardless of why -- clear the "credential GUI open"
+        // marker unconditionally, before the transition check below -- see LoginGUIPage#onClose
+        // for the full explanation (symmetric other half).
         loginService.markCredentialGuiClosed(uuid);
 
-        // Round 9 (Codex PR #18 thread 3946574852, P2): skip entirely while
-        // LoginProtectionListener.presentCredentialPrompt is mid-transition to a different
-        // credential GUI for this player -- see LoginGUIPage#onClose for the full explanation of
-        // why (this is the symmetric other half of that same fix).
+        // Skip entirely while LoginProtectionListener.presentCredentialPrompt is mid-transition
+        // to a different credential GUI for this player -- see LoginGUIPage#onClose for the full
+        // explanation of why (this is the symmetric other half of that same fix).
         if (loginService.isCredentialGuiTransitioning(uuid)) {
             return;
         }
 
         // If not registered, reopen GUI after a short delay
         if (!loginService.isRegistered(uuid)) {
-            // Round 10 (Codex PR #18 thread 3946842965): see LoginGUIPage#onClose for why this
-            // task is tracked and re-checked fresh at fire time (symmetric other half of that fix).
+            // See LoginGUIPage#onClose for why this task is tracked and re-checked fresh at fire
+            // time (symmetric other half of that fix).
             BukkitTask task = org.bukkit.Bukkit.getScheduler().runTaskLater(
                 bukkitPlugin,
                 () -> {

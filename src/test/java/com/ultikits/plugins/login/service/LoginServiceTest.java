@@ -686,11 +686,11 @@ class LoginServiceTest {
         @Test
         @DisplayName("Should revoke the online player's active login state after a random-password reset")
         void forcesReauthenticationForOnlinePlayerOnRandomReset() throws Exception {
-            // Codex PR #18 review comment 3944181256: invalidateSession only ends the remembered
-            // `sessions` entry; LoginProtectionListener authorizes actions through isLoggedIn, not
-            // hasValidSession, so an already-authenticated online connection stayed fully
-            // authorized with the old credentials until it happened to disconnect -- defeating
-            // password rotation as a response to a compromised, currently-connected account.
+            // invalidateSession only ends the remembered `sessions` entry; LoginProtectionListener
+            // authorizes actions through isLoggedIn, not hasValidSession, so an already-authenticated
+            // online connection stayed fully authorized with the old credentials until it happened to
+            // disconnect -- defeating password rotation as a response to a compromised,
+            // currently-connected account.
             String salt = "testSalt";
             String password = "password123";
             String hash = hashPasswordForTest(password, salt);
@@ -753,7 +753,7 @@ class LoginServiceTest {
         @DisplayName("Presents the GUI credential prompt after an online player's password is"
                 + " reset in GUI mode, without replaying session auto-login")
         void presentsGuiPromptAfterResetPasswordInGuiMode() throws Exception {
-            // Codex PR #18 thread 3945030004 (round 4), see forceReauthenticationIfOnline():
+            // See forceReauthenticationIfOnline():
             // forceReauthenticationIfOnline only flipped the login flag and started the
             // timeout -- with GUI mode enabled, LoginProtectionListener only ever opens the
             // login/register GUI from PlayerJoinEvent or a blocked action, neither of which
@@ -811,11 +811,11 @@ class LoginServiceTest {
         @DisplayName("Reapplies the blind effect and spawn teleport to an online player whose"
                 + " credentials are revoked, matching what a fresh join would receive")
         void reappliesNoSessionProtectionsWhenAnOnlinePlayerIsRevoked() throws Exception {
-            // Codex PR #18 round 8, thread 3946414499: forceReauthenticationIfOnline only
-            // flipped loggedInPlayers/joinTimes -- if blind-effect or spawn-location.enabled are
-            // configured, onPlayerJoin is the only code that applies them, and it never runs
-            // again for an already-connected player, so a revoked client stayed fully sighted at
-            // its current, potentially sensitive location despite now being unauthenticated.
+            // forceReauthenticationIfOnline only flipped loggedInPlayers/joinTimes -- if
+            // blind-effect or spawn-location.enabled are configured, onPlayerJoin is the only
+            // code that applies them, and it never runs again for an already-connected player,
+            // so a revoked client stayed fully sighted at its current, potentially sensitive
+            // location despite now being unauthenticated.
             when(config.isBlindEffect()).thenReturn(true);
             when(config.isSpawnLocationEnabled()).thenReturn(true);
             when(config.getSpawnWorld()).thenReturn("world");
@@ -910,8 +910,8 @@ class LoginServiceTest {
         @DisplayName("Clears the reapplied no-session protections once the revoked player"
                 + " successfully logs back in")
         void clearsReappliedProtectionsAfterSuccessfulReLogin() throws Exception {
-            // Round 8 fix, item 3: completeLogin() already removes the blind effect and
-            // restores the player's original location for the ordinary join-time protections;
+            // completeLogin() already removes the blind effect and restores the player's
+            // original location for the ordinary join-time protections;
             // this pins that the same clearing happens for a revoked-then-re-authenticated
             // player, using the location applyNoSessionProtections() recorded at revocation
             // time (originalLocations had already been cleared by this player's first
@@ -971,8 +971,7 @@ class LoginServiceTest {
         @DisplayName("Should authenticate a successful recovery without presenting the credential"
                 + " prompt or leaving a credential GUI open")
         void authenticatesSilentlyAndClosesAnyOpenCredentialGuiOnSuccessfulRecovery() throws Exception {
-            // Codex PR #18 thread 3946170649 (round 7): RecoverCommand.resetPassword calls
-            // completeLogin(player) immediately after a successful
+            // RecoverCommand.resetPassword calls completeLogin(player) immediately after a successful
             // EmailVerificationService.resetPasswordAfterRecovery() -- which used to delegate to
             // the public, prompt-presenting resetPassword(UUID, String). That showed the login/
             // register prompt (a "log in now" message in text mode, or a freshly reopened
@@ -1091,8 +1090,7 @@ class LoginServiceTest {
                 // getLocation() (used by onPlayerJoin's original-location bookkeeping) is what
                 // proves the replay is still gone -- it is never called from this path.
                 //
-                // A message IS expected here as of round 4 (Codex PR #18 thread 3945030004):
-                // forceReauthenticationIfOnline() now also calls presentCredentialPrompt(), so
+                // A message IS expected here as of forceReauthenticationIfOnline() now also calls presentCredentialPrompt(), so
                 // the revoked player sees the login/register prompt immediately instead of being
                 // silently frozen by the action guards until checkTimeouts() kicks them.
                 verify(player).sendMessage(anyString());
@@ -1103,10 +1101,9 @@ class LoginServiceTest {
         @Test
         @DisplayName("Should reinitialize the login timeout for an online player forced to re-authenticate")
         void reinitializesLoginTimeoutOnUnregister() throws Exception {
-            // Codex PR #18 review comment 3944181260: completeLogin already removed this
-            // player's joinTimes entry when they originally logged in, and unregister's
-            // replacement for onPlayerJoin only flips loggedInPlayers -- it never re-adds a
-            // joinTimes entry. checkTimeouts() iterates joinTimes, so without this the
+            // completeLogin already removed this player's joinTimes entry when they originally logged
+            // in, and unregister's replacement for onPlayerJoin only flips loggedInPlayers -- it never
+            // re-adds a joinTimes entry. checkTimeouts() iterates joinTimes, so without this the
             // now-unauthenticated player is never kicked for failing to log back in, silently
             // disabling the configured login timeout while they remain connected.
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
@@ -1132,10 +1129,10 @@ class LoginServiceTest {
         }
     }
 
-    // ==================== credential GUI transition (round 9, thread 3946574852) ====================
+    // ==================== credential GUI transition ====================
 
     @Nested
-    @DisplayName("Credential GUI transition (round 9, Codex PR #18 thread 3946574852)")
+    @DisplayName("Credential GUI transition")
     class CredentialGuiTransition {
 
         @Test
@@ -1252,8 +1249,8 @@ class LoginServiceTest {
         @Test
         @DisplayName("An admin password reset landing during a queued login-GUI reopen's delay"
                 + " cancels the queued reopen, so it never opens a second credential GUI over the"
-                + " one the reset's own prompt already opened (round 10, Codex PR #18 thread"
-                + " 3946842965)")
+                + " one the reset's own prompt already"
+                + " opened")
         void adminResetDuringQueuedReopenDelayCancelsTheQueuedReopenAndOpensExactlyOneGui() throws Exception {
             when(config.isGuiModeEnabled()).thenReturn(true);
             when(config.getGuiLoginTitle()).thenReturn("&aLogin");
@@ -1335,8 +1332,8 @@ class LoginServiceTest {
         @Test
         @DisplayName("Without an intervening credential change, the queued login-GUI reopen"
                 + " still fires normally after its delay, and removes its own bookkeeping so a"
-                + " later, unrelated reopen cannot be spuriously cancelled by a stale entry"
-                + " (round 10, Codex PR #18 thread 3946842965)")
+                + " later, unrelated reopen cannot be spuriously cancelled by a stale"
+                + " entry")
         void queuedReopenStillFiresNormallyAndSelfClearsItsBookkeeping() throws Exception {
             when(config.isGuiModeEnabled()).thenReturn(true);
             when(config.getGuiLoginTitle()).thenReturn("&aLogin");
@@ -2637,11 +2634,10 @@ class LoginServiceTest {
         @Test
         @DisplayName("Should restore a revoked player's saved location even if spawn-location was disabled after the teleport")
         void restoresSavedLocationRegardlessOfCurrentSpawnSetting() throws Exception {
-            // Codex PR #18 round 13, thread 3947908093: a player was teleported to spawn while
-            // spawn-location.enabled was true (the same recording onPlayerJoin/
-            // applyNoSessionProtections does), then an admin reload flips the setting to false
-            // before the player runs /login. completeLogin must restore the saved location
-            // regardless of the setting's *current* value -- the entry's presence in
+            // A player was teleported to spawn while spawn-location.enabled was true (the same
+            // recording onPlayerJoin/ applyNoSessionProtections does), then an admin reload flips the
+            // setting to false before the player runs /login. completeLogin must restore the saved
+            // location regardless of the setting's *current* value -- the entry's presence in
             // originalLocations is the record that a teleport actually happened, not the current
             // config.
             org.bukkit.Location originalLoc = mock(org.bukkit.Location.class);
@@ -3204,7 +3200,7 @@ class LoginServiceTest {
         @DisplayName("Should refuse to publish a request captured before an invalidation that landed"
                 + " before the worker inserted it")
         void refusesRequestCapturedBeforeInvalidation() {
-            // Codex PR #18 thread 3945030000 (round 4), see requestPanelLink(Player, long):
+            // See requestPanelLink(Player, long):
             // /panel captures the invalidation generation before scheduling its asynchronous
             // worker; requestPanelLink() runs later, on that worker thread. An administrator's
             // reset/unregister landing in the gap between those two points calls
@@ -3297,16 +3293,15 @@ class LoginServiceTest {
         @DisplayName("Should discard a successful HTTP result when the session was invalidated"
                 + " while the POST was in flight")
         void discardsTheResultWhenInvalidatedWhileThePostWasInFlight() {
-            // Codex PR #18 thread 3946170644 (round 7): the pre-POST fence
-            // (RequestPanelLinkGenerationFence above) only closes the gap *before* the blocking
-            // HTTP call -- the check and the pendingPanelRequests insert are atomic with each
-            // other, but nothing re-checks either afterward. An invalidateSession(...) landing
-            // *during* the call (simulated here from inside the mocked SimpleHttpClient.post()
-            // answer, after the pre-POST atomic check-and-insert has already run) removes this
-            // request's pendingPanelRequests entry and bumps the generation, but neither of those
-            // stops this in-flight call from finishing and requestPanelLink() handing back a
-            // success result regardless -- unless requestPanelLink() re-checks after the call
-            // returns, which is the fix under test.
+            // The pre-POST fence (RequestPanelLinkGenerationFence above) only closes the gap
+            // *before* the blocking HTTP call -- the check and the pendingPanelRequests insert
+            // are atomic with each other, but nothing re-checks either afterward. An
+            // invalidateSession(...) landing *during* the call (simulated here from inside the
+            // mocked SimpleHttpClient.post() answer, after the pre-POST atomic check-and-insert
+            // has already run) removes this request's pendingPanelRequests entry and bumps the
+            // generation, but neither of those stops this in-flight call from finishing and
+            // requestPanelLink() handing back a success result regardless -- unless
+            // requestPanelLink() re-checks after the call returns, which is the fix under test.
             when(config.isUlticloudEnabled()).thenReturn(true);
 
             long capturedGeneration = service.getInvalidationGeneration(playerUuid);
@@ -3745,15 +3740,14 @@ class LoginServiceTest {
         @Test
         @DisplayName("Must not re-authenticate a player whose account was deleted while the poll's HTTP call was already in flight")
         void doesNotReauthenticateAfterUnregisterDuringInFlightPoll() throws Exception {
-            // Codex PR #18 review comment 3944418953: BukkitTask#cancel() only prevents a
-            // scheduled task's future executions -- it does not interrupt an invocation already
-            // inside its HTTP call. The pre-fix fallback in startAuthPolling treated "no pending
-            // request found" as authorization to call completeLogin(player) directly, bypassing
-            // every check completePanelLogin performs (including the isRegistered guard added
-            // against a deleted account logging back in). Reproduced deterministically by
-            // unregistering the account from inside the mocked HTTP call's answer -- exactly the
-            // ordering the report describes -- with the scheduler wired to run both hops of the poll
-            // synchronously so the race is exact rather than best-effort.
+            // BukkitTask#cancel() only prevents a scheduled task's future executions -- it does not
+            // interrupt an invocation already inside its HTTP call. The pre-fix fallback in
+            // startAuthPolling treated "no pending request found" as authorization to call
+            // completeLogin(player) directly, bypassing every check completePanelLogin performs
+            // (including the isRegistered guard added against a deleted account logging back in).
+            // Reproduced deterministically by unregistering the account from inside the mocked HTTP
+            // call's answer -- exactly the ordering the report describes -- with the scheduler wired to
+            // run both hops of the poll synchronously so the race is exact rather than best-effort.
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
             when(mockQuery.list()).thenReturn(Collections.singletonList(account));
 
@@ -3847,15 +3841,14 @@ class LoginServiceTest {
         @DisplayName("Must not authenticate through a newer pending request for the same player"
                 + " after this poll's own request was cancelled")
         void doesNotAuthenticateThroughANewerPendingRequestAfterAStaleCompletion() throws Exception {
-            // Codex PR #18 thread 3946170644 (round 7): handlePanelPollCompleted used to resolve
-            // "completed" by scanning pendingPanelRequests for whichever entry was pending for
-            // this player, rather than the specific request id this poll was started for. If this
-            // poll's own request had already been cancelled (e.g. by an invalidation) but the
-            // player had since started a fresh /panel request, that scan would pick up the newer
-            // request and authenticate through it -- even though this poll's own "completed"
-            // observation had nothing to do with the newer request. Reproduced by removing the
-            // original request and inserting a newer one for the same player from inside the
-            // mocked HTTP call's answer, exactly the ordering the report describes.
+            // handlePanelPollCompleted used to resolve "completed" by scanning pendingPanelRequests
+            // for whichever entry was pending for this player, rather than the specific request id
+            // this poll was started for. If this poll's own request had already been cancelled (e.g.
+            // by an invalidation) but the player had since started a fresh /panel request, that scan
+            // would pick up the newer request and authenticate through it -- even though this poll's
+            // own "completed" observation had nothing to do with the newer request. Reproduced by
+            // removing the original request and inserting a newer one for the same player from inside
+            // the mocked HTTP call's answer, exactly the ordering the report describes.
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
             when(mockQuery.list()).thenReturn(Collections.singletonList(account));
 
@@ -3906,14 +3899,13 @@ class LoginServiceTest {
         @DisplayName("Must not cancel or remove a newer poll's own task when an older,"
                 + " superseded poll's stale HTTP response arrives")
         void doesNotCancelANewerPollsTaskWhenAnOlderSupersededPollsStaleCompletionArrives() throws Exception {
-            // Codex PR #18 thread 3947189541 (round 11): starting poll B always cancels+replaces
-            // poll A's scheduled task for the same player -- correct, a new /panel request
-            // supersedes the previous one. But BukkitTask#cancel() only prevents a task's
-            // *future* scheduled executions; it does not interrupt an invocation already blocked
-            // inside its own HTTP call. If A's HTTP call was still in flight when B started, A's
-            // own "completed" observation -- arriving later, on that same in-flight invocation --
-            // used to remove and cancel whatever task pollingTasks currently held keyed on the
-            // player's UUID: B's task, not A's own (already-replaced) one.
+            // Starting poll B always cancels+replaces poll A's scheduled task for the same player --
+            // correct, a new /panel request supersedes the previous one. But BukkitTask#cancel() only
+            // prevents a task's *future* scheduled executions; it does not interrupt an invocation
+            // already blocked inside its own HTTP call. If A's HTTP call was still in flight when B
+            // started, A's own "completed" observation -- arriving later, on that same in-flight
+            // invocation -- used to remove and cancel whatever task pollingTasks currently held
+            // keyed on the player's UUID: B's task, not A's own (already-replaced) one.
             // handlePanelPollCompleted correctly refused to complete A's own (never-published)
             // request, but B's task was killed anyway, permanently stalling B's still-valid
             // magic link. Reproduced by starting B from inside A's mocked HTTP call's answer --
