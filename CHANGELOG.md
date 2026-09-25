@@ -183,11 +183,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   second-seat passenger or anyone carried by rails or water was moved across blocks while not
   logged in, because only a player steering a vehicle is held in place, and a player who quit while
   riding a moving minecart was put back in it on rejoin and carried on. A player who has not logged
-  in now rides nothing: getting into a vehicle is refused, a player who quit while riding is not in
-  the vehicle when they rejoin, a player whose login is revoked while riding is dismounted, and a
-  moving minecart or boat drops such a passenger. After logging in they can get back in
-  (UltiKits/UltiLogin#41).
+  in now rides nothing: getting into a vehicle is refused, a player who quit while riding is taken
+  off the vehicle one tick after rejoining (the vehicle stays where it is), a player whose login is
+  revoked while riding is dismounted, and a moving minecart or boat drops such a passenger. After
+  logging in they can get back in (UltiKits/UltiLogin#41).
 - 修复：未登录玩家不能再被载具带着移动。此前矿车乘客、船的第二座乘客、被铁轨或水流带着走的玩家会在未登录状态下跨方块移动，
   因为只有操控载具的玩家会被拦住；坐在行驶中的矿车里下线的玩家重进时会被放回矿车并继续移动。现在未登录玩家不乘坐任何载具：
-  上载具被拒绝，坐着下线的玩家重进时不在载具里，登录被撤销时会下载具，行驶中的矿车或船会让这样的乘客下车。登录后可以重新上
-  载具（UltiKits/UltiLogin#41）。
+  上载具被拒绝，坐着下线的玩家重进后一刻会被请下载具（载具留在原处），登录被撤销时会下载具，行驶中的矿车或船会让这样的乘客下车。
+  登录后可以重新上载具（UltiKits/UltiLogin#41）。

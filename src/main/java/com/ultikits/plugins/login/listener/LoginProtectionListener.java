@@ -32,7 +32,10 @@ import org.bukkit.event.vehicle.VehicleMoveEvent;
 import org.bukkit.entity.Entity;
 import org.bukkit.inventory.Inventory;
 
+import java.util.ArrayList;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Listener for login protection.
@@ -121,6 +124,15 @@ public class LoginProtectionListener implements Listener {
     private final LoginService loginService;
     private final Plugin bukkitPlugin;
 
+    /**
+     * Players whose join has not had its first tick yet. Paper restores the vehicle of a player who
+     * quit while riding in that tick, after {@link PlayerJoinEvent}; refusing that mount makes Paper
+     * discard the vehicle and everything riding it, so {@link #onEntityMount} lets it through for
+     * these players and the one-tick task in {@link #onPlayerJoin} takes an unauthenticated player
+     * off the vehicle instead (UltiKits/UltiLogin#41).
+     */
+    private final Set<UUID> inJoinTick = ConcurrentHashMap.newKeySet();
+
     public LoginProtectionListener(UltiToolsPlugin plugin, LoginService loginService) {
         this.plugin = plugin;
         this.loginService = loginService;
@@ -134,13 +146,16 @@ public class LoginProtectionListener implements Listener {
 
         // A player who quit while riding is put back in the vehicle AFTER this event: Paper 1.21.11's
         // PrepareSpawnTask$Ready calls PlayerList#placeNewPlayer (which fires this event) and only
-        // then ServerPlayer#loadAndSpawnParentVehicle (read with javap -c). The mount event that
-        // restore fires is refused by #onEntityMount; one tick later, a player who is still riding
-        // and not logged in is dismounted in case anything mounted them without an event
-        // (UltiKits/UltiLogin#41).
+        // then ServerPlayer#loadAndSpawnParentVehicle (read with javap -c). That mount must not be
+        // refused -- Paper would then discard the vehicle and everything riding it (offsets 172-232)
+        // -- so it is let through during this tick, and one tick later a player who is still riding
+        // and not logged in is taken off the vehicle, which stays where it is (UltiKits/UltiLogin#41).
+        UUID joining = player.getUniqueId();
+        inJoinTick.add(joining);
         Bukkit.getScheduler().runTaskLater(bukkitPlugin, () -> {
+            inJoinTick.remove(joining);
             if (player.isOnline() && player.isInsideVehicle()
-                    && !loginService.isLoggedIn(player.getUniqueId())) {
+                    && !loginService.isLoggedIn(joining)) {
                 player.leaveVehicle();
             }
         }, 1L);
@@ -166,6 +181,7 @@ public class LoginProtectionListener implements Listener {
     
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
+        inJoinTick.remove(event.getPlayer().getUniqueId());
         loginService.onPlayerQuit(event.getPlayer());
     }
     
@@ -187,15 +203,21 @@ public class LoginProtectionListener implements Listener {
      * Paper fires {@link PlayerMoveEvent} for the rider who controls the vehicle. A passenger who does
      * not steer — a minecart rider, a boat's second seat, a rider carried by rails or water — gets no
      * such event, and the vehicle's own motion carried an unauthenticated player across blocks
-     * (measured on a real server, 2026-09-25). So an unauthenticated player rides nothing. Paper fires
-     * this event for every mount of a player who is in the world, including the vehicle it restores
-     * for a player who quit while riding ({@code Entity#startRiding}: the event is not gated by the
-     * restore's third argument).
+     * (the carriage measured on a real server, 2026-09-25; the missing event read from the server's
+     * bytecode). So an unauthenticated player rides nothing.
+     * <p>
+     * One mount is let through: the vehicle Paper restores in the join tick for a player who quit
+     * while riding ({@code Entity#startRiding} fires this event for it too). Refusing it makes Paper
+     * discard the vehicle and its riders, so the player is taken off it one tick later instead
+     * ({@link #onPlayerJoin}).
      */
     @EventHandler(priority = EventPriority.LOWEST)
     public void onEntityMount(EntityMountEvent event) {
         if (event.getEntity() instanceof Player) {
-            cancelIfNotLoggedIn((Player) event.getEntity(), event);
+            Player player = (Player) event.getEntity();
+            if (!inJoinTick.contains(player.getUniqueId())) {
+                cancelIfNotLoggedIn(player, event);
+            }
         }
     }
 
@@ -210,7 +232,8 @@ public class LoginProtectionListener implements Listener {
      */
     @EventHandler(priority = EventPriority.LOWEST)
     public void onVehicleMove(VehicleMoveEvent event) {
-        for (Entity passenger : event.getVehicle().getPassengers()) {
+        // A copy: removing a passenger must not disturb the list being walked.
+        for (Entity passenger : new ArrayList<>(event.getVehicle().getPassengers())) {
             if (passenger instanceof Player && !loginService.isLoggedIn(passenger.getUniqueId())) {
                 event.getVehicle().removePassenger(passenger);
             }
