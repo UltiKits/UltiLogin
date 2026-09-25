@@ -218,6 +218,33 @@ class LoginProtectionListenerTest {
             assertThat(event.getTo()).isEqualTo(from);
         }
 
+        /**
+         * UltiKits/UltiLogin#33: a player steering a vehicle is moved through the same
+         * {@link PlayerMoveEvent} (Paper 1.21.11 fires it from
+         * {@code ServerGamePacketListenerImpl#handleMoveVehicle} for the controlling rider, measured
+         * with {@code javap -c}), and the handler's {@code setTo(from)} makes the server teleport the
+         * rider back, which dismounts them. This pins that the handler reverts a move whatever the
+         * player is riding: a vehicle exemption added to it would make this fail.
+         */
+        @Test
+        @DisplayName("Should block movement of a player riding a vehicle when not logged in (UltiKits/UltiLogin#33)")
+        void blockWhenRidingAVehicle() {
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+            org.bukkit.entity.Boat boat = mock(org.bukkit.entity.Boat.class);
+            lenient().when(player.isInsideVehicle()).thenReturn(true);
+            lenient().when(player.getVehicle()).thenReturn(boat);
+            lenient().when(boat.getPassengers()).thenReturn(java.util.Collections.singletonList(player));
+
+            org.bukkit.Location from = createMockLocation(0, 62, 0);
+            org.bukkit.Location to = createMockLocation(3, 62, 1);
+
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from, to);
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.getTo()).isEqualTo(from);
+        }
+
         @Test
         @DisplayName("Should allow looking around (no block change)")
         void allowLooking() {
