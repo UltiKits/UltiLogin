@@ -2,9 +2,11 @@ package com.ultikits.plugins.login.config;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.function.Function;
 
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
-import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.annotations.config.NotEmpty;
@@ -57,14 +59,17 @@ public class LoginConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "gui-mode.password-length", comment = "GUI模式密码位数（1-9数字，推荐4-6位）")
     private int guiPasswordLength = 4;
 
-    @ConfigEntry(path = "gui-mode.title-login", comment = "GUI登录界面标题（留空：使用语言文件中的文本）")
-    private String guiLoginTitle = "";
+    @NotEmpty
+    @ConfigEntry(path = "gui-mode.title-login", comment = "GUI登录界面标题")
+    private String guiLoginTitle = SHIPPED_GUI_LOGIN_TITLE;
 
-    @ConfigEntry(path = "gui-mode.title-register", comment = "GUI注册界面标题（留空：使用语言文件中的文本）")
-    private String guiRegisterTitle = "";
+    @NotEmpty
+    @ConfigEntry(path = "gui-mode.title-register", comment = "GUI注册界面标题")
+    private String guiRegisterTitle = SHIPPED_GUI_REGISTER_TITLE;
 
-    @ConfigEntry(path = "gui-mode.title-confirm", comment = "GUI确认密码界面标题（留空：使用语言文件中的文本）")
-    private String guiConfirmTitle = "";
+    @NotEmpty
+    @ConfigEntry(path = "gui-mode.title-confirm", comment = "GUI确认密码界面标题")
+    private String guiConfirmTitle = SHIPPED_GUI_CONFIRM_TITLE;
     
     // ==================== 命令模式密码设置 ====================
 
@@ -125,151 +130,171 @@ public class LoginConfig extends AbstractConfigEntity {
 
     // ==================== 消息配置 ====================
 
-    @ConfigEntry(path = "messages.register-prompt", comment = "注册提示（命令模式）（留空：使用语言文件中的文本）")
-    private String registerPrompt = "";
+    @NotEmpty
+    @ConfigEntry(path = "messages.register-prompt", comment = "注册提示（命令模式）")
+    private String registerPrompt = SHIPPED_REGISTER_PROMPT;
 
-    @ConfigEntry(path = "messages.register-prompt-gui", comment = "注册提示（GUI模式）（留空：使用语言文件中的文本）")
-    private String registerPromptGui = "";
+    @NotEmpty
+    @ConfigEntry(path = "messages.register-prompt-gui", comment = "注册提示（GUI模式）")
+    private String registerPromptGui = SHIPPED_REGISTER_PROMPT_GUI;
 
-    @ConfigEntry(path = "messages.login-prompt", comment = "登录提示（命令模式）（留空：使用语言文件中的文本）")
-    private String loginPrompt = "";
+    @NotEmpty
+    @ConfigEntry(path = "messages.login-prompt", comment = "登录提示（命令模式）")
+    private String loginPrompt = SHIPPED_LOGIN_PROMPT;
 
-    @ConfigEntry(path = "messages.login-prompt-gui", comment = "登录提示（GUI模式）（留空：使用语言文件中的文本）")
-    private String loginPromptGui = "";
+    @NotEmpty
+    @ConfigEntry(path = "messages.login-prompt-gui", comment = "登录提示（GUI模式）")
+    private String loginPromptGui = SHIPPED_LOGIN_PROMPT_GUI;
 
-    @ConfigEntry(path = "messages.register-success", comment = "注册成功（留空：使用语言文件中的文本）")
-    private String registerSuccess = "";
+    @NotEmpty
+    @ConfigEntry(path = "messages.register-success", comment = "注册成功")
+    private String registerSuccess = SHIPPED_REGISTER_SUCCESS;
 
-    @ConfigEntry(path = "messages.login-success", comment = "登录成功（留空：使用语言文件中的文本）")
-    private String loginSuccess = "";
+    @NotEmpty
+    @ConfigEntry(path = "messages.login-success", comment = "登录成功")
+    private String loginSuccess = SHIPPED_LOGIN_SUCCESS;
 
-    @ConfigEntry(path = "messages.already-logged", comment = "已经登录（留空：使用语言文件中的文本）")
-    private String alreadyLogged = "";
+    @NotEmpty
+    @ConfigEntry(path = "messages.already-logged", comment = "已经登录")
+    private String alreadyLogged = SHIPPED_ALREADY_LOGGED;
 
-    @ConfigEntry(path = "messages.not-registered", comment = "未注册（留空：使用语言文件中的文本）")
-    private String notRegistered = "";
+    @NotEmpty
+    @ConfigEntry(path = "messages.not-registered", comment = "未注册")
+    private String notRegistered = SHIPPED_NOT_REGISTERED;
 
-    @ConfigEntry(path = "messages.already-registered", comment = "已注册（留空：使用语言文件中的文本）")
-    private String alreadyRegistered = "";
+    @NotEmpty
+    @ConfigEntry(path = "messages.already-registered", comment = "已注册")
+    private String alreadyRegistered = SHIPPED_ALREADY_REGISTERED;
 
-    @ConfigEntry(path = "messages.password-mismatch", comment = "密码不匹配（留空：使用语言文件中的文本）")
-    private String passwordMismatch = "";
+    @NotEmpty
+    @ConfigEntry(path = "messages.password-mismatch", comment = "密码不匹配")
+    private String passwordMismatch = SHIPPED_PASSWORD_MISMATCH;
 
-    @ConfigEntry(path = "messages.password-too-short", comment = "密码太短（留空：使用语言文件中的文本）")
-    private String passwordTooShort = "";
+    @NotEmpty
+    @ConfigEntry(path = "messages.password-too-short", comment = "密码太短")
+    private String passwordTooShort = SHIPPED_PASSWORD_TOO_SHORT;
 
-    @ConfigEntry(path = "messages.password-too-long", comment = "密码太长（留空：使用语言文件中的文本）")
-    private String passwordTooLong = "";
+    @NotEmpty
+    @ConfigEntry(path = "messages.password-too-long", comment = "密码太长")
+    private String passwordTooLong = SHIPPED_PASSWORD_TOO_LONG;
 
-    @ConfigEntry(path = "messages.timeout-kick", comment = "超时踢出（留空：使用语言文件中的文本）")
-    private String timeoutKick = "";
+    @NotEmpty
+    @ConfigEntry(path = "messages.timeout-kick", comment = "超时踢出")
+    private String timeoutKick = SHIPPED_TIMEOUT_KICK;
 
-    @ConfigEntry(path = "messages.account-locked", comment = "账户被锁定（留空：使用语言文件中的文本）")
-    private String accountLocked = "";
+    @NotEmpty
+    @ConfigEntry(path = "messages.account-locked", comment = "账户被锁定")
+    private String accountLocked = SHIPPED_ACCOUNT_LOCKED;
 
-    @ConfigEntry(path = "messages.attempts-remaining", comment = "剩余尝试次数（留空：使用语言文件中的文本）")
-    private String attemptsRemaining = "";
+    @NotEmpty
+    @ConfigEntry(path = "messages.attempts-remaining", comment = "剩余尝试次数")
+    private String attemptsRemaining = SHIPPED_ATTEMPTS_REMAINING;
 
-    @ConfigEntry(path = "messages.gui-password-invalid", comment = "GUI密码无效（留空：使用语言文件中的文本）")
-    private String guiPasswordInvalid = "";
+    @NotEmpty
+    @ConfigEntry(path = "messages.gui-password-invalid", comment = "GUI密码无效")
+    private String guiPasswordInvalid = SHIPPED_GUI_PASSWORD_INVALID;
 
     // ==================== 管理员消息 ====================
 
-    @ConfigEntry(path = "messages.admin.password-reset", comment = "管理员重置密码成功（留空：使用语言文件中的文本）")
-    private String adminPasswordReset = "";
+    @NotEmpty
+    @ConfigEntry(path = "messages.admin.password-reset", comment = "管理员重置密码成功")
+    private String adminPasswordReset = SHIPPED_ADMIN_PASSWORD_RESET;
 
-    @ConfigEntry(path = "messages.admin.force-login", comment = "管理员强制登录（留空：使用语言文件中的文本）")
-    private String adminForceLogin = "";
+    @NotEmpty
+    @ConfigEntry(path = "messages.admin.force-login", comment = "管理员强制登录")
+    private String adminForceLogin = SHIPPED_ADMIN_FORCE_LOGIN;
 
-    @ConfigEntry(path = "messages.admin.unregister", comment = "管理员删除账号（留空：使用语言文件中的文本）")
-    private String adminUnregister = "";
+    @NotEmpty
+    @ConfigEntry(path = "messages.admin.unregister", comment = "管理员删除账号")
+    private String adminUnregister = SHIPPED_ADMIN_UNREGISTER;
 
-    @ConfigEntry(path = "messages.admin.player-not-found", comment = "玩家不存在（留空：使用语言文件中的文本）")
-    private String adminPlayerNotFound = "";
+    @NotEmpty
+    @ConfigEntry(path = "messages.admin.player-not-found", comment = "玩家不存在")
+    private String adminPlayerNotFound = SHIPPED_ADMIN_PLAYER_NOT_FOUND;
 
-    @ConfigEntry(path = "messages.admin.account-not-found", comment = "账号不存在（留空：使用语言文件中的文本）")
-    private String adminAccountNotFound = "";
+    @NotEmpty
+    @ConfigEntry(path = "messages.admin.account-not-found", comment = "账号不存在")
+    private String adminAccountNotFound = SHIPPED_ADMIN_ACCOUNT_NOT_FOUND;
     
     // ==================== Text defaults an earlier version shipped ====================
-    // Every GUI title and message below used to ship a fixed Chinese default. Each now defaults to
-    // blank and reads the language file's text, in the server's language, while it stays blank
-    // (maintainer ruling 2026-09-24 (d), UltiKits/UltiLogin#20). The colour stays the module's: each
-    // getter opens with the colour code its shipped default had, because a language file extracted by
-    // an earlier version holds the same keys with the same words and no colour codes, and an upgraded
-    // install reads that file first. These are the old values, one per
-    // setting across this module's history, kept only so migrateLegacyDefaults() can recognise them
-    // in an upgraded operator's file.
+    // Every GUI title and message below shipped one fixed Chinese default in every earlier version.
+    // Each is still the setting's Java default, which the framework writes for a missing key, and one
+    // of the values materializeText() recognises as built-in text in an operator's file; that method
+    // then writes the setting's colour code plus the language file's text in the server's language
+    // (maintainer decision 2026-09-25, UltiKits/UltiLogin#20). The colour stays the module's because a
+    // language file extracted by an earlier version holds the same keys with the same words and no
+    // colour codes, and an upgraded install reads that file first.
 
-    /** The default every earlier version shipped for {@code gui-mode.title-login}; compared, never shown. */
+    /** The default every earlier version shipped for {@code gui-mode.title-login}; the Java default, compared byte for byte. */
     static final String SHIPPED_GUI_LOGIN_TITLE = "&6请输入密码";
 
-    /** The default every earlier version shipped for {@code gui-mode.title-register}; compared, never shown. */
+    /** The default every earlier version shipped for {@code gui-mode.title-register}; the Java default, compared byte for byte. */
     static final String SHIPPED_GUI_REGISTER_TITLE = "&6请设置密码";
 
-    /** The default every earlier version shipped for {@code gui-mode.title-confirm}; compared, never shown. */
+    /** The default every earlier version shipped for {@code gui-mode.title-confirm}; the Java default, compared byte for byte. */
     static final String SHIPPED_GUI_CONFIRM_TITLE = "&6请再次输入密码";
 
-    /** The default every earlier version shipped for {@code messages.register-prompt}; compared, never shown. */
+    /** The default every earlier version shipped for {@code messages.register-prompt}; the Java default, compared byte for byte. */
     static final String SHIPPED_REGISTER_PROMPT = "&e请使用 /register <密码> <确认密码> 注册账号";
 
-    /** The default every earlier version shipped for {@code messages.register-prompt-gui}; compared, never shown. */
+    /** The default every earlier version shipped for {@code messages.register-prompt-gui}; the Java default, compared byte for byte. */
     static final String SHIPPED_REGISTER_PROMPT_GUI = "&e请在弹出的界面中设置密码";
 
-    /** The default every earlier version shipped for {@code messages.login-prompt}; compared, never shown. */
+    /** The default every earlier version shipped for {@code messages.login-prompt}; the Java default, compared byte for byte. */
     static final String SHIPPED_LOGIN_PROMPT = "&e请使用 /login <密码> 登录";
 
-    /** The default every earlier version shipped for {@code messages.login-prompt-gui}; compared, never shown. */
+    /** The default every earlier version shipped for {@code messages.login-prompt-gui}; the Java default, compared byte for byte. */
     static final String SHIPPED_LOGIN_PROMPT_GUI = "&e请在弹出的界面中输入密码";
 
-    /** The default every earlier version shipped for {@code messages.register-success}; compared, never shown. */
+    /** The default every earlier version shipped for {@code messages.register-success}; the Java default, compared byte for byte. */
     static final String SHIPPED_REGISTER_SUCCESS = "&a注册成功！欢迎加入服务器！";
 
-    /** The default every earlier version shipped for {@code messages.login-success}; compared, never shown. */
+    /** The default every earlier version shipped for {@code messages.login-success}; the Java default, compared byte for byte. */
     static final String SHIPPED_LOGIN_SUCCESS = "&a登录成功！欢迎回来！";
 
-    /** The default every earlier version shipped for {@code messages.already-logged}; compared, never shown. */
+    /** The default every earlier version shipped for {@code messages.already-logged}; the Java default, compared byte for byte. */
     static final String SHIPPED_ALREADY_LOGGED = "&e你已经登录了！";
 
-    /** The default every earlier version shipped for {@code messages.not-registered}; compared, never shown. */
+    /** The default every earlier version shipped for {@code messages.not-registered}; the Java default, compared byte for byte. */
     static final String SHIPPED_NOT_REGISTERED = "&c你还没有注册！请先注册。";
 
-    /** The default every earlier version shipped for {@code messages.already-registered}; compared, never shown. */
+    /** The default every earlier version shipped for {@code messages.already-registered}; the Java default, compared byte for byte. */
     static final String SHIPPED_ALREADY_REGISTERED = "&c你已经注册过了！请直接登录。";
 
-    /** The default every earlier version shipped for {@code messages.password-mismatch}; compared, never shown. */
+    /** The default every earlier version shipped for {@code messages.password-mismatch}; the Java default, compared byte for byte. */
     static final String SHIPPED_PASSWORD_MISMATCH = "&c两次输入的密码不一致！";
 
-    /** The default every earlier version shipped for {@code messages.password-too-short}; compared, never shown. */
+    /** The default every earlier version shipped for {@code messages.password-too-short}; the Java default, compared byte for byte. */
     static final String SHIPPED_PASSWORD_TOO_SHORT = "&c密码太短！至少需要 {MIN} 个字符。";
 
-    /** The default every earlier version shipped for {@code messages.password-too-long}; compared, never shown. */
+    /** The default every earlier version shipped for {@code messages.password-too-long}; the Java default, compared byte for byte. */
     static final String SHIPPED_PASSWORD_TOO_LONG = "&c密码太长！最多 {MAX} 个字符。";
 
-    /** The default every earlier version shipped for {@code messages.timeout-kick}; compared, never shown. */
+    /** The default every earlier version shipped for {@code messages.timeout-kick}; the Java default, compared byte for byte. */
     static final String SHIPPED_TIMEOUT_KICK = "&c登录超时！请重新连接。";
 
-    /** The default every earlier version shipped for {@code messages.account-locked}; compared, never shown. */
+    /** The default every earlier version shipped for {@code messages.account-locked}; the Java default, compared byte for byte. */
     static final String SHIPPED_ACCOUNT_LOCKED = "&c登录失败次数过多！请在 {TIME} 秒后重试。";
 
-    /** The default every earlier version shipped for {@code messages.attempts-remaining}; compared, never shown. */
+    /** The default every earlier version shipped for {@code messages.attempts-remaining}; the Java default, compared byte for byte. */
     static final String SHIPPED_ATTEMPTS_REMAINING = "&c密码错误！剩余尝试次数: {COUNT}";
 
-    /** The default every earlier version shipped for {@code messages.gui-password-invalid}; compared, never shown. */
+    /** The default every earlier version shipped for {@code messages.gui-password-invalid}; the Java default, compared byte for byte. */
     static final String SHIPPED_GUI_PASSWORD_INVALID = "&c密码必须是 {LENGTH} 位数字！";
 
-    /** The default every earlier version shipped for {@code messages.admin.password-reset}; compared, never shown. */
+    /** The default every earlier version shipped for {@code messages.admin.password-reset}; the Java default, compared byte for byte. */
     static final String SHIPPED_ADMIN_PASSWORD_RESET = "&a已重置玩家 {PLAYER} 的密码为: {PASSWORD}";
 
-    /** The default every earlier version shipped for {@code messages.admin.force-login}; compared, never shown. */
+    /** The default every earlier version shipped for {@code messages.admin.force-login}; the Java default, compared byte for byte. */
     static final String SHIPPED_ADMIN_FORCE_LOGIN = "&a已强制登录玩家 {PLAYER}";
 
-    /** The default every earlier version shipped for {@code messages.admin.unregister}; compared, never shown. */
+    /** The default every earlier version shipped for {@code messages.admin.unregister}; the Java default, compared byte for byte. */
     static final String SHIPPED_ADMIN_UNREGISTER = "&a已删除玩家 {PLAYER} 的账号";
 
-    /** The default every earlier version shipped for {@code messages.admin.player-not-found}; compared, never shown. */
+    /** The default every earlier version shipped for {@code messages.admin.player-not-found}; the Java default, compared byte for byte. */
     static final String SHIPPED_ADMIN_PLAYER_NOT_FOUND = "&c找不到玩家 {PLAYER}";
 
-    /** The default every earlier version shipped for {@code messages.admin.account-not-found}; compared, never shown. */
+    /** The default every earlier version shipped for {@code messages.admin.account-not-found}; the Java default, compared byte for byte. */
     static final String SHIPPED_ADMIN_ACCOUNT_NOT_FOUND = "&c玩家 {PLAYER} 尚未注册";
 
     public LoginConfig() {
@@ -277,353 +302,61 @@ public class LoginConfig extends AbstractConfigEntity {
     }
 
     /**
-     * {@code configured}, or {@code languageText} when {@code configured} is null, empty or only
-     * whitespace.
+     * Writes every GUI title and message in the server's language (maintainer decision 2026-09-25,
+     * UltiKits/UltiLogin#20): each setting whose value is still built-in text -- the default an earlier
+     * version shipped, or its colour code plus this jar's text for it in any language -- and differs
+     * from the current text is replaced with its colour code plus {@code text}'s current text, when that
+     * text fits the setting's own limits. Any other value is the operator's and is kept. Idempotent. Must run after the module's language is loaded
+     * ({@code registerSelf()} and {@code onReload()}), never from a change listener; the caller saves
+     * the file when this returns {@code true}.
      *
-     * @param configured   the value in {@code config/login.yml}
-     * @param languageText the language file's text for the same setting
-     * @return the text to show
-     */
-    static String configuredOr(String configured, String languageText) {
-        return configured == null || configured.trim().isEmpty() ? languageText : configured;
-    }
-
-    /**
-     * The language file's text for {@code key}, in the server's language, read through the plugin
-     * this configuration was bound to at load. Before that binding there is no language to read, so
-     * the key itself is returned, as the framework renders a missing key.
-     *
-     * @param key the language-file key
-     * @return the text for the key
-     */
-    private String i18n(String key) {
-        UltiToolsPlugin plugin = getUltiToolsPlugin();
-        return plugin == null ? key : plugin.i18n(key);
-    }
-
-    /**
-     * {@code gui-mode.title-login}, or the language file's {@code gui_enter_password} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getGuiLoginTitle() {
-        return configuredOr(guiLoginTitle, "&6" + i18n("gui_enter_password"));
-    }
-
-    /**
-     * {@code gui-mode.title-register}, or the language file's {@code gui_set_password} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getGuiRegisterTitle() {
-        return configuredOr(guiRegisterTitle, "&6" + i18n("gui_set_password"));
-    }
-
-    /**
-     * {@code gui-mode.title-confirm}, or the language file's {@code gui_confirm_password} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getGuiConfirmTitle() {
-        return configuredOr(guiConfirmTitle, "&6" + i18n("gui_confirm_password"));
-    }
-
-    /**
-     * {@code messages.register-prompt}, or the language file's {@code register_prompt} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getRegisterPrompt() {
-        return configuredOr(registerPrompt, "&e" + i18n("register_prompt"));
-    }
-
-    /**
-     * {@code messages.register-prompt-gui}, or the language file's {@code register_prompt_gui} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getRegisterPromptGui() {
-        return configuredOr(registerPromptGui, "&e" + i18n("register_prompt_gui"));
-    }
-
-    /**
-     * {@code messages.login-prompt}, or the language file's {@code login_prompt} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getLoginPrompt() {
-        return configuredOr(loginPrompt, "&e" + i18n("login_prompt"));
-    }
-
-    /**
-     * {@code messages.login-prompt-gui}, or the language file's {@code login_prompt_gui} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getLoginPromptGui() {
-        return configuredOr(loginPromptGui, "&e" + i18n("login_prompt_gui"));
-    }
-
-    /**
-     * {@code messages.register-success}, or the language file's {@code register_success} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getRegisterSuccess() {
-        return configuredOr(registerSuccess, "&a" + i18n("register_success"));
-    }
-
-    /**
-     * {@code messages.login-success}, or the language file's {@code login_success} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getLoginSuccess() {
-        return configuredOr(loginSuccess, "&a" + i18n("login_success"));
-    }
-
-    /**
-     * {@code messages.already-logged}, or the language file's {@code already_logged} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getAlreadyLogged() {
-        return configuredOr(alreadyLogged, "&e" + i18n("already_logged"));
-    }
-
-    /**
-     * {@code messages.not-registered}, or the language file's {@code not_registered} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getNotRegistered() {
-        return configuredOr(notRegistered, "&c" + i18n("not_registered"));
-    }
-
-    /**
-     * {@code messages.already-registered}, or the language file's {@code already_registered} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getAlreadyRegistered() {
-        return configuredOr(alreadyRegistered, "&c" + i18n("already_registered"));
-    }
-
-    /**
-     * {@code messages.password-mismatch}, or the language file's {@code password_mismatch} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getPasswordMismatch() {
-        return configuredOr(passwordMismatch, "&c" + i18n("password_mismatch"));
-    }
-
-    /**
-     * {@code messages.password-too-short}, or the language file's {@code password_too_short} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getPasswordTooShort() {
-        return configuredOr(passwordTooShort, "&c" + i18n("password_too_short"));
-    }
-
-    /**
-     * {@code messages.password-too-long}, or the language file's {@code password_too_long} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getPasswordTooLong() {
-        return configuredOr(passwordTooLong, "&c" + i18n("password_too_long"));
-    }
-
-    /**
-     * {@code messages.timeout-kick}, or the language file's {@code timeout_kick} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getTimeoutKick() {
-        return configuredOr(timeoutKick, "&c" + i18n("timeout_kick"));
-    }
-
-    /**
-     * {@code messages.account-locked}, or the language file's {@code account_locked} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getAccountLocked() {
-        return configuredOr(accountLocked, "&c" + i18n("account_locked"));
-    }
-
-    /**
-     * {@code messages.attempts-remaining}, or the language file's {@code attempts_remaining} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getAttemptsRemaining() {
-        return configuredOr(attemptsRemaining, "&c" + i18n("attempts_remaining"));
-    }
-
-    /**
-     * {@code messages.gui-password-invalid}, or the language file's {@code gui_password_invalid} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getGuiPasswordInvalid() {
-        return configuredOr(guiPasswordInvalid, "&c" + i18n("gui_password_invalid"));
-    }
-
-    /**
-     * {@code messages.admin.password-reset}, or the language file's {@code admin_password_reset} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getAdminPasswordReset() {
-        return configuredOr(adminPasswordReset, "&a" + i18n("admin_password_reset"));
-    }
-
-    /**
-     * {@code messages.admin.force-login}, or the language file's {@code admin_force_login} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getAdminForceLogin() {
-        return configuredOr(adminForceLogin, "&a" + i18n("admin_force_login"));
-    }
-
-    /**
-     * {@code messages.admin.unregister}, or the language file's {@code admin_unregister} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getAdminUnregister() {
-        return configuredOr(adminUnregister, "&a" + i18n("admin_unregister"));
-    }
-
-    /**
-     * {@code messages.admin.player-not-found}, or the language file's {@code admin_player_not_found} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getAdminPlayerNotFound() {
-        return configuredOr(adminPlayerNotFound, "&c" + i18n("admin_player_not_found"));
-    }
-
-    /**
-     * {@code messages.admin.account-not-found}, or the language file's {@code admin_account_not_found} text, in the colour its shipped default opened with, when left blank.
-     *
-     * @return the text to show
-     */
-    public String getAdminAccountNotFound() {
-        return configuredOr(adminAccountNotFound, "&c" + i18n("admin_account_not_found"));
-    }
-
-    /**
-     * Rewrites every GUI title and message that still holds the default an earlier version shipped
-     * to blank, so the language file's text takes over; any other value is the operator's and is
-     * kept. Idempotent: a blank value matches no shipped default. The caller saves the file when
-     * this returns true (maintainer ruling 2026-09-24 (d)).
-     *
+     * @param text the module's {@code i18n}: catalogue key to text in the server's language
      * @return whether any value was rewritten
      */
-    public boolean migrateLegacyDefaults() {
-        boolean changed = false;
-        if (SHIPPED_GUI_LOGIN_TITLE.equals(guiLoginTitle)) {
-            guiLoginTitle = "";
-            changed = true;
+    public boolean materializeText(Function<String, String> text) {
+        Map<String, Map<String, String>> jar = ConfigTextDefaults.jarCatalogues(LoginConfig.class);
+        boolean[] changed = {false};
+        guiLoginTitle = follow("guiLoginTitle", guiLoginTitle, text, jar, "&6", "gui_enter_password", SHIPPED_GUI_LOGIN_TITLE, changed);
+        guiRegisterTitle = follow("guiRegisterTitle", guiRegisterTitle, text, jar, "&6", "gui_set_password", SHIPPED_GUI_REGISTER_TITLE, changed);
+        guiConfirmTitle = follow("guiConfirmTitle", guiConfirmTitle, text, jar, "&6", "gui_confirm_password", SHIPPED_GUI_CONFIRM_TITLE, changed);
+        registerPrompt = follow("registerPrompt", registerPrompt, text, jar, "&e", "register_prompt", SHIPPED_REGISTER_PROMPT, changed);
+        registerPromptGui = follow("registerPromptGui", registerPromptGui, text, jar, "&e", "register_prompt_gui", SHIPPED_REGISTER_PROMPT_GUI, changed);
+        loginPrompt = follow("loginPrompt", loginPrompt, text, jar, "&e", "login_prompt", SHIPPED_LOGIN_PROMPT, changed);
+        loginPromptGui = follow("loginPromptGui", loginPromptGui, text, jar, "&e", "login_prompt_gui", SHIPPED_LOGIN_PROMPT_GUI, changed);
+        registerSuccess = follow("registerSuccess", registerSuccess, text, jar, "&a", "register_success", SHIPPED_REGISTER_SUCCESS, changed);
+        loginSuccess = follow("loginSuccess", loginSuccess, text, jar, "&a", "login_success", SHIPPED_LOGIN_SUCCESS, changed);
+        alreadyLogged = follow("alreadyLogged", alreadyLogged, text, jar, "&e", "already_logged", SHIPPED_ALREADY_LOGGED, changed);
+        notRegistered = follow("notRegistered", notRegistered, text, jar, "&c", "not_registered", SHIPPED_NOT_REGISTERED, changed);
+        alreadyRegistered = follow("alreadyRegistered", alreadyRegistered, text, jar, "&c", "already_registered", SHIPPED_ALREADY_REGISTERED, changed);
+        passwordMismatch = follow("passwordMismatch", passwordMismatch, text, jar, "&c", "password_mismatch", SHIPPED_PASSWORD_MISMATCH, changed);
+        passwordTooShort = follow("passwordTooShort", passwordTooShort, text, jar, "&c", "password_too_short", SHIPPED_PASSWORD_TOO_SHORT, changed);
+        passwordTooLong = follow("passwordTooLong", passwordTooLong, text, jar, "&c", "password_too_long", SHIPPED_PASSWORD_TOO_LONG, changed);
+        timeoutKick = follow("timeoutKick", timeoutKick, text, jar, "&c", "timeout_kick", SHIPPED_TIMEOUT_KICK, changed);
+        accountLocked = follow("accountLocked", accountLocked, text, jar, "&c", "account_locked", SHIPPED_ACCOUNT_LOCKED, changed);
+        attemptsRemaining = follow("attemptsRemaining", attemptsRemaining, text, jar, "&c", "attempts_remaining", SHIPPED_ATTEMPTS_REMAINING, changed);
+        guiPasswordInvalid = follow("guiPasswordInvalid", guiPasswordInvalid, text, jar, "&c", "gui_password_invalid", SHIPPED_GUI_PASSWORD_INVALID, changed);
+        adminPasswordReset = follow("adminPasswordReset", adminPasswordReset, text, jar, "&a", "admin_password_reset", SHIPPED_ADMIN_PASSWORD_RESET, changed);
+        adminForceLogin = follow("adminForceLogin", adminForceLogin, text, jar, "&a", "admin_force_login", SHIPPED_ADMIN_FORCE_LOGIN, changed);
+        adminUnregister = follow("adminUnregister", adminUnregister, text, jar, "&a", "admin_unregister", SHIPPED_ADMIN_UNREGISTER, changed);
+        adminPlayerNotFound = follow("adminPlayerNotFound", adminPlayerNotFound, text, jar, "&c", "admin_player_not_found", SHIPPED_ADMIN_PLAYER_NOT_FOUND, changed);
+        adminAccountNotFound = follow("adminAccountNotFound", adminAccountNotFound, text, jar, "&c", "admin_account_not_found", SHIPPED_ADMIN_ACCOUNT_NOT_FOUND, changed);
+        return changed[0];
+    }
+
+    /**
+     * {@code value}, or {@code prefix} plus {@code text}'s current text for {@code key} when
+     * {@code value} is still built-in text other than that and the new text fits {@code field}'s
+     * constraints; sets {@code changed[0]} when it replaces.
+     */
+    private static String follow(String field, String value, Function<String, String> text,
+                                 Map<String, Map<String, String>> jar, String prefix, String key, String shipped,
+                                 boolean[] changed) {
+        String result = ConfigTextDefaults.materialize(LoginConfig.class, field, value,
+                ConfigTextDefaults.currentText(text, prefix, key), ConfigTextDefaults.tracked(jar, prefix, key, shipped));
+        if (!Objects.equals(result, value)) {
+            changed[0] = true;
         }
-        if (SHIPPED_GUI_REGISTER_TITLE.equals(guiRegisterTitle)) {
-            guiRegisterTitle = "";
-            changed = true;
-        }
-        if (SHIPPED_GUI_CONFIRM_TITLE.equals(guiConfirmTitle)) {
-            guiConfirmTitle = "";
-            changed = true;
-        }
-        if (SHIPPED_REGISTER_PROMPT.equals(registerPrompt)) {
-            registerPrompt = "";
-            changed = true;
-        }
-        if (SHIPPED_REGISTER_PROMPT_GUI.equals(registerPromptGui)) {
-            registerPromptGui = "";
-            changed = true;
-        }
-        if (SHIPPED_LOGIN_PROMPT.equals(loginPrompt)) {
-            loginPrompt = "";
-            changed = true;
-        }
-        if (SHIPPED_LOGIN_PROMPT_GUI.equals(loginPromptGui)) {
-            loginPromptGui = "";
-            changed = true;
-        }
-        if (SHIPPED_REGISTER_SUCCESS.equals(registerSuccess)) {
-            registerSuccess = "";
-            changed = true;
-        }
-        if (SHIPPED_LOGIN_SUCCESS.equals(loginSuccess)) {
-            loginSuccess = "";
-            changed = true;
-        }
-        if (SHIPPED_ALREADY_LOGGED.equals(alreadyLogged)) {
-            alreadyLogged = "";
-            changed = true;
-        }
-        if (SHIPPED_NOT_REGISTERED.equals(notRegistered)) {
-            notRegistered = "";
-            changed = true;
-        }
-        if (SHIPPED_ALREADY_REGISTERED.equals(alreadyRegistered)) {
-            alreadyRegistered = "";
-            changed = true;
-        }
-        if (SHIPPED_PASSWORD_MISMATCH.equals(passwordMismatch)) {
-            passwordMismatch = "";
-            changed = true;
-        }
-        if (SHIPPED_PASSWORD_TOO_SHORT.equals(passwordTooShort)) {
-            passwordTooShort = "";
-            changed = true;
-        }
-        if (SHIPPED_PASSWORD_TOO_LONG.equals(passwordTooLong)) {
-            passwordTooLong = "";
-            changed = true;
-        }
-        if (SHIPPED_TIMEOUT_KICK.equals(timeoutKick)) {
-            timeoutKick = "";
-            changed = true;
-        }
-        if (SHIPPED_ACCOUNT_LOCKED.equals(accountLocked)) {
-            accountLocked = "";
-            changed = true;
-        }
-        if (SHIPPED_ATTEMPTS_REMAINING.equals(attemptsRemaining)) {
-            attemptsRemaining = "";
-            changed = true;
-        }
-        if (SHIPPED_GUI_PASSWORD_INVALID.equals(guiPasswordInvalid)) {
-            guiPasswordInvalid = "";
-            changed = true;
-        }
-        if (SHIPPED_ADMIN_PASSWORD_RESET.equals(adminPasswordReset)) {
-            adminPasswordReset = "";
-            changed = true;
-        }
-        if (SHIPPED_ADMIN_FORCE_LOGIN.equals(adminForceLogin)) {
-            adminForceLogin = "";
-            changed = true;
-        }
-        if (SHIPPED_ADMIN_UNREGISTER.equals(adminUnregister)) {
-            adminUnregister = "";
-            changed = true;
-        }
-        if (SHIPPED_ADMIN_PLAYER_NOT_FOUND.equals(adminPlayerNotFound)) {
-            adminPlayerNotFound = "";
-            changed = true;
-        }
-        if (SHIPPED_ADMIN_ACCOUNT_NOT_FOUND.equals(adminAccountNotFound)) {
-            adminAccountNotFound = "";
-            changed = true;
-        }
-        return changed;
+        return result;
     }
     
     /**

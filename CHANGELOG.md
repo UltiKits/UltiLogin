@@ -9,32 +9,27 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- The three GUI titles (`gui-mode.title-login`, `gui-mode.title-register`, `gui-mode.title-confirm`)
-  and the twenty-one messages in `config/login.yml` (`messages.register-prompt`, `register-prompt-gui`,
-  `login-prompt`, `login-prompt-gui`, `register-success`, `login-success`, `already-logged`,
-  `not-registered`, `already-registered`, `password-mismatch`, `password-too-short`,
-  `password-too-long`, `timeout-kick`, `account-locked`, `attempts-remaining`, `gui-password-invalid`,
-  and `messages.admin.password-reset`, `force-login`, `unregister`, `player-not-found`,
-  `account-not-found`) now follow `language` unless you have customised them. Their default is now
-  blank, and a blank value shows the language file's text in the server's language; previously the
-  default was fixed Chinese text, so `language: en` had no effect on them (UltiKits/UltiLogin#20). On
-  upgrade, at start-up and on every reload of the module, a value that is exactly the Chinese default
-  an earlier version shipped is replaced with a blank value and the file is saved; any other value is
-  yours and is shown as written. Under `language: zh` the text shown does not change. To keep the old
-  Chinese text on an English server, write it back after upgrading, changed in any way (even one
-  character), since an exact copy of the old default is blanked again.
-- `config/login.yml` 中的三个界面标题（`gui-mode.title-login`、`gui-mode.title-register`、`gui-mode.title-confirm`）
-  与二十一条消息（`messages.register-prompt`、`register-prompt-gui`、`login-prompt`、`login-prompt-gui`、
-  `register-success`、`login-success`、`already-logged`、`not-registered`、`already-registered`、`password-mismatch`、
-  `password-too-short`、`password-too-long`、`timeout-kick`、`account-locked`、`attempts-remaining`、
+- Message and title settings in `config/login.yml` — the three GUI titles (`gui-mode.title-login`,
+  `gui-mode.title-register`, `gui-mode.title-confirm`) and the twenty-one messages (`messages.register-prompt`,
+  `register-prompt-gui`, `login-prompt`, `login-prompt-gui`, `register-success`, `login-success`, `already-logged`,
+  `not-registered`, `already-registered`, `password-mismatch`, `password-too-short`, `password-too-long`,
+  `timeout-kick`, `account-locked`, `attempts-remaining`, `gui-password-invalid`, and `messages.admin.password-reset`,
+  `force-login`, `unregister`, `player-not-found`, `account-not-found`) — are written in the server's language when
+  the module starts, and the file is what the module shows (for example `messages.login-success:
+  '&aLogin successful! Welcome back!'` under `language: en`); previously they were fixed Chinese text, so
+  `language: en` had no effect on them. A setting that is still built-in text — in any language, or a default an
+  earlier version shipped — follows `language`: it is rewritten when the module starts or after `/ul reload`. A
+  setting you edited is kept. To keep a built-in text but stop it following `language`, change at least one
+  character (UltiKits/UltiLogin#20).
+- `config/login.yml` 中的消息与标题设置——三个界面标题（`gui-mode.title-login`、`gui-mode.title-register`、
+  `gui-mode.title-confirm`）与二十一条消息（`messages.register-prompt`、`register-prompt-gui`、`login-prompt`、
+  `login-prompt-gui`、`register-success`、`login-success`、`already-logged`、`not-registered`、`already-registered`、
+  `password-mismatch`、`password-too-short`、`password-too-long`、`timeout-kick`、`account-locked`、`attempts-remaining`、
   `gui-password-invalid`，以及 `messages.admin.password-reset`、`force-login`、`unregister`、`player-not-found`、
-  `account-not-found`）现在除非被你自定义，否则跟随 `language`。它们的默认值现为空，空值以服务器语言显示语言文件中的
-  文本；此前默认值是写死的中文，所以 `language: en` 对它们不起作用（UltiKits/UltiLogin#20）。升级后，在启动时以及每次
-  重载本模块时，与旧版本出厂中文默认值完全相同的值会被替换为空值并保存文件；其他任何值都视为你的自定义，按原样显示。
-  在 `language: zh` 下显示的文本不变。若想在英文服务器上保留旧的中文文本，请在升级后把它写回，并做任意改动（哪怕一个
-  字符），因为与旧默认值完全相同的副本会再次被清空。
-
-### Fixed
+  `account-not-found`）——在模块启动时按服务器语言写入，文件内容即模块显示的内容；此前它们是写死的中文，`language: en`
+  对它们不起作用。仍为内置文本（任一语言的内置文本，或旧版本的出厂默认值）的设置会跟随 `language`：模块启动或执行
+  `/ul reload` 后改写为当前语言的文本。你改过的设置保持不变。若想保留内置文本又不让它跟随语言，请至少改动一个字符
+  （UltiKits/UltiLogin#20）。
 
 - `language: en` now applies to everything this module shows or logs: the help of `/login`,
   `/register`, `/changepassword`, `/logadmin` and `/panel`, the `/changepassword` and `/logadmin`

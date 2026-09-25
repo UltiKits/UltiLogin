@@ -36,7 +36,7 @@ public class UltiLogin extends UltiToolsPlugin {
         // Deleting a key from LoginConfig does nothing to the operator's existing file, so tell
         // them about any key this version no longer reads (UltiKits/UltiLogin#23).
         warnAboutRemovedConfigKeys();
-        blankShippedTextDefaults();
+        writeConfigTextInServerLanguage();
         return true;
     }
 
@@ -48,20 +48,21 @@ public class UltiLogin extends UltiToolsPlugin {
     @Override
     protected void onReload() {
         warnAboutRemovedConfigKeys();
-        blankShippedTextDefaults();
+        writeConfigTextInServerLanguage();
     }
 
     /**
-     * Blanks every GUI title and message in {@code login.yml} that still holds a default an earlier
-     * version shipped (all were Chinese) and saves the file, so the language file's text takes over in
-     * the server's language; any other value is the operator's and is kept (maintainer ruling
-     * 2026-09-24 (d), UltiKits/UltiLogin#20). Runs at start-up and on every reload, after the
-     * framework has read the file; a blank value matches no shipped default, so it is never rewritten
-     * twice.
+     * Writes every GUI title and message in {@code login.yml} that is still built-in text in the
+     * server's language and saves the file once, so the file holds what the module sends; any other
+     * value is the operator's and is kept (maintainer decision 2026-09-25, UltiKits/UltiLogin#20). Runs
+     * from {@link #registerSelf()} and from {@link #onReload()}, both after the module's language is
+     * loaded -- never from a configuration change listener, which the framework fires before it reloads
+     * the language. A value already in the current language matches nothing to replace, so a second
+     * start writes nothing.
      */
-    private void blankShippedTextDefaults() {
+    private void writeConfigTextInServerLanguage() {
         LoginConfig config = getConfig(LoginConfig.class);
-        if (config == null || !config.migrateLegacyDefaults()) {
+        if (config == null || !config.materializeText(this::i18n)) {
             return;
         }
         try {

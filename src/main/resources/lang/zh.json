@@ -126,7 +126,7 @@
   "gui_register_exit_lore": "点击退出注册界面",
   "gui_register_exit_warning": "注意: 你需要注册才能游玩",
   "log_removed_key_check_failed": "无法检查 {FILE} 中已移除的配置项；模块在不做此检查的情况下继续运行。",
-  "log_config_default_save_failed": "将 {FILE} 中旧版本附带的默认文本替换为空值后保存失败；本次运行已使用语言文件中的文本，下次启动时会再次尝试替换。",
+  "log_config_default_save_failed": "按服务器语言写入 {FILE} 中的标题与消息后保存失败；本次运行已使用新的文本，下次启动时会再次写入该文件。",
   "log_prompt_skipped_disabling": "插件正在停用，已跳过向 {PLAYER} 显示登录或注册提示",
   "log_account_email_update_failed": "更新账号邮箱失败",
   "log_account_update_failed": "更新账号失败",
