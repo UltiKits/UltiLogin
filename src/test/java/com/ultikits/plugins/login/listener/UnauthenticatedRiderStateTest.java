@@ -35,7 +35,7 @@ import static org.mockito.Mockito.when;
  * discards the vehicle and everything riding it (read with {@code javap -c}: offsets 172-232) — a
  * saddled donkey with its chest, a chest boat, would be deleted. So the mount in the join tick is
  * allowed, the vehicle is back in the world, and one tick later the unauthenticated player is taken
- * off it (found by this fix's gate-1 review, CR-01).
+ * off it (found reviewing this fix).
  *
  * <h2>What makes a vacuous pass impossible here</h2>
  * The player and the minecart are MockBukkit entities with real passenger state, the scheduler is
