@@ -526,6 +526,16 @@ class LoginProtectionListenerTest {
         }
 
         @Test
+        @DisplayName("a title the server echoes with its colour codes rewritten is still the credential GUI (gate 1 IN-01)")
+        void normalisedColourCodesAllowed() {
+            org.bukkit.event.inventory.InventoryClickEvent click = clickIn("\u00a76\u00a7rEnter Password");
+
+            listener.onInventoryClick(click);
+
+            verify(click, never()).setCancelled(true);
+        }
+
+        @Test
         @DisplayName("another inventory whose title merely contains 登录 is refused")
         void foreignTitleRefused() {
             org.bukkit.event.inventory.InventoryClickEvent click = clickIn("\u00a76登录奖励");

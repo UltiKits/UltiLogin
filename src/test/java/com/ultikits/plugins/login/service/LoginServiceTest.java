@@ -271,7 +271,7 @@ class LoginServiceTest {
             assertThat(result).isFalse();
             verify(dataOperator, never()).insert(any(AccountData.class));
             // The refusal follows the language setting (UltiKits/UltiLogin#20)
-            verify(player).sendMessage(enLine("ip_limit_reached"));
+            verify(player).sendMessage(org.bukkit.ChatColor.RED + org.bukkit.ChatColor.stripColor(enLine("ip_limit_reached")));
         }
     }
 
@@ -2717,7 +2717,7 @@ class LoginServiceTest {
 
             assertThat(service.isLoggedIn(playerUuid)).isTrue();
             // The auto-login line follows the language setting (UltiKits/UltiLogin#20)
-            verify(player).sendMessage(enLine("session_login"));
+            verify(player).sendMessage(org.bukkit.ChatColor.GREEN + org.bukkit.ChatColor.stripColor(enLine("session_login")));
         }
 
         @Test

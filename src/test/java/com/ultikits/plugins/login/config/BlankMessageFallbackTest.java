@@ -56,6 +56,52 @@ class BlankMessageFallbackTest {
         KEYS.put("timeoutKick", "timeout_kick");
     }
 
+    /**
+     * The colour each setting's shipped default opened with. A blank setting keeps it: the colour is
+     * the module's, the words are the language file's, so an install whose extracted language file
+     * predates the colour codes still shows each line in its colour (gate 1 WR-01).
+     */
+    private static final Map<String, String> COLOUR = new LinkedHashMap<>();
+
+    static {
+        COLOUR.put("accountLocked", "&c");
+        COLOUR.put("adminAccountNotFound", "&c");
+        COLOUR.put("adminForceLogin", "&a");
+        COLOUR.put("adminPasswordReset", "&a");
+        COLOUR.put("adminPlayerNotFound", "&c");
+        COLOUR.put("adminUnregister", "&a");
+        COLOUR.put("alreadyLogged", "&e");
+        COLOUR.put("alreadyRegistered", "&c");
+        COLOUR.put("attemptsRemaining", "&c");
+        COLOUR.put("guiConfirmTitle", "&6");
+        COLOUR.put("guiLoginTitle", "&6");
+        COLOUR.put("guiPasswordInvalid", "&c");
+        COLOUR.put("guiRegisterTitle", "&6");
+        COLOUR.put("loginPrompt", "&e");
+        COLOUR.put("loginPromptGui", "&e");
+        COLOUR.put("loginSuccess", "&a");
+        COLOUR.put("notRegistered", "&c");
+        COLOUR.put("passwordMismatch", "&c");
+        COLOUR.put("passwordTooLong", "&c");
+        COLOUR.put("passwordTooShort", "&c");
+        COLOUR.put("registerPrompt", "&e");
+        COLOUR.put("registerPromptGui", "&e");
+        COLOUR.put("registerSuccess", "&a");
+        COLOUR.put("timeoutKick", "&c");
+    }
+
+    /** {@code text} as a player reads it: colour codes applied, then stripped. */
+    private static String words(String text) {
+        return org.bukkit.ChatColor.stripColor(org.bukkit.ChatColor.translateAlternateColorCodes('&', text));
+    }
+
+    /** A blank {@code field} reads {@code key}'s words from the language file, in the setting's colour. */
+    private static void assertFallback(LoginConfig config, String field, String language, String key) throws Exception {
+        String shown = read(config, field);
+        assertThat(words(shown)).as(field).isEqualTo(words(catalogue(language, key)));
+        assertThat(shown).as(field + " keeps its colour").startsWith(COLOUR.get(field));
+    }
+
     private static LoginConfig bound(String language) {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
         when(plugin.i18n(anyString())).thenAnswer(CatalogueText.answer(language));
@@ -85,7 +131,7 @@ class BlankMessageFallbackTest {
         LoginConfig config = bound("en");
         for (Map.Entry<String, String> e : KEYS.entrySet()) {
             set(config, e.getKey(), "");
-            assertThat(read(config, e.getKey())).as(e.getKey()).isEqualTo(catalogue("en", e.getValue()));
+            assertFallback(config, e.getKey(), "en", e.getValue());
         }
     }
 
@@ -95,7 +141,7 @@ class BlankMessageFallbackTest {
         LoginConfig config = bound("zh");
         for (Map.Entry<String, String> e : KEYS.entrySet()) {
             set(config, e.getKey(), "");
-            assertThat(read(config, e.getKey())).as(e.getKey()).isEqualTo(catalogue("zh", e.getValue()));
+            assertFallback(config, e.getKey(), "zh", e.getValue());
         }
     }
 
@@ -106,8 +152,8 @@ class BlankMessageFallbackTest {
         set(config, "loginSuccess", "   ");
         set(config, "guiLoginTitle", "\t");
 
-        assertThat(config.getLoginSuccess()).isEqualTo(catalogue("en", "login_success"));
-        assertThat(config.getGuiLoginTitle()).isEqualTo(catalogue("en", "gui_enter_password"));
+        assertFallback(config, "loginSuccess", "en", "login_success");
+        assertFallback(config, "guiLoginTitle", "en", "gui_enter_password");
     }
 
     @Test
