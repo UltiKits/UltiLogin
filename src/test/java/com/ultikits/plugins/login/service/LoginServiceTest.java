@@ -2761,7 +2761,9 @@ class LoginServiceTest {
         }
 
         @Test
-        @DisplayName("Should dismount a player who joins without a session while riding (UltiKits/UltiLogin#41)")
+        @DisplayName("The no-session protections dismount a rider (UltiKits/UltiLogin#41) -- checked through"
+                + " onPlayerJoin, which shares the helper with revocation; on a real server a restored vehicle"
+                + " arrives only after the join, and the listener's one-tick check handles that")
         void dismountsARiderWhoJoinsWithoutASession() {
             Location mockLoc = mock(Location.class);
             when(mockLoc.clone()).thenReturn(mockLoc);
