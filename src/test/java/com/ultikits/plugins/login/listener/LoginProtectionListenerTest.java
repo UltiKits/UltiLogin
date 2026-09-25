@@ -1,5 +1,6 @@
 package com.ultikits.plugins.login.listener;
 
+import com.ultikits.plugins.login.i18n.LoginSeams;
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.gui.LoginGUIPage;
@@ -39,6 +40,7 @@ class LoginProtectionListenerTest {
     void setUp() throws Exception {
         UltiLoginTestHelper.setUp();
         loginService = mock(LoginService.class);
+        LoginSeams.speak(loginService, "zh");
 
         // Mock config on loginService
         config = UltiLoginTestHelper.createDefaultConfig();
@@ -136,7 +138,11 @@ class LoginProtectionListenerTest {
 
             verify(mockScheduler, never()).runTask(any(org.bukkit.plugin.Plugin.class), any(Runnable.class));
             verify(player, never()).sendMessage(anyString());
-            verify(UltiLoginTestHelper.getMockLogger()).warn(anyString());
+            // The console line follows the language setting (UltiKits/UltiLogin#20)
+            String expected = com.ultikits.plugins.login.i18n.CatalogueText.entries("zh")
+                    .getOrDefault("log_prompt_skipped_disabling", "<lang/zh has no log_prompt_skipped_disabling>")
+                    .replace("{PLAYER}", "TestPlayer");
+            verify(UltiLoginTestHelper.getMockLogger()).warn(expected);
         }
     }
 
@@ -443,7 +449,7 @@ class LoginProtectionListenerTest {
             org.bukkit.inventory.InventoryView view = mock(org.bukkit.inventory.InventoryView.class);
             when(event.getWhoClicked()).thenReturn(player);
             when(event.getView()).thenReturn(view);
-            when(view.getTitle()).thenReturn("请输入密码");
+            when(view.getTitle()).thenReturn("\u00a76请输入密码");
 
             listener.onInventoryClick(event);
 
@@ -467,6 +473,72 @@ class LoginProtectionListenerTest {
         }
     }
 
+    /**
+     * The credential GUI is recognised by the titles it is actually opened with, whatever language
+     * they are in (UltiKits/UltiLogin#20). Before the language sweep the allowance was "the title
+     * contains 密码, 登录 or 注册": under {@code language: en} the GUI's own English title matched none
+     * of them, so every keypad click was cancelled, while any other plugin's inventory whose title
+     * contained one of those words was let through.
+     */
+    @Nested
+    @DisplayName("credential GUI recognised by its resolved titles, in any language (UltiKits/UltiLogin#20)")
+    class CredentialGuiTitles {
+
+        private org.bukkit.event.inventory.InventoryClickEvent clickIn(String title) {
+            org.bukkit.event.inventory.InventoryClickEvent event = mock(org.bukkit.event.inventory.InventoryClickEvent.class);
+            org.bukkit.inventory.InventoryView view = mock(org.bukkit.inventory.InventoryView.class);
+            when(event.getWhoClicked()).thenReturn(player);
+            when(event.getView()).thenReturn(view);
+            when(view.getTitle()).thenReturn(title);
+            return event;
+        }
+
+        private org.bukkit.event.inventory.InventoryOpenEvent openOf(String title) {
+            org.bukkit.event.inventory.InventoryOpenEvent event = mock(org.bukkit.event.inventory.InventoryOpenEvent.class);
+            org.bukkit.inventory.InventoryView view = mock(org.bukkit.inventory.InventoryView.class);
+            when(event.getPlayer()).thenReturn(player);
+            when(event.getView()).thenReturn(view);
+            when(view.getTitle()).thenReturn(title);
+            return event;
+        }
+
+        @BeforeEach
+        void englishTitles() {
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+            lenient().when(config.getGuiLoginTitle()).thenReturn("&6Enter Password");
+            lenient().when(config.getGuiRegisterTitle()).thenReturn("&6Set Password");
+            lenient().when(config.getGuiConfirmTitle()).thenReturn("&6Confirm Password");
+        }
+
+        @Test
+        @DisplayName("keypad clicks in each English credential GUI title are allowed")
+        void englishTitlesAllowed() {
+            for (String title : new String[]{"\u00a76Enter Password", "\u00a76Set Password", "\u00a76Confirm Password"}) {
+                org.bukkit.event.inventory.InventoryClickEvent click = clickIn(title);
+                org.bukkit.event.inventory.InventoryOpenEvent open = openOf(title);
+
+                listener.onInventoryClick(click);
+                listener.onInventoryOpen(open);
+
+                verify(click, never()).setCancelled(true);
+                verify(open, never()).setCancelled(true);
+            }
+        }
+
+        @Test
+        @DisplayName("another inventory whose title merely contains 登录 is refused")
+        void foreignTitleRefused() {
+            org.bukkit.event.inventory.InventoryClickEvent click = clickIn("\u00a76登录奖励");
+            org.bukkit.event.inventory.InventoryOpenEvent open = openOf("\u00a76每日注册礼包");
+
+            listener.onInventoryClick(click);
+            listener.onInventoryOpen(open);
+
+            verify(click).setCancelled(true);
+            verify(open).setCancelled(true);
+        }
+    }
+
     @Nested
     @DisplayName("onInventoryOpen")
     class OnInventoryOpen {
@@ -480,7 +552,7 @@ class LoginProtectionListenerTest {
             org.bukkit.inventory.InventoryView view = mock(org.bukkit.inventory.InventoryView.class);
             when(event.getPlayer()).thenReturn(player);
             when(event.getView()).thenReturn(view);
-            when(view.getTitle()).thenReturn("注册账号");
+            when(view.getTitle()).thenReturn("\u00a76请设置密码");
 
             listener.onInventoryOpen(event);
 
@@ -545,7 +617,7 @@ class LoginProtectionListenerTest {
             org.bukkit.inventory.InventoryView view = mock(org.bukkit.inventory.InventoryView.class);
             when(event.getPlayer()).thenReturn(player);
             when(event.getView()).thenReturn(view);
-            when(view.getTitle()).thenReturn("登录界面");
+            when(view.getTitle()).thenReturn("\u00a76请再次输入密码");
 
             listener.onInventoryOpen(event);
 
@@ -728,7 +800,7 @@ class LoginProtectionListenerTest {
             org.bukkit.inventory.InventoryView view = mock(org.bukkit.inventory.InventoryView.class);
             when(event.getWhoClicked()).thenReturn(player);
             when(event.getView()).thenReturn(view);
-            when(view.getTitle()).thenReturn("注册");
+            when(view.getTitle()).thenReturn("\u00a76请设置密码");
 
             listener.onInventoryClick(event);
 
@@ -744,7 +816,7 @@ class LoginProtectionListenerTest {
             org.bukkit.inventory.InventoryView view = mock(org.bukkit.inventory.InventoryView.class);
             when(event.getWhoClicked()).thenReturn(player);
             when(event.getView()).thenReturn(view);
-            when(view.getTitle()).thenReturn("登录");
+            when(view.getTitle()).thenReturn("\u00a76请再次输入密码");
 
             listener.onInventoryClick(event);
 

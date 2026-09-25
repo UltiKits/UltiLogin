@@ -450,6 +450,10 @@ class EmailVerificationServiceTest {
 
             // Should still succeed (just log the error)
             assertThat(result.isSuccess()).isTrue();
+            // ... in the configured language (UltiKits/UltiLogin#20)
+            String expected = CatalogueText.entries("zh").getOrDefault("log_account_email_update_failed",
+                    "<lang/zh has no log_account_email_update_failed>");
+            verify(UltiLoginTestHelper.getMockLogger()).error(eq(expected), any(IllegalAccessException.class));
         }
     }
 

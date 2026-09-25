@@ -1,5 +1,6 @@
 package com.ultikits.plugins.login.commands;
 
+import com.ultikits.plugins.login.i18n.LoginSeams;
 import com.ultikits.plugins.login.UltiLogin;
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.service.LoginService;
@@ -50,6 +51,8 @@ class PanelCommandTest {
         serverField.set(null, mockServer);
 
         loginService = mock(LoginService.class);
+
+        LoginSeams.speak(loginService, "zh");
         command = new PanelCommand(UltiLoginTestHelper.getMockPlugin(), loginService);
 
         playerUuid = UUID.randomUUID();

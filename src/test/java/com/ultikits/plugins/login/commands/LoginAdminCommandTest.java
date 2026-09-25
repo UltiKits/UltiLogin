@@ -1,5 +1,6 @@
 package com.ultikits.plugins.login.commands;
 
+import com.ultikits.plugins.login.i18n.LoginSeams;
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.entity.AccountData;
@@ -28,6 +29,7 @@ class LoginAdminCommandTest {
     void setUp() throws Exception {
         UltiLoginTestHelper.setUp();
         loginService = mock(LoginService.class);
+        LoginSeams.speak(loginService, "zh");
         command = new LoginAdminCommand(loginService);
 
         sender = mock(CommandSender.class);

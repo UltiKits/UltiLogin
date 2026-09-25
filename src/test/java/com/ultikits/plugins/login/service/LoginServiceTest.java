@@ -1,5 +1,6 @@
 package com.ultikits.plugins.login.service;
 
+import com.ultikits.plugins.login.i18n.CatalogueText;
 import com.ultikits.plugins.login.UltiLogin;
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.config.LoginConfig;
@@ -263,10 +264,14 @@ class LoginServiceTest {
                     .thenReturn(Collections.emptyList())
                     .thenReturn(Arrays.asList(new AccountData(), new AccountData()));
 
+            when(UltiLoginTestHelper.getMockPlugin().i18n(anyString())).thenAnswer(CatalogueText.answer("en"));
+
             boolean result = service.register(player, "password123");
 
             assertThat(result).isFalse();
             verify(dataOperator, never()).insert(any(AccountData.class));
+            // The refusal follows the language setting (UltiKits/UltiLogin#20)
+            verify(player).sendMessage(enLine("ip_limit_reached"));
         }
     }
 
@@ -2391,6 +2396,8 @@ class LoginServiceTest {
 
             // Login should still succeed (update failure is logged, not propagated)
             assertThat(result.isSuccess()).isTrue();
+            // ... and the console line follows the language setting (UltiKits/UltiLogin#20)
+            verify(UltiLoginTestHelper.getMockLogger()).error(eq(zhLine("log_account_update_failed")), any(IllegalAccessException.class));
         }
     }
 
@@ -2415,6 +2422,7 @@ class LoginServiceTest {
             boolean result = service.changePassword(playerUuid, oldPassword, "newPass");
 
             assertThat(result).isFalse();
+            verify(UltiLoginTestHelper.getMockLogger()).error(eq(zhLine("log_account_update_failed")), any(IllegalAccessException.class));
         }
     }
 
@@ -2435,6 +2443,7 @@ class LoginServiceTest {
             String result = service.resetPassword(playerUuid);
 
             assertThat(result).isNull();
+            verify(UltiLoginTestHelper.getMockLogger()).error(eq(zhLine("log_password_reset_failed")), any(IllegalAccessException.class));
         }
 
         @Test
@@ -2448,6 +2457,7 @@ class LoginServiceTest {
             boolean result = service.resetPassword(playerUuid, "newPass");
 
             assertThat(result).isFalse();
+            verify(UltiLoginTestHelper.getMockLogger()).error(eq(zhLine("log_password_reset_failed")), any(IllegalAccessException.class));
         }
 
         @Test
@@ -2699,10 +2709,13 @@ class LoginServiceTest {
             when(mockLoc.clone()).thenReturn(mockLoc);
             when(player.getLocation()).thenReturn(mockLoc);
 
+            when(UltiLoginTestHelper.getMockPlugin().i18n(anyString())).thenAnswer(CatalogueText.answer("en"));
+
             service.onPlayerJoin(player);
 
             assertThat(service.isLoggedIn(playerUuid)).isTrue();
-            verify(player).sendMessage(contains("会话有效"));
+            // The auto-login line follows the language setting (UltiKits/UltiLogin#20)
+            verify(player).sendMessage(enLine("session_login"));
         }
 
         @Test
@@ -4284,5 +4297,18 @@ class LoginServiceTest {
         Field field = target.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
         return field.get(target);
+    }
+
+    /** The Chinese catalogue's console line for {@code key}, or a marker naming the missing key. */
+    private static String zhLine(String key) {
+        String text = CatalogueText.entries("zh").get(key);
+        return text == null ? "<lang/zh has no " + key + ">" : text;
+    }
+
+    /** The English catalogue's chat line for {@code key} with colour codes applied, or a marker. */
+    private static String enLine(String key) {
+        String text = CatalogueText.entries("en").get(key);
+        return text == null ? "<lang/en has no " + key + ">"
+                : org.bukkit.ChatColor.translateAlternateColorCodes('&', text);
     }
 }

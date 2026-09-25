@@ -1,5 +1,6 @@
 package com.ultikits.plugins.login.listener;
 
+import com.ultikits.plugins.login.i18n.LoginSeams;
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.service.LoginService;
@@ -599,6 +600,7 @@ class LoginProtectionEventCoverageTest {
                                 + "loaded, or registerEvents below would have no owner to bind to")
                         .isNotNull();
                 LoginService service = mock(LoginService.class);
+                LoginSeams.speak(service, "zh");
                 LoginConfig config = UltiLoginTestHelper.createDefaultConfig();
                 lenient().when(service.getConfig()).thenReturn(config);
                 UUID uuid = UUID.randomUUID();
@@ -674,6 +676,7 @@ class LoginProtectionEventCoverageTest {
         void setUp() throws Exception {
             UltiLoginTestHelper.setUp();
             loginService = mock(LoginService.class);
+            LoginSeams.speak(loginService, "zh");
             LoginConfig config = UltiLoginTestHelper.createDefaultConfig();
             lenient().when(loginService.getConfig()).thenReturn(config);
 
