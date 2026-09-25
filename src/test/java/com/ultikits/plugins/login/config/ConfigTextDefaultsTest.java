@@ -284,6 +284,34 @@ class ConfigTextDefaultsTest {
         }
 
         @Test
+        @DisplayName("jarLanguage answers from the jar's catalogue of the language the framework would load: the configured one, else en, else the first shipped")
+        void jarLanguageResolvesLikeTheFramework() throws Exception {
+            File jar = jar("m.jar", "lang/en.yml", "k: \"Hi\"\n", "lang/zh.yml", "k: \"Ni hao\"\n");
+            Map<String, Map<String, String>> c = ConfigTextDefaults.jarCatalogues(jar.toURI().toURL());
+
+            assertThat(ConfigTextDefaults.jarLanguage(c, "zh").getLocalizedText("k")).isEqualTo("Ni hao");
+            assertThat(ConfigTextDefaults.jarLanguage(c, "en").getLocalizedText("k")).isEqualTo("Hi");
+            assertThat(ConfigTextDefaults.jarLanguage(c, "ja").getLocalizedText("k")).as("not shipped: en").isEqualTo("Hi");
+            assertThat(ConfigTextDefaults.jarLanguage(c, null).getLocalizedText("k")).as("unset: en").isEqualTo("Hi");
+            assertThat(ConfigTextDefaults.jarLanguage(c, "zh").getLocalizedText("missing")).as("missing key answers itself").isEqualTo("missing");
+
+            File zhOnly = jar("z.jar", "lang/zh.yml", "k: \"Ni hao\"\n");
+            Map<String, Map<String, String>> z = ConfigTextDefaults.jarCatalogues(zhOnly.toURI().toURL());
+            assertThat(ConfigTextDefaults.jarLanguage(z, "en").getLocalizedText("k")).as("no en: the first shipped").isEqualTo("Ni hao");
+        }
+
+        @Test
+        @DisplayName("jarLanguage never reads a catalogue outside the jar: the text written is always one the tracked set holds")
+        void jarLanguageTextIsAlwaysTracked() throws Exception {
+            File jar = jar("m.jar", "lang/en.yml", "k: \"Hi\"\n", "lang/zh.yml", "k: \"Ni hao\"\n");
+            Map<String, Map<String, String>> c = ConfigTextDefaults.jarCatalogues(jar.toURI().toURL());
+            for (String code : new String[] {"en", "zh", "ja"}) {
+                String text = ConfigTextDefaults.currentText(ConfigTextDefaults.jarLanguage(c, code)::getLocalizedText, "&e", "k");
+                assertThat(ConfigTextDefaults.tracked(c, "&e", "k", "old")).as(code).contains(text);
+            }
+        }
+
+        @Test
         @DisplayName("jarCatalogues(Class) reads the jar or class directory that holds the class, in both languages")
         void readsTheAnchorsOwnCodeSource() {
             Map<String, Map<String, String>> c = ConfigTextDefaults.jarCatalogues(ConfigTextDefaults.class);

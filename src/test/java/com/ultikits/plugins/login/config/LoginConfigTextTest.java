@@ -141,6 +141,9 @@ class LoginConfigTextTest {
 
     private final PluginLogger logger = mock(PluginLogger.class);
 
+    /** Catalogue texts an operator changed in the extracted language file on disk, answered by i18n first. */
+    private final Map<String, String> diskOverrides = new LinkedHashMap<>();
+
     /** The configuration the module double returns from {@code getConfig(LoginConfig.class)}. */
     private LoginConfig current;
 
@@ -409,6 +412,34 @@ class LoginConfigTextTest {
     }
 
     @Test
+    @DisplayName("an operator's edit of the extracted language file is not written into login.yml, so each value keeps following a language switch (orchestrator ruling O3)")
+    void diskCatalogueEditDoesNotReachTheFile() throws Exception {
+        for (Setting s : SETTINGS) {
+            diskOverrides.put(s.key, "Edited " + s.key);
+        }
+        language[0] = "en";
+        Map<String, String> values = new LinkedHashMap<>();
+        for (Setting s : SETTINGS) {
+            values.put(s.path, s.shipped);
+        }
+        write(values);
+        LoginConfig config = load();
+        start(config);
+
+        for (Setting s : SETTINGS) {
+            assertThat(onDisk().getString(s.path)).as("en, " + s.path + ": the jar's text, not the disk edit").isEqualTo(s.text("en"));
+        }
+
+        language[0] = "zh";
+        config.init(plugin);
+        reload();
+
+        for (Setting s : SETTINGS) {
+            assertThat(onDisk().getString(s.path)).as("after a switch to zh, " + s.path + " follows").isEqualTo(s.text("zh"));
+        }
+    }
+
+    @Test
     @DisplayName("a file that cannot be saved is reported in the server's language, and the module still uses the new text")
     void saveFailureIsReported() throws Exception {
         language[0] = "en";
@@ -611,8 +642,12 @@ class LoginConfigTextTest {
                     return new File(tempDir.toFile(), invocation.<String>getArgument(0));
                 case "operatorConfigFile":
                     return file();
-                case "i18n":
-                    return answers.get(language[0]).answer(invocation);
+                case "i18n": {
+                    String key = invocation.getArgument(invocation.getArguments().length - 1);
+                    return diskOverrides.containsKey(key) ? diskOverrides.get(key) : answers.get(language[0]).answer(invocation);
+                }
+                case "getLanguageCode":
+                    return language[0];
                 case "getLogger":
                     return logger;
                 case "getConfig":

@@ -71,10 +71,11 @@ class UltiLoginLanguageCatalogueTest {
      */
     static final List<DynamicSite> DYNAMIC_KEY_SITES = Collections.unmodifiableList(Arrays.<DynamicSite>asList(
             new DynamicSite("src/main/java/com/ultikits/plugins/login/UltiLogin.java",
-                    "::i18n",
-                    "UltiLogin#writeConfigTextInServerLanguage passes this::i18n to LoginConfig#materializeText, "
-                            + "which asks it for exactly the catalogue key of each of the 24 GUI titles and messages "
-                            + "(maintainer decision 2026-09-25, config text written in the server's language)",
+                    "::getLocalizedText",
+                    "UltiLogin#writeConfigTextInServerLanguage passes the jar catalogue's getLocalizedText "
+                            + "(ConfigTextDefaults#jarLanguage) to LoginConfig#materializeText, which asks it for exactly the "
+                            + "catalogue key of the 24 GUI titles and messages (maintainer decision 2026-09-25 and orchestrator "
+                            + "ruling O3: config text written in the server's language, from the module jar's own catalogue)",
                     "gui_enter_password",
                     "gui_set_password",
                     "gui_confirm_password",
