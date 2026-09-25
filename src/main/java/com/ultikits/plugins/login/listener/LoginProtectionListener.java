@@ -2,6 +2,7 @@ package com.ultikits.plugins.login.listener;
 
 import com.ultikits.plugins.login.gui.LoginGUIPage;
 import com.ultikits.plugins.login.gui.RegisterGUIPage;
+import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.service.LoginService;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.EventListener;
@@ -197,7 +198,7 @@ public class LoginProtectionListener implements Listener {
             if (!loginService.isLoggedIn(player.getUniqueId())) {
                 String title = event.getView().getTitle();
                 // Allow clicking in login/register GUI
-                if (!title.contains("密码") && !title.contains("登录") && !title.contains("注册")) {
+                if (!isCredentialGuiTitle(title)) {
                     event.setCancelled(true);
                 }
             }
@@ -239,6 +240,29 @@ public class LoginProtectionListener implements Listener {
         }
     }
 
+    /**
+     * Whether {@code title} is one of the titles the credential GUI is opened with: the login title,
+     * the register title, or the confirm title {@code RegisterGUIPage} switches to. Compared with the
+     * resolved titles, colour codes applied exactly as the pages apply them, so the allowance holds in
+     * every language and for an operator's own titles (UltiKits/UltiLogin#20). It used to test whether
+     * the title contained 密码, 登录 or 注册: that refused every keypad click under an English title,
+     * and let an unauthenticated player click in any other inventory whose title held one of those
+     * words.
+     */
+    private boolean isCredentialGuiTitle(String title) {
+        if (title == null) {
+            return false;
+        }
+        LoginConfig config = loginService.getConfig();
+        return title.equals(colour(config.getGuiLoginTitle()))
+                || title.equals(colour(config.getGuiRegisterTitle()))
+                || title.equals(colour(config.getGuiConfirmTitle()));
+    }
+
+    private static String colour(String text) {
+        return text == null ? null : ChatColor.translateAlternateColorCodes('&', text);
+    }
+
     @EventHandler(priority = EventPriority.LOWEST)
     public void onInventoryOpen(InventoryOpenEvent event) {
         if (event.getPlayer() instanceof Player) {
@@ -246,7 +270,7 @@ public class LoginProtectionListener implements Listener {
             // Allow opening login/register GUI
             if (!loginService.isLoggedIn(player.getUniqueId())) {
                 String title = event.getView().getTitle();
-                if (!title.contains("密码") && !title.contains("登录") && !title.contains("注册")) {
+                if (!isCredentialGuiTitle(title)) {
                     event.setCancelled(true);
                 }
             }
@@ -574,8 +598,8 @@ public class LoginProtectionListener implements Listener {
         } else if (bukkitPlugin.isEnabled()) {
             Bukkit.getScheduler().runTask(bukkitPlugin, task);
         } else {
-            plugin.getLogger().warn("Skipped presenting the credential prompt to "
-                + player.getName() + " because the plugin is disabling");
+            plugin.getLogger().warn(plugin.i18n("log_prompt_skipped_disabling")
+                .replace("{PLAYER}", player.getName()));
         }
     }
 }

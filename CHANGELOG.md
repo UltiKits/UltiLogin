@@ -7,7 +7,58 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The three GUI titles (`gui-mode.title-login`, `gui-mode.title-register`, `gui-mode.title-confirm`)
+  and the twenty-one messages in `config/login.yml` (`messages.register-prompt`, `register-prompt-gui`,
+  `login-prompt`, `login-prompt-gui`, `register-success`, `login-success`, `already-logged`,
+  `not-registered`, `already-registered`, `password-mismatch`, `password-too-short`,
+  `password-too-long`, `timeout-kick`, `account-locked`, `attempts-remaining`, `gui-password-invalid`,
+  and `messages.admin.password-reset`, `force-login`, `unregister`, `player-not-found`,
+  `account-not-found`) now follow `language` unless you have customised them. Their default is now
+  blank, and a blank value shows the language file's text in the server's language; previously the
+  default was fixed Chinese text, so `language: en` had no effect on them (UltiKits/UltiLogin#20). On
+  upgrade, at start-up and on every reload of the module, a value that is exactly the Chinese default
+  an earlier version shipped is replaced with a blank value and the file is saved; any other value is
+  yours and is shown as written. Under `language: zh` the text shown does not change. To keep the old
+  Chinese text on an English server, write it back after upgrading, changed in any way (even one
+  character), since an exact copy of the old default is blanked again.
+- `config/login.yml` 中的三个界面标题（`gui-mode.title-login`、`gui-mode.title-register`、`gui-mode.title-confirm`）
+  与二十一条消息（`messages.register-prompt`、`register-prompt-gui`、`login-prompt`、`login-prompt-gui`、
+  `register-success`、`login-success`、`already-logged`、`not-registered`、`already-registered`、`password-mismatch`、
+  `password-too-short`、`password-too-long`、`timeout-kick`、`account-locked`、`attempts-remaining`、
+  `gui-password-invalid`，以及 `messages.admin.password-reset`、`force-login`、`unregister`、`player-not-found`、
+  `account-not-found`）现在除非被你自定义，否则跟随 `language`。它们的默认值现为空，空值以服务器语言显示语言文件中的
+  文本；此前默认值是写死的中文，所以 `language: en` 对它们不起作用（UltiKits/UltiLogin#20）。升级后，在启动时以及每次
+  重载本模块时，与旧版本出厂中文默认值完全相同的值会被替换为空值并保存文件；其他任何值都视为你的自定义，按原样显示。
+  在 `language: zh` 下显示的文本不变。若想在英文服务器上保留旧的中文文本，请在升级后把它写回，并做任意改动（哪怕一个
+  字符），因为与旧默认值完全相同的副本会再次被清空。
+
 ### Fixed
+
+- `language: en` now applies to everything this module shows or logs: the help of `/login`,
+  `/register`, `/changepassword`, `/logadmin` and `/panel`, the `/changepassword` and `/logadmin`
+  replies, the `/logadmin info` block, the registration refusal when an IP has reached its limit,
+  the session auto-login line, the login and registration keypads (item names, lore, the
+  confirmation step and the registration failure), the seven command descriptions, and the console
+  lines. Most of this was fixed Chinese text in every language, although the language files already
+  held English text for much of it that no code read; the console lines were fixed English text and
+  now follow `language: zh` too (UltiKits/UltiLogin#20).
+- The login and registration keypads are now recognised by the titles they are opened with, so
+  their buttons work under every language and under titles you have customised. They used to be
+  recognised by whether the inventory title contained the Chinese word for "password", "login" or
+  "register": a keypad whose title contained none of them cancelled every click, which with the
+  titles now following `language` would have included the English ones, and another plugin's
+  inventory whose title happened to contain one of those words could be clicked by a player who had
+  not logged in (UltiKits/UltiLogin#20).
+- `language: en` 现在对本模块显示或记录的全部内容生效：`/login`、`/register`、`/changepassword`、`/logadmin`、`/panel`
+  的帮助，`/changepassword` 与 `/logadmin` 的回复，`/logadmin info` 信息块，IP 注册数达到上限时的拒绝提示，会话自动登录
+  提示，登录与注册数字键盘（物品名称、说明、确认步骤与注册失败提示），七个命令描述以及控制台日志。其中大部分原先在任何
+  语言下都是写死的中文，而语言文件中其实已有其中许多内容的无人读取的英文文本；控制台日志原先写死为英文，现在也跟随
+  `language: zh`（UltiKits/UltiLogin#20）。
+- 登录与注册数字键盘现在按其打开时使用的标题识别，因此在任何语言以及你自定义的标题下按钮都能正常使用。此前的识别方式是
+  物品栏标题是否包含"密码"、"登录"或"注册"：标题不含这些词的键盘会取消每一次点击——标题跟随 `language` 后英文标题也会如此；
+  而其他插件的物品栏只要标题恰好含有其中一个词，未登录的玩家就能在其中点击（UltiKits/UltiLogin#20）。
 
 - A wrong code in `/recover <code> <password> <confirm>` now says how many attempts are left, for
   example `Invalid verification code! Remaining attempts: 2`. It used to show the placeholder itself,
@@ -75,6 +126,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   显示账户锁定消息并锁定账户（UltiKits/UltiLogin#23）。
 
 ### Removed
+
+- `lang/en.yml` and `lang/zh.yml`. The framework reads only `lang/en.json` and `lang/zh.json`, and
+  every entry in the two YAML files was a copy of an entry in the JSON file of the same language, so
+  editing them never changed anything. Customise text in the `.json` files.
+- 移除 `lang/en.yml` 与 `lang/zh.yml`。框架只读取 `lang/en.json` 与 `lang/zh.json`，两个 YAML 文件中的每一条都是同语言
+  JSON 文件中某一条的副本，因此修改它们从未产生任何效果。请在 `.json` 文件中自定义文本。
 
 - The module's own `UltiLogin 已禁用！` ("UltiLogin disabled!") console line on unload and its own
   `UltiLogin 配置已重载！` ("UltiLogin configuration reloaded!") console line on `/ul reload UltiLogin`

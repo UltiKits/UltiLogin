@@ -19,7 +19,7 @@ import org.bukkit.entity.Player;
 @CmdExecutor(
     alias = {"changepassword", "changepw", "cpw"},
     permission = "ultilogin.changepassword",
-    description = "修改密码"
+    description = "command_changepassword_description"
 )
 public class ChangePasswordCommand extends BaseCommandExecutor {
 
@@ -40,7 +40,7 @@ public class ChangePasswordCommand extends BaseCommandExecutor {
         
         // Check if logged in
         if (!loginService.isLoggedIn(player.getUniqueId())) {
-            player.sendMessage(ChatColor.RED + "请先登录！");
+            player.sendMessage(ChatColor.translateAlternateColorCodes('&', loginService.i18n("please_login_first")));
             return;
         }
         
@@ -53,15 +53,15 @@ public class ChangePasswordCommand extends BaseCommandExecutor {
         
         // Check confirm
         if (!newPassword.equals(confirm)) {
-            player.sendMessage(ChatColor.RED + "两次输入的新密码不一致！");
+            player.sendMessage(ChatColor.translateAlternateColorCodes('&', loginService.i18n("change_password_mismatch")));
             return;
         }
         
         // Change password
         if (loginService.changePassword(player.getUniqueId(), oldPassword, newPassword)) {
-            player.sendMessage(ChatColor.GREEN + "密码修改成功！");
+            player.sendMessage(ChatColor.translateAlternateColorCodes('&', loginService.i18n("change_password_success")));
         } else {
-            player.sendMessage(ChatColor.RED + "原密码错误！");
+            player.sendMessage(ChatColor.translateAlternateColorCodes('&', loginService.i18n("change_password_wrong")));
         }
     }
     
@@ -73,11 +73,14 @@ public class ChangePasswordCommand extends BaseCommandExecutor {
     @Override
     protected void handleHelp(CommandSender sender) {
         LoginConfig config = loginService.getConfig();
-        sender.sendMessage(ChatColor.YELLOW + "使用方法: /changepassword <旧密码> <新密码> <确认新密码>");
+        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', loginService.i18n("help_change_password")));
         if (config.isGuiModeEnabled()) {
-            sender.sendMessage(ChatColor.GRAY + "密码必须是 " + config.getGuiPasswordLength() + " 位数字");
+            sender.sendMessage(ChatColor.translateAlternateColorCodes('&', loginService.i18n("help_password_digits")
+                .replace("{LENGTH}", String.valueOf(config.getGuiPasswordLength()))));
         } else {
-            sender.sendMessage(ChatColor.GRAY + "密码长度: " + config.getMinPasswordLength() + "-" + config.getMaxPasswordLength() + " 字符");
+            sender.sendMessage(ChatColor.translateAlternateColorCodes('&', loginService.i18n("help_password_length")
+                .replace("{MIN}", String.valueOf(config.getMinPasswordLength()))
+                .replace("{MAX}", String.valueOf(config.getMaxPasswordLength()))));
         }
     }
 }

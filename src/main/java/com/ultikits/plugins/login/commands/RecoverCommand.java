@@ -23,7 +23,7 @@ import org.bukkit.entity.Player;
 @CmdExecutor(
     alias = {"recover"},
     permission = "ultilogin.recover",
-    description = "找回密码"
+    description = "command_recover_description"
 )
 public class RecoverCommand extends BaseCommandExecutor {
 

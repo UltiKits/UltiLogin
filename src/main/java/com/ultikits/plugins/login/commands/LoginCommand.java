@@ -18,7 +18,7 @@ import org.bukkit.entity.Player;
 @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
 @CmdExecutor(
     alias = {"login", "l"},
-    description = "登录账号"
+    description = "command_login_description"
 )
 public class LoginCommand extends BaseCommandExecutor {
 
@@ -64,6 +64,6 @@ public class LoginCommand extends BaseCommandExecutor {
     
     @Override
     protected void handleHelp(CommandSender sender) {
-        sender.sendMessage(ChatColor.YELLOW + "使用方法: /login <密码>");
+        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', loginService.i18n("help_login")));
     }
 }

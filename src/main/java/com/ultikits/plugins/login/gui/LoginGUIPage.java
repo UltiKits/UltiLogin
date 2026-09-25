@@ -190,7 +190,7 @@ public class LoginGUIPage extends Gui {
         ItemStack display = new ItemStack(Material.PAPER);
         ItemMeta meta = display.getItemMeta();
         if (meta != null) {
-            meta.setDisplayName(ChatColor.GOLD + "密码输入");
+            meta.setDisplayName(ChatColor.GOLD + plugin.i18n("gui_password_display"));
             
             List<String> lore = new ArrayList<>();
             lore.add("");
@@ -209,7 +209,9 @@ public class LoginGUIPage extends Gui {
             }
             lore.add(ChatColor.WHITE + masked.toString());
             lore.add("");
-            lore.add(ChatColor.GRAY + "已输入 " + passwordInput.length() + "/" + passwordLength + " 位");
+            lore.add(ChatColor.GRAY + plugin.i18n("gui_entered")
+                .replace("{CURRENT}", String.valueOf(passwordInput.length()))
+                .replace("{TOTAL}", String.valueOf(passwordLength)));
             
             meta.setLore(lore);
             display.setItemMeta(meta);
@@ -248,9 +250,9 @@ public class LoginGUIPage extends Gui {
         ItemStack glass = XVersionUtils.getColoredPlaneGlass(Colors.GREEN);
         ItemMeta meta = glass.getItemMeta();
         if (meta != null) {
-            meta.setDisplayName(ChatColor.GREEN + "" + ChatColor.BOLD + "确认登录");
+            meta.setDisplayName(ChatColor.GREEN + "" + ChatColor.BOLD + plugin.i18n("gui_login_confirm_button"));
             List<String> lore = new ArrayList<>();
-            lore.add(ChatColor.GRAY + "点击确认登录");
+            lore.add(ChatColor.GRAY + plugin.i18n("gui_login_confirm_lore"));
             meta.setLore(lore);
             glass.setItemMeta(meta);
         }
@@ -267,9 +269,9 @@ public class LoginGUIPage extends Gui {
         ItemStack glass = XVersionUtils.getColoredPlaneGlass(Colors.RED);
         ItemMeta meta = glass.getItemMeta();
         if (meta != null) {
-            meta.setDisplayName(ChatColor.RED + "" + ChatColor.BOLD + "清空");
+            meta.setDisplayName(ChatColor.RED + "" + ChatColor.BOLD + plugin.i18n("gui_clear_button"));
             List<String> lore = new ArrayList<>();
-            lore.add(ChatColor.GRAY + "点击清空已输入的密码");
+            lore.add(ChatColor.GRAY + plugin.i18n("gui_clear_lore"));
             meta.setLore(lore);
             glass.setItemMeta(meta);
         }
@@ -289,10 +291,10 @@ public class LoginGUIPage extends Gui {
         ItemStack glass = XVersionUtils.getColoredPlaneGlass(Colors.ORANGE);
         ItemMeta meta = glass.getItemMeta();
         if (meta != null) {
-            meta.setDisplayName(ChatColor.GOLD + "" + ChatColor.BOLD + "退出");
+            meta.setDisplayName(ChatColor.GOLD + "" + ChatColor.BOLD + plugin.i18n("gui_exit_button"));
             List<String> lore = new ArrayList<>();
-            lore.add(ChatColor.GRAY + "点击退出登录界面");
-            lore.add(ChatColor.RED + "注意: 你仍需要登录才能游玩");
+            lore.add(ChatColor.GRAY + plugin.i18n("gui_login_exit_lore"));
+            lore.add(ChatColor.RED + plugin.i18n("gui_login_exit_warning"));
             meta.setLore(lore);
             glass.setItemMeta(meta);
         }

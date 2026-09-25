@@ -532,7 +532,9 @@ class LoginServiceTest {
         @DisplayName("both bundled catalogues carry the wrong-password text, red like the replies beside it")
         void bundledCataloguesCarryTheText() throws Exception {
             for (String language : new String[] {"en", "zh"}) {
-                for (String extension : new String[] {".json", ".yml"}) {
+                // .json only: the .yml copies were never read by the framework and are removed
+                // (UltiKits/UltiLogin#20); UltiLoginLanguageCatalogueTest refuses a second catalogue.
+                for (String extension : new String[] {".json"}) {
                     String resource = "lang/" + language + extension;
                     String value = catalogueValue(resource, "wrong_password");
                     assertThat(value).as(resource).isNotNull().startsWith("&c");

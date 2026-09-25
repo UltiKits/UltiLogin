@@ -6,6 +6,7 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
 
 import java.io.File;
+import java.io.IOException;
 
 /**
  * UltiLogin - Player login and registration system.
@@ -31,10 +32,11 @@ public class UltiLogin extends UltiToolsPlugin {
 
     @Override
     public boolean registerSelf() {
-        getLogger().info(i18n("UltiLogin 已启用！"));
+        getLogger().info(i18n("login_enabled"));
         // Deleting a key from LoginConfig does nothing to the operator's existing file, so tell
         // them about any key this version no longer reads (UltiKits/UltiLogin#23).
         warnAboutRemovedConfigKeys();
+        blankShippedTextDefaults();
         return true;
     }
 
@@ -46,16 +48,36 @@ public class UltiLogin extends UltiToolsPlugin {
     @Override
     protected void onReload() {
         warnAboutRemovedConfigKeys();
+        blankShippedTextDefaults();
+    }
+
+    /**
+     * Blanks every GUI title and message in {@code login.yml} that still holds a default an earlier
+     * version shipped (all were Chinese) and saves the file, so the language file's text takes over in
+     * the server's language; any other value is the operator's and is kept (maintainer ruling
+     * 2026-09-24 (d), UltiKits/UltiLogin#20). Runs at start-up and on every reload, after the
+     * framework has read the file; a blank value matches no shipped default, so it is never rewritten
+     * twice.
+     */
+    private void blankShippedTextDefaults() {
+        LoginConfig config = getConfig(LoginConfig.class);
+        if (config == null || !config.migrateLegacyDefaults()) {
+            return;
+        }
+        try {
+            config.save();
+        } catch (IOException e) {
+            getLogger().warn(e, i18n("log_config_default_save_failed").replace("{FILE}", LoginConfig.CONFIG_FILE));
+        }
     }
 
     private void warnAboutRemovedConfigKeys() {
         // Advisory only: this runs on the enable path of the module whose absence means nobody is
         // asked to log in, so nothing it throws may cost the module its enable or its reload.
         try {
-            RemovedConfigKeys.warnAboutLeftovers(operatorConfigFile(), getLogger()::warn);
+            RemovedConfigKeys.warnAboutLeftovers(operatorConfigFile(), getLogger()::warn, this);
         } catch (RuntimeException e) {
-            getLogger().warn(e, "Could not check " + LoginConfig.CONFIG_FILE
-                    + " for removed configuration keys; the module continues without that check.");
+            getLogger().warn(e, i18n("log_removed_key_check_failed").replace("{FILE}", LoginConfig.CONFIG_FILE));
         }
     }
 

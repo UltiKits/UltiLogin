@@ -157,6 +157,17 @@ public class LoginService {
     }
 
     /**
+     * This module's language-file text for {@code key}, in the server's language. The commands reach
+     * the language file through the service they already hold (UltiKits/UltiLogin#20).
+     *
+     * @param key the language-file key
+     * @return the text for the key
+     */
+    public String i18n(String key) {
+        return plugin.i18n(key);
+    }
+
+    /**
      * Cleanup on shutdown.
      */
     @PreDestroy
@@ -364,7 +375,7 @@ public class LoginService {
         if (config.getMaxRegisterPerIp() > 0) {
             int count = countRegistrationsByIp(ip);
             if (count >= config.getMaxRegisterPerIp()) {
-                player.sendMessage(ChatColor.RED + "该IP已达到最大注册数量！");
+                player.sendMessage(ChatColor.translateAlternateColorCodes('&', i18n("ip_limit_reached")));
                 return false;
             }
         }
@@ -429,7 +440,7 @@ public class LoginService {
                 return new LoginResult(false, config.getAttemptsRemaining()
                     .replace("{COUNT}", String.valueOf(remaining)));
             }
-            return new LoginResult(false, plugin.i18n("wrong_password"));
+            return new LoginResult(false, i18n("wrong_password"));
         }
         
         // Clear failed attempts on success
@@ -444,7 +455,7 @@ public class LoginService {
         try {
             dataOperator.update(account);
         } catch (IllegalAccessException e) {
-            plugin.getLogger().error("Failed to update account", e);
+            plugin.getLogger().error(i18n("log_account_update_failed"), e);
         }
         
         // Create session
@@ -892,7 +903,7 @@ public class LoginService {
         // Check session
         if (hasValidSession(player)) {
             completeLogin(player);
-            player.sendMessage(ChatColor.GREEN + "会话有效，自动登录成功！");
+            player.sendMessage(ChatColor.translateAlternateColorCodes('&', i18n("session_login")));
             return;
         }
         
@@ -1020,7 +1031,7 @@ public class LoginService {
         try {
             dataOperator.update(account);
         } catch (IllegalAccessException e) {
-            plugin.getLogger().error("Failed to reset password", e);
+            plugin.getLogger().error(i18n("log_password_reset_failed"), e);
             return null;
         }
 
@@ -1091,7 +1102,7 @@ public class LoginService {
         try {
             dataOperator.update(account);
         } catch (IllegalAccessException e) {
-            plugin.getLogger().error("Failed to reset password", e);
+            plugin.getLogger().error(i18n("log_password_reset_failed"), e);
             return false;
         }
 
@@ -1199,7 +1210,7 @@ public class LoginService {
         try {
             dataOperator.update(account);
         } catch (IllegalAccessException e) {
-            plugin.getLogger().error("Failed to update account", e);
+            plugin.getLogger().error(i18n("log_account_update_failed"), e);
             return false;
         }
 
@@ -1511,7 +1522,7 @@ public class LoginService {
             }
         } catch (Exception e) {
             cleanupPanelRequest(requestId);
-            plugin.getLogger().warn("Failed to request panel link: " + e.getMessage());
+            plugin.getLogger().warn(i18n("log_panel_link_failed").replace("{ERROR}", String.valueOf(e.getMessage())));
             return new PanelLinkResult(false, null, "Request failed: " + e.getMessage());
         }
     }
@@ -1593,7 +1604,7 @@ public class LoginService {
         try {
             apiUrl = UltiTools.getEnv().getString("api-url");
         } catch (Exception e) {
-            plugin.getLogger().warn("Cannot start auth polling: API URL not configured");
+            plugin.getLogger().warn(i18n("log_auth_polling_no_api"));
             return;
         }
 
@@ -1652,7 +1663,7 @@ public class LoginService {
                 Bukkit.getScheduler().runTask(bukkitPlugin,
                         () -> handlePanelPollCompleted(player, requestId, finalIsServerOwner));
             } catch (Exception e) {
-                plugin.getLogger().debug("Auth poll error: " + e.getMessage());
+                plugin.getLogger().debug(i18n("log_auth_poll_error").replace("{ERROR}", String.valueOf(e.getMessage())));
             }
         }, 60L, 60L); // 60 ticks = 3 seconds
 
@@ -1752,9 +1763,10 @@ public class LoginService {
         completeLogin(player);
 
         // Send role-specific message
-        String messageKey = isServerOwner ? "panel_auth_success_owner" : "panel_auth_success_player";
-        player.sendMessage(ChatColor.translateAlternateColorCodes('&',
-            plugin.i18n(messageKey)));
+        String message = isServerOwner
+            ? i18n("panel_auth_success_owner")
+            : i18n("panel_auth_success_player");
+        player.sendMessage(ChatColor.translateAlternateColorCodes('&', message));
 
         // Update account last login
         AccountData account = getAccount(playerUuid);
@@ -1765,7 +1777,7 @@ public class LoginService {
             try {
                 dataOperator.update(account);
             } catch (IllegalAccessException e) {
-                plugin.getLogger().error("Failed to update account after panel login", e);
+                plugin.getLogger().error(i18n("log_account_update_after_panel_failed"), e);
             }
         }
 

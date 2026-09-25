@@ -27,7 +27,7 @@ import org.bukkit.plugin.Plugin;
 @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
 @CmdExecutor(
     alias = {"panel"},
-    description = "Open UltiCloud web panel"
+    description = "command_panel_description"
 )
 public class PanelCommand extends BaseCommandExecutor {
 
@@ -89,7 +89,8 @@ public class PanelCommand extends BaseCommandExecutor {
                                 .replace("{URL}", url)));
                     message.setClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, url));
                     message.setHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT,
-                        new ComponentBuilder(ChatColor.GRAY + "Click to open panel").create()));
+                        new ComponentBuilder(ChatColor.translateAlternateColorCodes('&',
+                            plugin.i18n("panel_hover"))).create()));
                     player.spigot().sendMessage(message);
 
                     // Start polling for auth completion, keyed on the exact request id this
@@ -107,6 +108,6 @@ public class PanelCommand extends BaseCommandExecutor {
 
     @Override
     protected void handleHelp(CommandSender sender) {
-        sender.sendMessage(ChatColor.YELLOW + "Usage: /panel - Open UltiCloud web panel");
+        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', plugin.i18n("help_panel")));
     }
 }

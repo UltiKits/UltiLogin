@@ -70,13 +70,30 @@ class UltiLoginLanguageCatalogueTest {
      * entry: its callers are themselves {@code i18n(} calls and are checked one by one.
      */
     static final List<DynamicSite> DYNAMIC_KEY_SITES = Collections.unmodifiableList(Arrays.<DynamicSite>asList(
-            // UltiBackup's single entry, for shape:
-            // new DynamicSite("src/main/java/com/ultikits/plugins/backup/entity/BackupMetadata.java",
-            //         "getReasonKey()",
-            //         "BackupMetadata#getReasonKey maps the five stored reason codes to their keys and "
-            //                 + "everything else to backup.reason.unknown",
-            //         "backup.reason.manual", "backup.reason.auto", "backup.reason.death",
-            //         "backup.reason.quit", "backup.reason.admin", "backup.reason.unknown")
+            new DynamicSite("src/main/java/com/ultikits/plugins/login/commands/EmailBindCommand.java",
+                    "result.getMessageKey()",
+                    "/regs <email>: EmailVerificationService#requestEmailBind returns a BindResult "
+                            + "constructed with exactly these keys",
+                    "email_not_enabled", "email_send_failed", "email_bind_prompt", "email_already_bound",
+                    "email_invalid_format", "email_domain_blocked", "email_max_accounts", "email_cooldown"),
+            new DynamicSite("src/main/java/com/ultikits/plugins/login/commands/EmailBindCommand.java",
+                    "result.getMessageKey()",
+                    "/regs <code>: EmailVerificationService#verifyEmailBind returns a VerifyResult "
+                            + "constructed with exactly these keys",
+                    "email_no_pending", "email_code_expired", "email_code_max_attempts", "email_code_invalid",
+                    "email_bind_success"),
+            new DynamicSite("src/main/java/com/ultikits/plugins/login/commands/RecoverCommand.java",
+                    "result.getMessageKey()",
+                    "/recover: EmailVerificationService#requestPasswordRecovery returns a RecoverResult "
+                            + "constructed with exactly these keys",
+                    "email_not_enabled", "recover_not_registered", "recover_no_email", "email_cooldown",
+                    "email_send_failed", "recover_email_sent"),
+            new DynamicSite("src/main/java/com/ultikits/plugins/login/commands/RecoverCommand.java",
+                    "verifyResult.getMessageKey()",
+                    "/recover <code> ...: printed only when EmailVerificationService#verifyRecoveryCode "
+                            + "fails, and every failing RecoverVerifyResult is constructed with one of these "
+                            + "keys (the success key is never printed)",
+                    "email_no_pending", "email_code_expired", "email_code_max_attempts", "email_code_invalid")
     ));
 
     private static List<SourceFile> sources;

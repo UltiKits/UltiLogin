@@ -208,7 +208,7 @@ public class EmailVerificationService {
             try {
                 dataOperator.update(account);
             } catch (IllegalAccessException e) {
-                plugin.getLogger().error("Failed to update account email", e);
+                plugin.getLogger().error(plugin.i18n("log_account_email_update_failed"), e);
             }
         }
 
