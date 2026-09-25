@@ -2,10 +2,12 @@ package com.ultikits.plugins.login.listener;
 
 import com.ultikits.plugins.login.gui.LoginGUIPage;
 import com.ultikits.plugins.login.gui.RegisterGUIPage;
-import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.service.LoginService;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.EventListener;
+
+import mc.obliviate.inventory.Gui;
+import mc.obliviate.inventory.InventoryAPI;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -25,6 +27,7 @@ import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.*;
+import org.bukkit.inventory.Inventory;
 
 import java.util.UUID;
 
@@ -190,15 +193,28 @@ public class LoginProtectionListener implements Listener {
         cancelIfNotLoggedIn(event.getPlayer(), event);
     }
     
+    /**
+     * Cancel an inventory click for an unauthenticated player, except a click on the credential GUI
+     * itself.
+     * <p>
+     * The allowance is decided by what the open GUI is, not by what its title says
+     * (UltiKits/UltiLogin#35): the view's top inventory must be the inventory of the player's current
+     * {@link LoginGUIPage} or {@link RegisterGUIPage}, and the click must land in that top inventory.
+     * A view's title covers the whole view, including the player's own inventory rows, so a title
+     * test let an unauthenticated player rearrange, merge or split their own stacks while the keypad
+     * was open; it also let any other inventory titled like the keypad through, and refused the
+     * keypad itself under a title the check did not know. A click outside the window has no clicked
+     * inventory and is refused too.
+     */
     @EventHandler(priority = EventPriority.LOWEST)
     public void onInventoryClick(InventoryClickEvent event) {
         if (event.getWhoClicked() instanceof Player) {
             Player player = (Player) event.getWhoClicked();
-            // Allow GUI interactions for login/register GUI
             if (!loginService.isLoggedIn(player.getUniqueId())) {
-                String title = event.getView().getTitle();
-                // Allow clicking in login/register GUI
-                if (!isCredentialGuiTitle(title)) {
+                Inventory top = event.getView().getTopInventory();
+                boolean inCredentialGui = isCredentialGuiInventory(player, top)
+                        && top.equals(event.getClickedInventory());
+                if (!inCredentialGui) {
                     event.setCancelled(true);
                 }
             }
@@ -227,7 +243,7 @@ public class LoginProtectionListener implements Listener {
      * wave-1 real-machine run measured that premise and disproved it.
      * <p>
      * Unlike {@link #onInventoryClick} this deliberately does <em>not</em> mirror the credential-GUI
-     * title allowance. A drag cannot enter a digit into {@code LoginGUIPage}/{@code RegisterGUIPage},
+     * allowance. A drag cannot enter a digit into {@code LoginGUIPage}/{@code RegisterGUIPage},
      * so allowing it buys no functionality; and because the credential GUI's view includes the
      * player's own inventory rows, allowing drags there would let an unauthenticated player
      * rearrange their items and push stacks toward the GUI's container slots. Cancelling
@@ -241,43 +257,45 @@ public class LoginProtectionListener implements Listener {
     }
 
     /**
-     * Whether {@code title} is one of the titles the credential GUI is opened with: the login title,
-     * the register title, or the confirm title {@code RegisterGUIPage} switches to. Compared with the
-     * resolved titles, by their words, so the allowance holds in every language and for an operator's
-     * own titles (UltiKits/UltiLogin#20). It used to test whether
-     * the title contained 密码, 登录 or 注册: that refused every keypad click under an English title,
-     * and let an unauthenticated player click in any other inventory whose title held one of those
-     * words.
+     * Whether {@code inventory} is the inventory of the credential GUI {@code player} currently has
+     * open: the GUI library's current GUI for the player is a {@link LoginGUIPage} or
+     * {@link RegisterGUIPage}, and {@code inventory} is that page's own inventory
+     * (UltiKits/UltiLogin#35).
+     * <p>
+     * The GUI library registers a page as the player's current GUI before it opens the page's
+     * inventory ({@code Gui#open()} in obliviate-invs 4.3.0, read with {@code javap -c}: the
+     * {@code HashMap#put} into {@code InventoryAPI#getPlayers()} at offset 64 precedes
+     * {@code Player#openInventory} at offset 126), so this already holds when the page's own
+     * {@code InventoryOpenEvent} fires. The page's inventory has no holder ({@code createInventory}
+     * is passed {@code null}), which is why the holder cannot be used instead.
+     * <p>
+     * It replaced a comparison of the view's title with the three configured titles
+     * (UltiKits/UltiLogin#20), and before that a test for three Chinese words in the title.
      */
-    private boolean isCredentialGuiTitle(String title) {
-        if (title == null) {
+    private static boolean isCredentialGuiInventory(Player player, Inventory inventory) {
+        if (inventory == null) {
             return false;
         }
-        LoginConfig config = loginService.getConfig();
-        String shown = ChatColor.stripColor(title);
-        return shown.equals(words(config.getGuiLoginTitle()))
-                || shown.equals(words(config.getGuiRegisterTitle()))
-                || shown.equals(words(config.getGuiConfirmTitle()));
+        InventoryAPI api = InventoryAPI.getInstance();
+        if (api == null) {
+            return false;
+        }
+        Gui gui = api.getPlayersCurrentGui(player);
+        return (gui instanceof LoginGUIPage || gui instanceof RegisterGUIPage)
+                && inventory.equals(gui.getInventory());
     }
 
     /**
-     * A title as it reads: colour codes applied, then stripped. Compared without its colour codes,
-     * because a server may echo a title's codes rewritten (gate 1 IN-01).
+     * Cancel an inventory open for an unauthenticated player unless it is the credential GUI's own
+     * inventory, decided by identity as in {@link #onInventoryClick} (UltiKits/UltiLogin#35).
      */
-    private static String words(String text) {
-        return text == null ? null : ChatColor.stripColor(ChatColor.translateAlternateColorCodes('&', text));
-    }
-
     @EventHandler(priority = EventPriority.LOWEST)
     public void onInventoryOpen(InventoryOpenEvent event) {
         if (event.getPlayer() instanceof Player) {
             Player player = (Player) event.getPlayer();
-            // Allow opening login/register GUI
-            if (!loginService.isLoggedIn(player.getUniqueId())) {
-                String title = event.getView().getTitle();
-                if (!isCredentialGuiTitle(title)) {
-                    event.setCancelled(true);
-                }
+            if (!loginService.isLoggedIn(player.getUniqueId())
+                    && !isCredentialGuiInventory(player, event.getInventory())) {
+                event.setCancelled(true);
             }
         }
     }

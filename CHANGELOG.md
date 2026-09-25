@@ -40,8 +40,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   lines. Most of this was fixed Chinese text in every language, although the language files already
   held English text for much of it that no code read; the console lines were fixed English text and
   now follow `language: zh` too (UltiKits/UltiLogin#20).
-- The login and registration keypads are now recognised by the titles they are opened with, so
-  their buttons work under every language and under titles you have customised. They used to be
+- The login and registration keypads' buttons now work under every language and under titles you
+  have customised; how the keypads are recognised is in the UltiKits/UltiLogin#35 entry under
+  `### Fixed`. They used to be
   recognised by whether the inventory title contained the Chinese word for "password", "login" or
   "register": a keypad whose title contained none of them cancelled every click, which with the
   titles now following `language` would have included the English ones, and another plugin's
@@ -52,7 +53,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   提示，登录与注册数字键盘（物品名称、说明、确认步骤与注册失败提示），七个命令描述以及控制台日志。其中大部分原先在任何
   语言下都是写死的中文，而语言文件中其实已有其中许多内容的无人读取的英文文本；控制台日志原先写死为英文，现在也跟随
   `language: zh`（UltiKits/UltiLogin#20）。
-- 登录与注册数字键盘现在按其打开时使用的标题识别，因此在任何语言以及你自定义的标题下按钮都能正常使用。此前的识别方式是
+- 登录与注册数字键盘的按钮现在在任何语言以及你自定义的标题下都能正常使用；键盘如何识别见 `### Fixed` 中 UltiKits/UltiLogin#35
+  一条。此前的识别方式是
   物品栏标题是否包含"密码"、"登录"或"注册"：标题不含这些词的键盘会取消每一次点击——标题跟随 `language` 后英文标题也会如此；
   而其他插件的物品栏只要标题恰好含有其中一个词，未登录的玩家就能在其中点击（UltiKits/UltiLogin#20）。
 
@@ -164,3 +166,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   从旧版本升级的服务器，其 `login.yml` 中仍会保留该键，因为框架从不删除运维文件中的键；只要该键还在，
   本模块会在启动时以及每次重载本模块时（`/ul reload` 或 `/ul reload UltiLogin`）记录一条警告，指出文件与键名，直接删除该键即可
   （UltiKits/UltiLogin#23）。
+
+### Fixed
+
+- On the login screen an unauthenticated player can no longer rearrange their own inventory. While
+  the login or registration keypad was open, clicks in the player's own inventory rows were allowed,
+  because the keypad was recognised by the title of the whole window, and that window includes the
+  player's own rows. The keypad is now recognised by which window is open — this module's own login
+  or registration page, whatever its title says — and only clicks on the keypad itself are allowed;
+  another inventory whose title reads like the keypad's no longer opens for a player who has not
+  logged in (UltiKits/UltiLogin#35).
+- 修复：未登录玩家不能再在登录界面整理自己的背包。登录或注册数字键盘打开时，玩家自己背包那几行的点击此前是被允许的，因为键盘是按
+  整个窗口的标题识别的，而窗口包含玩家自己的背包行。现在按打开的是哪个窗口识别——本模块自己的登录或注册页面，无论标题如何——并且
+  只允许点击键盘本身；标题看起来像键盘的其他物品栏不再对未登录玩家打开（UltiKits/UltiLogin#35）。
