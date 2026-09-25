@@ -58,7 +58,7 @@ import static org.mockito.Mockito.when;
 
 /**
  * {@code config/login.yml} holds every GUI title and message in the server's language, and the module
- * sends exactly what the file holds (maintainer decision 2026-09-25, 17-CONTEXT D-16; UltiKits/UltiLogin#20).
+ * sends exactly what the file holds (maintainer decision 2026-09-25; UltiKits/UltiLogin#20).
  * A value that is still built-in text — the colour code plus any language's text from this jar, or the
  * default an earlier version shipped — follows {@code language} at enable and on reload, in both
  * directions; anything else is the operator's and is kept byte for byte. Every case runs the framework's
