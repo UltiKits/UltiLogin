@@ -1,5 +1,8 @@
 package com.ultikits.plugins.login.service;
 
+import com.ultikits.plugins.login.commands.EmailBindCommand;
+import com.ultikits.plugins.login.commands.RecoverCommand;
+import com.ultikits.plugins.login.i18n.CatalogueText;
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.config.EmailConfig;
 import com.ultikits.plugins.login.entity.AccountData;
@@ -580,6 +583,60 @@ class EmailVerificationServiceTest {
 
             assertThat(result.isSuccess()).isFalse();
             assertThat(result.getMessageKey()).isEqualTo("email_send_failed");
+        }
+    }
+
+    // ==================== The wrong-code reply names the attempts left (UltiKits/UltiLogin#21) ====================
+
+    /**
+     * A wrong code is answered with {@code email_code_invalid}, whose text carries a {@code {COUNT}}
+     * placeholder for the attempts left. {@code /regs <code>} always filled it; {@code /recover} sent
+     * the text with the placeholder unreplaced. Both are driven through the command the player runs,
+     * against the English catalogue, so the reply is exactly what the player reads.
+     */
+    @Nested
+    @DisplayName("wrong-code reply names the attempts left (UltiKits/UltiLogin#21)")
+    class WrongCodeReply {
+
+        private String reply(Player p) {
+            org.mockito.ArgumentCaptor<String> captor = org.mockito.ArgumentCaptor.forClass(String.class);
+            org.mockito.Mockito.verify(p, org.mockito.Mockito.atLeastOnce()).sendMessage(captor.capture());
+            return captor.getValue();
+        }
+
+        private String expected(int remaining) {
+            String text = CatalogueText.entries("en").get("email_code_invalid");
+            return org.bukkit.ChatColor.translateAlternateColorCodes('&',
+                    text.replace("{COUNT}", String.valueOf(remaining)));
+        }
+
+        @Test
+        @DisplayName("/recover <wrong code> <password> <confirm> says how many attempts are left")
+        void recoverWrongCode() throws Exception {
+            when(UltiLoginTestHelper.getMockPlugin().i18n(anyString())).thenAnswer(CatalogueText.answer("en"));
+            addPendingRecovery(playerUuid, "user@example.com", "123456", System.currentTimeMillis());
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+            when(loginService.isPasswordValid(anyString())).thenReturn(true);
+            RecoverCommand command = new RecoverCommand(UltiLoginTestHelper.getMockPlugin(), service, loginService);
+
+            command.resetPassword(player, "000000", "secret1", "secret1");
+
+            String reply = reply(player);
+            assertThat(reply).isEqualTo(expected(emailConfig.getMaxAttempts() - 1));
+            assertThat(reply).doesNotContain("{COUNT}");
+        }
+
+        @Test
+        @DisplayName("/regs <wrong code> says how many attempts are left (control: this path always did)")
+        void bindWrongCode() throws Exception {
+            when(UltiLoginTestHelper.getMockPlugin().i18n(anyString())).thenAnswer(CatalogueText.answer("en"));
+            addPendingBind(playerUuid, "user@example.com", "123456", System.currentTimeMillis());
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(true);
+            EmailBindCommand command = new EmailBindCommand(UltiLoginTestHelper.getMockPlugin(), service, loginService);
+
+            command.handleCommand(player, "000000");
+
+            assertThat(reply(player)).isEqualTo(expected(emailConfig.getMaxAttempts() - 1));
         }
     }
 
