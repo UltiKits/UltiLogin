@@ -184,6 +184,10 @@ class LoginProtectionEventCoverageTest {
     private static final Set<String> REQUIRED_OTHER_PROTECTION_EVENTS =
             Collections.unmodifiableSet(new LinkedHashSet<String>(Arrays.asList(
                     "org.bukkit.event.player.PlayerMoveEvent",
+                    // UltiKits/UltiLogin#41: a passenger who does not steer gets no PlayerMoveEvent,
+                    // so riding is refused (mount) and a moving vehicle drops them (backstop).
+                    "org.bukkit.event.entity.EntityMountEvent",
+                    "org.bukkit.event.vehicle.VehicleMoveEvent",
                     "org.bukkit.event.player.AsyncPlayerChatEvent",
                     "org.bukkit.event.player.PlayerCommandPreprocessEvent",
                     "org.bukkit.event.entity.EntityDamageEvent")));

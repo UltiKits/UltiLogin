@@ -980,6 +980,106 @@ class LoginProtectionListenerTest {
         }
     }
 
+    /**
+     * UltiKits/UltiLogin#41: an unauthenticated player who rides without steering is carried by the
+     * vehicle, and {@link PlayerMoveEvent} is not fired for that motion (Paper fires it only for the
+     * controlling rider), measured on a real server. An unauthenticated player therefore rides
+     * nothing: a mount is refused, a vehicle restored after the join is left one tick later, and a
+     * moving vehicle drops an unauthenticated passenger.
+     */
+    @Nested
+    @DisplayName("an unauthenticated player rides nothing (UltiKits/UltiLogin#41)")
+    class UnauthenticatedPassenger {
+
+        private org.bukkit.entity.Minecart cart;
+
+        @BeforeEach
+        void setUpCart() {
+            cart = mock(org.bukkit.entity.Minecart.class);
+        }
+
+        @Test
+        @DisplayName("mounting a vehicle is refused while not logged in")
+        void mountRefused() {
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+            org.bukkit.event.entity.EntityMountEvent event = new org.bukkit.event.entity.EntityMountEvent(player, cart);
+
+            listener.onEntityMount(event);
+
+            assertThat(event.isCancelled()).isTrue();
+        }
+
+        @Test
+        @DisplayName("mounting is allowed once logged in")
+        void mountAllowedWhenLoggedIn() {
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(true);
+            org.bukkit.event.entity.EntityMountEvent event = new org.bukkit.event.entity.EntityMountEvent(player, cart);
+
+            listener.onEntityMount(event);
+
+            assertThat(event.isCancelled()).isFalse();
+        }
+
+        @Test
+        @DisplayName("a mob mounting is none of this module's business")
+        void nonPlayerMountIgnored() {
+            org.bukkit.entity.Zombie zombie = mock(org.bukkit.entity.Zombie.class);
+            org.bukkit.event.entity.EntityMountEvent event = new org.bukkit.event.entity.EntityMountEvent(zombie, cart);
+
+            listener.onEntityMount(event);
+
+            assertThat(event.isCancelled()).isFalse();
+        }
+
+        @Test
+        @DisplayName("a moving vehicle drops its unauthenticated passenger and keeps a logged-in one")
+        void movingVehicleDropsUnauthenticatedPassenger() {
+            Player loggedIn = UltiLoginTestHelper.createMockPlayer("Driver", UUID.randomUUID());
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+            when(loginService.isLoggedIn(loggedIn.getUniqueId())).thenReturn(true);
+            when(cart.getPassengers()).thenReturn(java.util.Arrays.<org.bukkit.entity.Entity>asList(loggedIn, player));
+            org.bukkit.Location from = mock(org.bukkit.Location.class);
+            org.bukkit.Location to = mock(org.bukkit.Location.class);
+
+            listener.onVehicleMove(new org.bukkit.event.vehicle.VehicleMoveEvent(cart, from, to));
+
+            verify(cart).removePassenger(player);
+            verify(cart, never()).removePassenger(loggedIn);
+        }
+
+        @Test
+        @DisplayName("one tick after joining, a player still riding and not logged in is dismounted")
+        void joinDismountsTheRestoredVehicle() {
+            when(config.isGuiModeEnabled()).thenReturn(false);
+            listener.onPlayerJoin(new PlayerJoinEvent(player, "join message"));
+            ArgumentCaptor<Runnable> captor = ArgumentCaptor.forClass(Runnable.class);
+            verify(mockScheduler).runTaskLater(any(), captor.capture(), eq(1L));
+            when(player.isOnline()).thenReturn(true);
+            when(player.isInsideVehicle()).thenReturn(true);
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+
+            captor.getValue().run();
+
+            verify(player).leaveVehicle();
+        }
+
+        @Test
+        @DisplayName("one tick after joining, a player logged in by their session keeps their seat")
+        void joinKeepsTheSeatOfALoggedInPlayer() {
+            when(config.isGuiModeEnabled()).thenReturn(false);
+            listener.onPlayerJoin(new PlayerJoinEvent(player, "join message"));
+            ArgumentCaptor<Runnable> captor = ArgumentCaptor.forClass(Runnable.class);
+            verify(mockScheduler).runTaskLater(any(), captor.capture(), eq(1L));
+            when(player.isOnline()).thenReturn(true);
+            when(player.isInsideVehicle()).thenReturn(true);
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(true);
+
+            captor.getValue().run();
+
+            verify(player, never()).leaveVehicle();
+        }
+    }
+
     @Nested
     @DisplayName("onPlayerJoin GUI-mode delayed callback (refusal path: unauthenticated join popup)")
     class OnPlayerJoinGuiModeCallback {
