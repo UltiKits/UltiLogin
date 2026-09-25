@@ -179,3 +179,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - 修复：未登录玩家不能再在登录界面整理自己的背包。登录或注册数字键盘打开时，玩家自己背包那几行的点击此前是被允许的，因为键盘是按
   整个窗口的标题识别的，而窗口包含玩家自己的背包行。现在按打开的是哪个窗口识别——本模块自己的登录或注册页面，无论标题如何——并且
   只允许点击键盘本身；标题看起来像键盘的其他物品栏不再对未登录玩家打开（UltiKits/UltiLogin#35）。
+- A player who has not logged in can no longer be carried by a vehicle. A minecart rider, a boat's
+  second-seat passenger or anyone carried by rails or water was moved across blocks while not
+  logged in, because only a player steering a vehicle is held in place, and a player who quit while
+  riding a moving minecart was put back in it on rejoin and carried on. A player who has not logged
+  in now rides nothing: getting into a vehicle is refused, a player who quit while riding is not in
+  the vehicle when they rejoin, a player whose login is revoked while riding is dismounted, and a
+  moving minecart or boat drops such a passenger. After logging in they can get back in
+  (UltiKits/UltiLogin#41).
+- 修复：未登录玩家不能再被载具带着移动。此前矿车乘客、船的第二座乘客、被铁轨或水流带着走的玩家会在未登录状态下跨方块移动，
+  因为只有操控载具的玩家会被拦住；坐在行驶中的矿车里下线的玩家重进时会被放回矿车并继续移动。现在未登录玩家不乘坐任何载具：
+  上载具被拒绝，坐着下线的玩家重进时不在载具里，登录被撤销时会下载具，行驶中的矿车或船会让这样的乘客下车。登录后可以重新上
+  载具（UltiKits/UltiLogin#41）。

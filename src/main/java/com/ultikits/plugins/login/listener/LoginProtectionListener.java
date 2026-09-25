@@ -22,11 +22,14 @@ import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.block.SignChangeEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.EntityMountEvent;
 import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.*;
+import org.bukkit.event.vehicle.VehicleMoveEvent;
+import org.bukkit.entity.Entity;
 import org.bukkit.inventory.Inventory;
 
 import java.util.UUID;
@@ -128,6 +131,19 @@ public class LoginProtectionListener implements Listener {
     public void onPlayerJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
         loginService.onPlayerJoin(player);
+
+        // A player who quit while riding is put back in the vehicle AFTER this event: Paper 1.21.11's
+        // PrepareSpawnTask$Ready calls PlayerList#placeNewPlayer (which fires this event) and only
+        // then ServerPlayer#loadAndSpawnParentVehicle (read with javap -c). The mount event that
+        // restore fires is refused by #onEntityMount; one tick later, a player who is still riding
+        // and not logged in is dismounted in case anything mounted them without an event
+        // (UltiKits/UltiLogin#41).
+        Bukkit.getScheduler().runTaskLater(bukkitPlugin, () -> {
+            if (player.isOnline() && player.isInsideVehicle()
+                    && !loginService.isLoggedIn(player.getUniqueId())) {
+                player.leaveVehicle();
+            }
+        }, 1L);
         
         // Open GUI if enabled (with delay for proper loading)
         if (loginService.getConfig().isGuiModeEnabled()) {
@@ -164,6 +180,43 @@ public class LoginProtectionListener implements Listener {
         }
     }
     
+    /**
+     * Refuse a mount by an unauthenticated player (UltiKits/UltiLogin#41).
+     * <p>
+     * {@link #onPlayerMove} holds a walking player in place, and a player steering a vehicle too:
+     * Paper fires {@link PlayerMoveEvent} for the rider who controls the vehicle. A passenger who does
+     * not steer — a minecart rider, a boat's second seat, a rider carried by rails or water — gets no
+     * such event, and the vehicle's own motion carried an unauthenticated player across blocks
+     * (measured on a real server, 2026-09-25). So an unauthenticated player rides nothing. Paper fires
+     * this event for every mount of a player who is in the world, including the vehicle it restores
+     * for a player who quit while riding ({@code Entity#startRiding}: the event is not gated by the
+     * restore's third argument).
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onEntityMount(EntityMountEvent event) {
+        if (event.getEntity() instanceof Player) {
+            cancelIfNotLoggedIn((Player) event.getEntity(), event);
+        }
+    }
+
+    /**
+     * Drop an unauthenticated passenger from a moving minecart or boat (UltiKits/UltiLogin#41).
+     * <p>
+     * A backstop for {@link #onEntityMount} and the one-tick check after a join: whatever put an
+     * unauthenticated player into a vehicle, the vehicle does not carry them. {@link VehicleMoveEvent}
+     * cannot be cancelled, and holding the vehicle back would also hold back its other riders, so the
+     * unauthenticated passenger is dismounted instead — what {@link #onPlayerMove} already does to an
+     * unauthenticated player who steers (the server's teleport back dismounts them).
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onVehicleMove(VehicleMoveEvent event) {
+        for (Entity passenger : event.getVehicle().getPassengers()) {
+            if (passenger instanceof Player && !loginService.isLoggedIn(passenger.getUniqueId())) {
+                event.getVehicle().removePassenger(passenger);
+            }
+        }
+    }
+
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerChat(AsyncPlayerChatEvent event) {
         if (shouldCancel(event.getPlayer())) {

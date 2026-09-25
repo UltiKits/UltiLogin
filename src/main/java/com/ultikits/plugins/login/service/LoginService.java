@@ -719,6 +719,12 @@ public class LoginService {
                 player.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS, Integer.MAX_VALUE, 0, false, false));
             }
 
+            // An unauthenticated player rides nothing: a vehicle would carry them, and a passenger
+            // who does not steer gets no PlayerMoveEvent to hold them in place (UltiKits/UltiLogin#41).
+            if (player.isInsideVehicle()) {
+                player.leaveVehicle();
+            }
+
             if (config.isSpawnLocationEnabled()) {
                 World world = Bukkit.getWorld(config.getSpawnWorld());
                 if (world != null) {
