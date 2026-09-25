@@ -333,6 +333,9 @@ class LoginConfigTextTest {
         byte[] before = bytes();
 
         language[0] = "zh";
+        // This module registers no change listener, and the framework registers none for it, so nothing
+        // can write the file before the framework rebuilds the language; pinned so that adding one is seen.
+        assertThat(config.getChangeListeners()).isEmpty();
         for (ConfigChangeListener listener : new ArrayList<>(config.getChangeListeners())) {
             listener.onConfigReload(config);
         }
