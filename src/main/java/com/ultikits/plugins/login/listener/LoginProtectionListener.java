@@ -243,8 +243,8 @@ public class LoginProtectionListener implements Listener {
     /**
      * Whether {@code title} is one of the titles the credential GUI is opened with: the login title,
      * the register title, or the confirm title {@code RegisterGUIPage} switches to. Compared with the
-     * resolved titles, colour codes applied exactly as the pages apply them, so the allowance holds in
-     * every language and for an operator's own titles (UltiKits/UltiLogin#20). It used to test whether
+     * resolved titles, by their words, so the allowance holds in every language and for an operator's
+     * own titles (UltiKits/UltiLogin#20). It used to test whether
      * the title contained 密码, 登录 or 注册: that refused every keypad click under an English title,
      * and let an unauthenticated player click in any other inventory whose title held one of those
      * words.
@@ -254,13 +254,18 @@ public class LoginProtectionListener implements Listener {
             return false;
         }
         LoginConfig config = loginService.getConfig();
-        return title.equals(colour(config.getGuiLoginTitle()))
-                || title.equals(colour(config.getGuiRegisterTitle()))
-                || title.equals(colour(config.getGuiConfirmTitle()));
+        String shown = ChatColor.stripColor(title);
+        return shown.equals(words(config.getGuiLoginTitle()))
+                || shown.equals(words(config.getGuiRegisterTitle()))
+                || shown.equals(words(config.getGuiConfirmTitle()));
     }
 
-    private static String colour(String text) {
-        return text == null ? null : ChatColor.translateAlternateColorCodes('&', text);
+    /**
+     * A title as it reads: colour codes applied, then stripped. Compared without its colour codes,
+     * because a server may echo a title's codes rewritten (gate 1 IN-01).
+     */
+    private static String words(String text) {
+        return text == null ? null : ChatColor.stripColor(ChatColor.translateAlternateColorCodes('&', text));
     }
 
     @EventHandler(priority = EventPriority.LOWEST)

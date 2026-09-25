@@ -193,7 +193,10 @@ public class LoginConfig extends AbstractConfigEntity {
     // ==================== Text defaults an earlier version shipped ====================
     // Every GUI title and message below used to ship a fixed Chinese default. Each now defaults to
     // blank and reads the language file's text, in the server's language, while it stays blank
-    // (maintainer ruling 2026-09-24 (d), UltiKits/UltiLogin#20). These are the old values, one per
+    // (maintainer ruling 2026-09-24 (d), UltiKits/UltiLogin#20). The colour stays the module's: each
+    // getter opens with the colour code its shipped default had, because a language file extracted by
+    // an earlier version holds the same keys with the same words and no colour codes, and an upgraded
+    // install reads that file first. These are the old values, one per
     // setting across this module's history, kept only so migrateLegacyDefaults() can recognise them
     // in an upgraded operator's file.
 
@@ -299,219 +302,219 @@ public class LoginConfig extends AbstractConfigEntity {
     }
 
     /**
-     * {@code gui-mode.title-login}, or the language file's {@code gui_enter_password} text when left blank.
+     * {@code gui-mode.title-login}, or the language file's {@code gui_enter_password} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getGuiLoginTitle() {
-        return configuredOr(guiLoginTitle, i18n("gui_enter_password"));
+        return configuredOr(guiLoginTitle, "&6" + i18n("gui_enter_password"));
     }
 
     /**
-     * {@code gui-mode.title-register}, or the language file's {@code gui_set_password} text when left blank.
+     * {@code gui-mode.title-register}, or the language file's {@code gui_set_password} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getGuiRegisterTitle() {
-        return configuredOr(guiRegisterTitle, i18n("gui_set_password"));
+        return configuredOr(guiRegisterTitle, "&6" + i18n("gui_set_password"));
     }
 
     /**
-     * {@code gui-mode.title-confirm}, or the language file's {@code gui_confirm_password} text when left blank.
+     * {@code gui-mode.title-confirm}, or the language file's {@code gui_confirm_password} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getGuiConfirmTitle() {
-        return configuredOr(guiConfirmTitle, i18n("gui_confirm_password"));
+        return configuredOr(guiConfirmTitle, "&6" + i18n("gui_confirm_password"));
     }
 
     /**
-     * {@code messages.register-prompt}, or the language file's {@code register_prompt} text when left blank.
+     * {@code messages.register-prompt}, or the language file's {@code register_prompt} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getRegisterPrompt() {
-        return configuredOr(registerPrompt, i18n("register_prompt"));
+        return configuredOr(registerPrompt, "&e" + i18n("register_prompt"));
     }
 
     /**
-     * {@code messages.register-prompt-gui}, or the language file's {@code register_prompt_gui} text when left blank.
+     * {@code messages.register-prompt-gui}, or the language file's {@code register_prompt_gui} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getRegisterPromptGui() {
-        return configuredOr(registerPromptGui, i18n("register_prompt_gui"));
+        return configuredOr(registerPromptGui, "&e" + i18n("register_prompt_gui"));
     }
 
     /**
-     * {@code messages.login-prompt}, or the language file's {@code login_prompt} text when left blank.
+     * {@code messages.login-prompt}, or the language file's {@code login_prompt} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getLoginPrompt() {
-        return configuredOr(loginPrompt, i18n("login_prompt"));
+        return configuredOr(loginPrompt, "&e" + i18n("login_prompt"));
     }
 
     /**
-     * {@code messages.login-prompt-gui}, or the language file's {@code login_prompt_gui} text when left blank.
+     * {@code messages.login-prompt-gui}, or the language file's {@code login_prompt_gui} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getLoginPromptGui() {
-        return configuredOr(loginPromptGui, i18n("login_prompt_gui"));
+        return configuredOr(loginPromptGui, "&e" + i18n("login_prompt_gui"));
     }
 
     /**
-     * {@code messages.register-success}, or the language file's {@code register_success} text when left blank.
+     * {@code messages.register-success}, or the language file's {@code register_success} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getRegisterSuccess() {
-        return configuredOr(registerSuccess, i18n("register_success"));
+        return configuredOr(registerSuccess, "&a" + i18n("register_success"));
     }
 
     /**
-     * {@code messages.login-success}, or the language file's {@code login_success} text when left blank.
+     * {@code messages.login-success}, or the language file's {@code login_success} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getLoginSuccess() {
-        return configuredOr(loginSuccess, i18n("login_success"));
+        return configuredOr(loginSuccess, "&a" + i18n("login_success"));
     }
 
     /**
-     * {@code messages.already-logged}, or the language file's {@code already_logged} text when left blank.
+     * {@code messages.already-logged}, or the language file's {@code already_logged} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getAlreadyLogged() {
-        return configuredOr(alreadyLogged, i18n("already_logged"));
+        return configuredOr(alreadyLogged, "&e" + i18n("already_logged"));
     }
 
     /**
-     * {@code messages.not-registered}, or the language file's {@code not_registered} text when left blank.
+     * {@code messages.not-registered}, or the language file's {@code not_registered} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getNotRegistered() {
-        return configuredOr(notRegistered, i18n("not_registered"));
+        return configuredOr(notRegistered, "&c" + i18n("not_registered"));
     }
 
     /**
-     * {@code messages.already-registered}, or the language file's {@code already_registered} text when left blank.
+     * {@code messages.already-registered}, or the language file's {@code already_registered} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getAlreadyRegistered() {
-        return configuredOr(alreadyRegistered, i18n("already_registered"));
+        return configuredOr(alreadyRegistered, "&c" + i18n("already_registered"));
     }
 
     /**
-     * {@code messages.password-mismatch}, or the language file's {@code password_mismatch} text when left blank.
+     * {@code messages.password-mismatch}, or the language file's {@code password_mismatch} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getPasswordMismatch() {
-        return configuredOr(passwordMismatch, i18n("password_mismatch"));
+        return configuredOr(passwordMismatch, "&c" + i18n("password_mismatch"));
     }
 
     /**
-     * {@code messages.password-too-short}, or the language file's {@code password_too_short} text when left blank.
+     * {@code messages.password-too-short}, or the language file's {@code password_too_short} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getPasswordTooShort() {
-        return configuredOr(passwordTooShort, i18n("password_too_short"));
+        return configuredOr(passwordTooShort, "&c" + i18n("password_too_short"));
     }
 
     /**
-     * {@code messages.password-too-long}, or the language file's {@code password_too_long} text when left blank.
+     * {@code messages.password-too-long}, or the language file's {@code password_too_long} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getPasswordTooLong() {
-        return configuredOr(passwordTooLong, i18n("password_too_long"));
+        return configuredOr(passwordTooLong, "&c" + i18n("password_too_long"));
     }
 
     /**
-     * {@code messages.timeout-kick}, or the language file's {@code timeout_kick} text when left blank.
+     * {@code messages.timeout-kick}, or the language file's {@code timeout_kick} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getTimeoutKick() {
-        return configuredOr(timeoutKick, i18n("timeout_kick"));
+        return configuredOr(timeoutKick, "&c" + i18n("timeout_kick"));
     }
 
     /**
-     * {@code messages.account-locked}, or the language file's {@code account_locked} text when left blank.
+     * {@code messages.account-locked}, or the language file's {@code account_locked} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getAccountLocked() {
-        return configuredOr(accountLocked, i18n("account_locked"));
+        return configuredOr(accountLocked, "&c" + i18n("account_locked"));
     }
 
     /**
-     * {@code messages.attempts-remaining}, or the language file's {@code attempts_remaining} text when left blank.
+     * {@code messages.attempts-remaining}, or the language file's {@code attempts_remaining} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getAttemptsRemaining() {
-        return configuredOr(attemptsRemaining, i18n("attempts_remaining"));
+        return configuredOr(attemptsRemaining, "&c" + i18n("attempts_remaining"));
     }
 
     /**
-     * {@code messages.gui-password-invalid}, or the language file's {@code gui_password_invalid} text when left blank.
+     * {@code messages.gui-password-invalid}, or the language file's {@code gui_password_invalid} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getGuiPasswordInvalid() {
-        return configuredOr(guiPasswordInvalid, i18n("gui_password_invalid"));
+        return configuredOr(guiPasswordInvalid, "&c" + i18n("gui_password_invalid"));
     }
 
     /**
-     * {@code messages.admin.password-reset}, or the language file's {@code admin_password_reset} text when left blank.
+     * {@code messages.admin.password-reset}, or the language file's {@code admin_password_reset} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getAdminPasswordReset() {
-        return configuredOr(adminPasswordReset, i18n("admin_password_reset"));
+        return configuredOr(adminPasswordReset, "&a" + i18n("admin_password_reset"));
     }
 
     /**
-     * {@code messages.admin.force-login}, or the language file's {@code admin_force_login} text when left blank.
+     * {@code messages.admin.force-login}, or the language file's {@code admin_force_login} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getAdminForceLogin() {
-        return configuredOr(adminForceLogin, i18n("admin_force_login"));
+        return configuredOr(adminForceLogin, "&a" + i18n("admin_force_login"));
     }
 
     /**
-     * {@code messages.admin.unregister}, or the language file's {@code admin_unregister} text when left blank.
+     * {@code messages.admin.unregister}, or the language file's {@code admin_unregister} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getAdminUnregister() {
-        return configuredOr(adminUnregister, i18n("admin_unregister"));
+        return configuredOr(adminUnregister, "&a" + i18n("admin_unregister"));
     }
 
     /**
-     * {@code messages.admin.player-not-found}, or the language file's {@code admin_player_not_found} text when left blank.
+     * {@code messages.admin.player-not-found}, or the language file's {@code admin_player_not_found} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getAdminPlayerNotFound() {
-        return configuredOr(adminPlayerNotFound, i18n("admin_player_not_found"));
+        return configuredOr(adminPlayerNotFound, "&c" + i18n("admin_player_not_found"));
     }
 
     /**
-     * {@code messages.admin.account-not-found}, or the language file's {@code admin_account_not_found} text when left blank.
+     * {@code messages.admin.account-not-found}, or the language file's {@code admin_account_not_found} text, in the colour its shipped default opened with, when left blank.
      *
      * @return the text to show
      */
     public String getAdminAccountNotFound() {
-        return configuredOr(adminAccountNotFound, i18n("admin_account_not_found"));
+        return configuredOr(adminAccountNotFound, "&c" + i18n("admin_account_not_found"));
     }
 
     /**

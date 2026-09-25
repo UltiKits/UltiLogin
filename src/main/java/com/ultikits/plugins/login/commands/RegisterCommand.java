@@ -71,7 +71,7 @@ public class RegisterCommand extends BaseCommandExecutor {
     @Override
     protected void handleHelp(CommandSender sender) {
         LoginConfig config = loginService.getConfig();
-        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', loginService.i18n("help_register")));
+        sender.sendMessage(ChatColor.YELLOW + loginService.i18n("help_register"));
         if (config.isGuiModeEnabled()) {
             sender.sendMessage(ChatColor.translateAlternateColorCodes('&', loginService.i18n("help_password_digits")
                 .replace("{LENGTH}", String.valueOf(config.getGuiPasswordLength()))));

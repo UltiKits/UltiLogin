@@ -129,9 +129,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `lang/en.yml` and `lang/zh.yml`. The framework reads only `lang/en.json` and `lang/zh.json`, and
   every entry in the two YAML files was a copy of an entry in the JSON file of the same language, so
-  editing them never changed anything. Customise text in the `.json` files.
+  editing them never changed anything. If you customised `lang/*.yml` on disk, move those edits to
+  `lang/*.json`.
+- The `email_bind_reward` and `panel_auth_success` language entries. No code ever read them, so
+  removing them changes nothing players see.
 - 移除 `lang/en.yml` 与 `lang/zh.yml`。框架只读取 `lang/en.json` 与 `lang/zh.json`，两个 YAML 文件中的每一条都是同语言
-  JSON 文件中某一条的副本，因此修改它们从未产生任何效果。请在 `.json` 文件中自定义文本。
+  JSON 文件中某一条的副本，因此修改它们从未产生任何效果。若你在磁盘上自定义过 `lang/*.yml`，请把这些修改移到
+  `lang/*.json`。
+- 移除 `email_bind_reward` 与 `panel_auth_success` 两个语言条目。从未有代码读取它们，因此移除它们不会改变玩家看到的任何内容。
 
 - The module's own `UltiLogin 已禁用！` ("UltiLogin disabled!") console line on unload and its own
   `UltiLogin 配置已重载！` ("UltiLogin configuration reloaded!") console line on `/ul reload UltiLogin`

@@ -375,7 +375,7 @@ public class LoginService {
         if (config.getMaxRegisterPerIp() > 0) {
             int count = countRegistrationsByIp(ip);
             if (count >= config.getMaxRegisterPerIp()) {
-                player.sendMessage(ChatColor.translateAlternateColorCodes('&', i18n("ip_limit_reached")));
+                player.sendMessage(ChatColor.RED + i18n("ip_limit_reached"));
                 return false;
             }
         }
@@ -903,7 +903,7 @@ public class LoginService {
         // Check session
         if (hasValidSession(player)) {
             completeLogin(player);
-            player.sendMessage(ChatColor.translateAlternateColorCodes('&', i18n("session_login")));
+            player.sendMessage(ChatColor.GREEN + i18n("session_login"));
             return;
         }
         

@@ -64,6 +64,6 @@ public class LoginCommand extends BaseCommandExecutor {
     
     @Override
     protected void handleHelp(CommandSender sender) {
-        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', loginService.i18n("help_login")));
+        sender.sendMessage(ChatColor.YELLOW + loginService.i18n("help_login"));
     }
 }

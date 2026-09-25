@@ -40,7 +40,7 @@ public class ChangePasswordCommand extends BaseCommandExecutor {
         
         // Check if logged in
         if (!loginService.isLoggedIn(player.getUniqueId())) {
-            player.sendMessage(ChatColor.translateAlternateColorCodes('&', loginService.i18n("please_login_first")));
+            player.sendMessage(ChatColor.RED + loginService.i18n("please_login_first"));
             return;
         }
         
@@ -59,9 +59,9 @@ public class ChangePasswordCommand extends BaseCommandExecutor {
         
         // Change password
         if (loginService.changePassword(player.getUniqueId(), oldPassword, newPassword)) {
-            player.sendMessage(ChatColor.translateAlternateColorCodes('&', loginService.i18n("change_password_success")));
+            player.sendMessage(ChatColor.GREEN + loginService.i18n("change_password_success"));
         } else {
-            player.sendMessage(ChatColor.translateAlternateColorCodes('&', loginService.i18n("change_password_wrong")));
+            player.sendMessage(ChatColor.RED + loginService.i18n("change_password_wrong"));
         }
     }
     
@@ -73,7 +73,7 @@ public class ChangePasswordCommand extends BaseCommandExecutor {
     @Override
     protected void handleHelp(CommandSender sender) {
         LoginConfig config = loginService.getConfig();
-        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', loginService.i18n("help_change_password")));
+        sender.sendMessage(ChatColor.YELLOW + loginService.i18n("help_change_password"));
         if (config.isGuiModeEnabled()) {
             sender.sendMessage(ChatColor.translateAlternateColorCodes('&', loginService.i18n("help_password_digits")
                 .replace("{LENGTH}", String.valueOf(config.getGuiPasswordLength()))));
