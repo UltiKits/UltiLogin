@@ -20,7 +20,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `language: en` had no effect on them. A setting that is still built-in text — in any language, or a default an
   earlier version shipped — follows `language`: it is rewritten when the module starts or after `/ul reload`. A
   setting you edited is kept. To keep a built-in text but stop it following `language`, change at least one
-  character (UltiKits/UltiLogin#20).
+  character (UltiKits/UltiLogin#20). The text written is this module's built-in text: edit these settings in `config/login.yml`; an edit of the extracted
+  language file does not change them (earlier versions never read them from the language file either).
 - `config/login.yml` 中的消息与标题设置——三个界面标题（`gui-mode.title-login`、`gui-mode.title-register`、
   `gui-mode.title-confirm`）与二十一条消息（`messages.register-prompt`、`register-prompt-gui`、`login-prompt`、
   `login-prompt-gui`、`register-success`、`login-success`、`already-logged`、`not-registered`、`already-registered`、
@@ -29,7 +30,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `account-not-found`）——在模块启动时按服务器语言写入，文件内容即模块显示的内容；此前它们是写死的中文，`language: en`
   对它们不起作用。仍为内置文本（任一语言的内置文本，或旧版本的出厂默认值）的设置会跟随 `language`：模块启动或执行
   `/ul reload` 后改写为当前语言的文本。你改过的设置保持不变。若想保留内置文本又不让它跟随语言，请至少改动一个字符
-  （UltiKits/UltiLogin#20）。
+  （UltiKits/UltiLogin#20）。写入的是本模块的内置文本：请在 `config/login.yml` 中修改这些设置；修改已解压的语言文件不会改变它们（旧版本同样从不从语言文件读取它们）。
 
 - `language: en` now applies to everything this module shows or logs: the help of `/login`,
   `/register`, `/changepassword`, `/logadmin` and `/panel`, the `/changepassword` and `/logadmin`

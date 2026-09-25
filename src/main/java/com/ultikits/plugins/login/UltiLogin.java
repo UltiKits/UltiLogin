@@ -1,5 +1,6 @@
 package com.ultikits.plugins.login;
 
+import com.ultikits.plugins.login.config.ConfigTextDefaults;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.config.RemovedConfigKeys;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
@@ -59,10 +60,13 @@ public class UltiLogin extends UltiToolsPlugin {
      * loaded -- never from a configuration change listener, which the framework fires before it reloads
      * the language. A value already in the current language matches nothing to replace, so a second
      * start writes nothing.
+     * The text comes from this jar's own catalogue for the server's language, not from {@code i18n} (which
+     * reads the operator's extracted language file first), so every value written is one the next pass
+     * recognises (orchestrator ruling O3, 2026-09-25).
      */
     private void writeConfigTextInServerLanguage() {
         LoginConfig config = getConfig(LoginConfig.class);
-        if (config == null || !config.materializeText(this::i18n)) {
+        if (config == null || !config.materializeText(ConfigTextDefaults.jarLanguage(LoginConfig.class, getLanguageCode())::getLocalizedText)) {
             return;
         }
         try {

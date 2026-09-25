@@ -310,7 +310,8 @@ public class LoginConfig extends AbstractConfigEntity {
      * Must run after the module's language is loaded ({@code registerSelf()} and {@code onReload()}),
      * never from a change listener; the caller saves the file when this returns {@code true}.
      *
-     * @param text the module's {@code i18n}: catalogue key to text in the server's language
+     * @param text catalogue key to text in the server's language, from this jar's own catalogue
+     *             ({@code ConfigTextDefaults#jarLanguage}), so every value written is in the tracked set
      * @return whether any value was rewritten
      */
     public boolean materializeText(Function<String, String> text) {

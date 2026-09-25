@@ -7,6 +7,7 @@ import com.google.gson.JsonParseException;
 import com.ultikits.ultitools.annotations.config.NotEmpty;
 import com.ultikits.ultitools.annotations.config.Pattern;
 import com.ultikits.ultitools.annotations.config.Size;
+import com.ultikits.ultitools.entities.Language;
 
 import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -43,6 +44,13 @@ import java.util.jar.JarFile;
  * set is replaced with the text in the server's current language; any other value, including a
  * built-in text changed by one character, is the operator's and is never touched. A blank value is
  * never replaced.
+ * <p>
+ * The text written comes from the same place as the tracked set: this jar's own catalogue for the
+ * language the framework loads ({@link #jarLanguage}), never the module's {@code i18n}, which reads the
+ * operator's extracted language file first. Otherwise an edit of that file would be written into the
+ * config file, would not be in the tracked set, and would stop following {@code language} -- a value
+ * the module wrote itself would become unrecognisable (orchestrator ruling O3, 2026-09-25). So these
+ * settings are customised in the config file, not in the language file.
  * <p>
  * The jar's texts are read from this module's own jar (its {@link CodeSource}), not through the
  * class loader and not from the language files on disk: every internal module shares one class
@@ -213,6 +221,39 @@ public final class ConfigTextDefaults {
             }
         }
         return set;
+    }
+
+    /**
+     * This jar's catalogue, as a framework {@link Language}, for the language the framework loads when
+     * the server's {@code language} is {@code code}: {@code code} itself when the jar ships it, else
+     * {@code en}, else the first language shipped (as {@code UltiToolsPlugin#resolveLanguageCode} falls
+     * back). Pass its {@code getLocalizedText} to a configuration's {@code materializeText}: a missing
+     * key answers itself, which {@link #currentText} treats as "no text".
+     *
+     * @param anchor a class in the module's jar
+     * @param code   the server's {@code language}, as {@code UltiToolsPlugin#getLanguageCode()} returns it
+     * @return the jar's catalogue for that language
+     */
+    public static Language jarLanguage(Class<?> anchor, String code) {
+        return jarLanguage(jarCatalogues(anchor), code);
+    }
+
+    /** {@link #jarLanguage(Class, String)} over catalogues already read with {@link #jarCatalogues}. */
+    public static Language jarLanguage(Map<String, Map<String, String>> jar, String code) {
+        Map<String, String> chosen = null;
+        if (code != null && jar.containsKey(code) && !jar.get(code).isEmpty()) {
+            chosen = jar.get(code);
+        } else if (jar.containsKey("en") && !jar.get("en").isEmpty()) {
+            chosen = jar.get("en");
+        } else {
+            for (Map<String, String> catalogue : jar.values()) {
+                if (!catalogue.isEmpty()) {
+                    chosen = catalogue;
+                    break;
+                }
+            }
+        }
+        return new Language(chosen == null ? Collections.<String, String>emptyMap() : new LinkedHashMap<>(chosen));
     }
 
     /**
