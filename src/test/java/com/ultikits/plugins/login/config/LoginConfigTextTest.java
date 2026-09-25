@@ -412,7 +412,7 @@ class LoginConfigTextTest {
     }
 
     @Test
-    @DisplayName("an operator's edit of the extracted language file is not written into login.yml, so each value keeps following a language switch (orchestrator ruling O3)")
+    @DisplayName("an operator's edit of the extracted language file is not written into login.yml, so each value keeps following a language switch")
     void diskCatalogueEditDoesNotReachTheFile() throws Exception {
         for (Setting s : SETTINGS) {
             diskOverrides.put(s.key, "Edited " + s.key);

@@ -29,7 +29,7 @@ import static org.mockito.Mockito.when;
  * framework reads that file first, falling back to the jar only for a key it lacks. The earlier file
  * held these keys already, with the same words and no colour codes, because no code read them. The
  * lines must still show in their colour: the colour is the module's, the words the language file's
- * (gate 1 WR-01, UltiKits/UltiLogin#20).
+ * (UltiKits/UltiLogin#20).
  * <p>
  * The values below are the ones the previous release shipped in {@code lang/zh.json}.
  */

@@ -101,7 +101,7 @@ class PanelCommandTest {
          * hops are involved -- runTaskAsynchronously (the HTTP call) then runTask (delivering the
          * result back on the main thread) -- so both Runnables are captured and the outer one is
          * run first to produce the inner one, per the capture-and-invoke idiom for this
-         * ecosystem's anonymous BukkitRunnable scheduler callbacks (09-PATTERNS.md).
+         * ecosystem's anonymous BukkitRunnable scheduler callbacks.
          */
         private Runnable captureResultDeliveryTask(LoginService.PanelLinkResult result) {
             when(loginService.isPanelEnabled()).thenReturn(true);
