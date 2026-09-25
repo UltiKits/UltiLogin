@@ -187,11 +187,11 @@ public final class UltiLoginTestHelper {
      * Null out the static {@code Bukkit.server} field. Call from {@code @AfterEach} in any test class
      * that installs its own {@code Server} mock directly (bypassing {@link #bootstrapLiveServer()}),
      * so the next test class that runs in the same Surefire fork does not inherit a stale singleton.
-     * This is the root-cause fix for the leak Codex's review found in three consumer classes
-     * ({@code PanelCommandTest}, {@code LoginProtectionListenerTest},
-     * {@code EmailVerificationServiceTest}) — each now calls this from its own teardown instead of
-     * relying on {@link #bootstrapLiveServer()}'s defensive null-out to paper over the leak on the
-     * next class's behalf.
+     * This is the root-cause fix for the leak a review found in three consumer classes ({@code
+     * PanelCommandTest}, {@code LoginProtectionListenerTest}, {@code EmailVerificationServiceTest})
+     * — each now calls this from its own teardown instead of relying on {@link
+     * #bootstrapLiveServer()}'s defensive null-out to paper over the leak on the next class's
+     * behalf.
      * <p>
      * This is <b>not</b> the teardown for {@link #bootstrapLiveServer()}. Use
      * {@link #tearDownLiveServer()} there: this method clears {@code Bukkit.server} only, leaving

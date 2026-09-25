@@ -478,8 +478,7 @@ public class LoginProtectionListener implements Listener {
      * <p>
      * {@code static} and package-visible via a full parameter list (rather than an instance
      * method reached through a bean reference) so {@link LoginService#presentCredentialPrompt
-     * (Player)} can call this exact same branching after an administrative credential change
-     * (Codex PR #18 thread 3945030004, round 4) without duplicating it a second time, and
+     * (Player)} can call this exact same branching after an administrative credential change (PR #18) without duplicating it a second time, and
      * without introducing a circular bean dependency between the listener and the service --
      * {@code LoginService} already has {@code plugin} and {@code bukkitPlugin} as constructor-
      * injected fields, so it can call this like any other static utility. This class's own
@@ -507,19 +506,19 @@ public class LoginProtectionListener implements Listener {
             dispatchOnMainThread(player, plugin, bukkitPlugin, () -> {
                 if (player.isOnline() && !loginService.isLoggedIn(player.getUniqueId())) {
                     UUID uuid = player.getUniqueId();
-                    // Round 9 (Codex PR #18 thread 3946574852, P2): mark this player as
-                    // mid-transition before opening the new credential GUI. In real Bukkit,
-                    // opening a new inventory implicitly closes whatever the player currently has
-                    // open, which runs that GUI's own onClose reopen hook synchronously, on this
-                    // same call -- without this marker, that hook could schedule its own reopen
-                    // of the GUI being replaced, fighting (in the unregister case, permanently)
-                    // the GUI this method is deliberately opening. Cleared in the finally block
-                    // once the new GUI has actually been opened, so it never leaks past this call.
-                    // Round 10 (Codex PR #18 thread 3946842965): a GUI the player already closed
-                    // for an unrelated reason may have a delayed reopen queued (see
-                    // LoginGUIPage/RegisterGUIPage#onClose). Cancel it before opening this fresh
-                    // GUI so it cannot fire afterward and stack a second credential GUI on top of
-                    // this one, whose own onClose would then queue yet another reopen in turn.
+                    // Mark this player as mid-transition before opening the new credential GUI.
+                    // In real Bukkit, opening a new inventory implicitly closes whatever the
+                    // player currently has open, which runs that GUI's own onClose reopen hook
+                    // synchronously, on this same call -- without this marker, that hook could
+                    // schedule its own reopen of the GUI being replaced, fighting (in the
+                    // unregister case, permanently) the GUI this method is deliberately opening.
+                    // Cleared in the finally block once the new GUI has actually been opened, so
+                    // it never leaks past this call.
+                    // A GUI the player already closed for an unrelated reason may have a delayed
+                    // reopen queued (see LoginGUIPage/RegisterGUIPage#onClose). Cancel it before
+                    // opening this fresh GUI so it cannot fire afterward and stack a second
+                    // credential GUI on top of this one, whose own onClose would then queue yet
+                    // another reopen in turn.
                     loginService.cancelPendingCredentialGuiReopen(uuid);
                     loginService.beginCredentialGuiTransition(uuid);
                     try {
@@ -536,14 +535,14 @@ public class LoginProtectionListener implements Listener {
         } else {
             // Send text prompt
             dispatchOnMainThread(player, plugin, bukkitPlugin, () -> {
-                // Round 12 (Codex PR #18 thread 3947572910, P3): unlike the GUI branch above,
-                // this queued callback used to send unconditionally, with no re-check of the
-                // player's state at execution time. AsyncPlayerChatEvent already runs off the
-                // main thread, so this callback is *always* queued for a later tick here, not
-                // just occasionally -- if the player was force-logged-in (or otherwise
-                // authenticated) in the gap between queuing and this tick, it still sent the
-                // login/register instruction to an already-authenticated player. Re-check
-                // exactly what the GUI branch checks before sending anything.
+                // Unlike the GUI branch above, this queued callback used to send
+                // unconditionally, with no re-check of the player's state at execution time.
+                // AsyncPlayerChatEvent already runs off the main thread, so this callback is
+                // *always* queued for a later tick here, not just occasionally -- if the player
+                // was force-logged-in (or otherwise authenticated) in the gap between queuing
+                // and this tick, it still sent the login/register instruction to an
+                // already-authenticated player. Re-check exactly what the GUI branch checks
+                // before sending anything.
                 if (player.isOnline() && !loginService.isLoggedIn(player.getUniqueId())) {
                     if (loginService.isRegistered(player.getUniqueId())) {
                         player.sendMessage(ChatColor.translateAlternateColorCodes('&',
@@ -582,12 +581,12 @@ public class LoginProtectionListener implements Listener {
      *   propagate out of the credential-invalidation call chain that triggered this prompt.</li>
      * </ol>
      * <p>
-     * Round 8 (Codex PR #18, thread 3946414499): widened from {@code private} to {@code public}
-     * so {@code LoginService}'s own {@code applyNoSessionProtections(Player)} -- the blind-effect
-     * and spawn-teleport reapplication shared with {@link
-     * com.ultikits.plugins.login.service.LoginService#onPlayerJoin(Player)} -- can dispatch
-     * through the identical main-thread rules, since potion effects and teleports are exactly as
-     * main-thread-only as the GUI/text prompt this method already guards.
+     * Widened from {@code private} to {@code public} so {@code LoginService}'s own {@code
+     * applyNoSessionProtections(Player)} -- the blind-effect and spawn-teleport reapplication
+     * shared with {@link com.ultikits.plugins.login.service.LoginService#onPlayerJoin(Player)}
+     * -- can dispatch through the identical main-thread rules, since potion effects and
+     * teleports are exactly as main-thread-only as the GUI/text prompt this method already
+     * guards.
      *
      * @param player the player the prompt is for, used only for the skip warning's message
      * @param plugin the UltiTools plugin instance, used to log the skip warning

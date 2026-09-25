@@ -80,8 +80,7 @@ public class LoginService {
 
     // Invalidation generation per player -- incremented by invalidateSession(UUID), used to
     // fence panel-link requests captured before an invalidation that landed before the request
-    // was actually published. See Codex PR #18 thread 3945030000 (round 4) and
-    // requestPanelLink(Player, long)'s javadoc.
+    // was actually published. See PR #18 and requestPanelLink(Player, long)'s javadoc.
     private final Map<UUID, AtomicLong> invalidationGenerations = new ConcurrentHashMap<>();
 
     // Random generator for password generation
@@ -95,7 +94,7 @@ public class LoginService {
 
     // Active polling tasks per pending panel-link request (requestId -> task).
     //
-    // Round 11 (Codex PR #18 thread 3947189541): this map used to be keyed by player UUID.
+    // This map used to be keyed by player UUID.
     // Starting a new poll (B) for a player always cancels+replaces whatever task was previously
     // stored under that UUID -- correct, since a new /panel request supersedes an old one. But
     // BukkitTask#cancel() only prevents a task's *future* scheduled executions; it does not
@@ -112,7 +111,7 @@ public class LoginService {
     private final Map<String, BukkitTask> pollingTasks = new ConcurrentHashMap<>();
 
     // The request id of whichever poll is currently active for a player (playerUUID ->
-    // requestId), maintained alongside pollingTasks above. Round 11: lets
+    // requestId), maintained alongside pollingTasks above. It lets
     // cancelPendingPanelRequest(UUID) and onPlayerQuit(Player) -- which must unconditionally stop
     // whatever poll is active for a player, regardless of its request id -- resolve "the active
     // poll for this player" without scanning pollingTasks.
@@ -122,7 +121,7 @@ public class LoginService {
     // RegisterGUIPage after an admin unregister revoked them while a GUI was open) -- consulted
     // by LoginGUIPage/RegisterGUIPage's own onClose reopen hooks so the GUI being replaced does
     // not schedule its own reopen while presentCredentialPrompt() is in the middle of opening the
-    // correct one. Round 9 (Codex PR #18 thread 3946574852, P2).
+    // correct one.
     private final java.util.Set<UUID> credentialGuiTransitions = ConcurrentHashMap.newKeySet();
 
     // Players who currently have a LoginGUIPage or RegisterGUIPage open, set by that page's own
@@ -130,18 +129,18 @@ public class LoginService {
     // the delayed reopen callback scheduled in onClose -- see pendingCredentialGuiReopenTasks --
     // so a queued reopen from a GUI the player already closed for an unrelated reason cannot open
     // a second credential GUI on top of one presentCredentialPrompt() already opened in the
-    // meantime. Round 10 (Codex PR #18 thread 3946842965).
+    // meantime.
     private final java.util.Set<UUID> openCredentialGuiPlayers = ConcurrentHashMap.newKeySet();
 
     // The delayed reopen task LoginGUIPage/RegisterGUIPage's onClose schedules for a player, if
     // any. presentCredentialPrompt() cancels/replaces this before opening its own credential GUI
     // (see LoginProtectionListener#presentCredentialPrompt), so a reopen queued by a GUI the
     // player closed for an unrelated reason cannot fire after -- and land on top of -- a GUI a
-    // credential change has since opened. Round 10 (Codex PR #18 thread 3946842965): a registered,
-    // logged-out player closing LoginGUIPage schedules a reopen 10 ticks later; an admin password
-    // reset landing in that window used to leave the queued reopen live, so it opened a second
-    // credential GUI over the one the reset's own prompt had just opened, whose own onClose then
-    // queued another reopen -- replacing the GUI every 10 ticks indefinitely.
+    // credential change has since opened. A registered, logged-out player closing LoginGUIPage
+    // schedules a reopen 10 ticks later; an admin password reset landing in that window used to
+    // leave the queued reopen live, so it opened a second credential GUI over the one the reset's
+    // own prompt had just opened, whose own onClose then queued another reopen -- replacing the GUI
+    // every 10 ticks indefinitely.
     private final Map<UUID, BukkitTask> pendingCredentialGuiReopenTasks = new ConcurrentHashMap<>();
 
     private final Gson gson = new Gson();
@@ -178,7 +177,7 @@ public class LoginService {
         }
         pollingTasks.clear();
         currentPollingRequestId.clear();
-        // Cancel all queued credential-GUI reopen tasks (round 10).
+        // Cancel all queued credential-GUI reopen tasks.
         for (BukkitTask task : pendingCredentialGuiReopenTasks.values()) {
             task.cancel();
         }
@@ -510,8 +509,7 @@ public class LoginService {
      * <p>
      * Also advances this player's invalidation generation ({@link #getInvalidationGeneration
      * (UUID)}), first -- before {@link #cancelPendingPanelRequest(UUID)}, which can only cancel
-     * a panel request that has already been inserted into {@code pendingPanelRequests}. Codex PR
-     * #18 thread 3945030000 (round 4): a {@code /panel} request captured before this call, but
+     * a panel request that has already been inserted into {@code pendingPanelRequests}. A {@code /panel} request captured before this call, but
      * not yet published by {@link #requestPanelLink(Player, long)} at the time this call runs,
      * has nothing for the cancellation to find. The generation bump is what {@code
      * requestPanelLink} checks to refuse publishing that now-stale request when its worker
@@ -542,15 +540,15 @@ public class LoginService {
      * As {@link #invalidateSession(UUID)}, with control over whether the online-player credential
      * prompt is presented.
      * <p>
-     * Round 7 (Codex PR #18 thread 3946170649): {@link #resetPasswordForRecovery(UUID, String)}
-     * -- the only caller that passes {@code false} -- is followed immediately by the caller
-     * ({@code RecoverCommand}) calling {@link #completeLogin(Player)} itself. Presenting the
-     * prompt in between would show "log in now" immediately followed by "you are logged in" in
-     * text mode, or leave a credential GUI open that {@code completeLogin} never used to close in
-     * GUI mode (see the fix there). Every other caller of {@link #invalidateSession(UUID)}
-     * (unregister, both admin {@code resetPassword} overloads, {@code changePassword}) keeps
-     * going through the single-argument overload above, so it keeps presenting the prompt exactly
-     * as before -- this overload only changes behaviour for the one path that opts in.
+     * {@link #resetPasswordForRecovery(UUID, String)} -- the only caller that passes {@code
+     * false} -- is followed immediately by the caller ({@code RecoverCommand}) calling {@link
+     * #completeLogin(Player)} itself. Presenting the prompt in between would show "log in now"
+     * immediately followed by "you are logged in" in text mode, or leave a credential GUI open
+     * that {@code completeLogin} never used to close in GUI mode (see the fix there). Every other
+     * caller of {@link #invalidateSession(UUID)} (unregister, both admin {@code resetPassword}
+     * overloads, {@code changePassword}) keeps going through the single-argument overload above,
+     * so it keeps presenting the prompt exactly as before -- this overload only changes behaviour
+     * for the one path that opts in.
      *
      * @param playerUuid the player whose sessions should end, and whose active login state
      *                   should be revoked if they are online
@@ -578,7 +576,7 @@ public class LoginService {
      * /panel}'s worker, which makes a blocking HTTP call before {@link #requestPanelLink(Player,
      * long)} actually publishes anything) should capture this value up front, before scheduling,
      * and pass it back in so the eventual publish can refuse itself if an invalidation landed in
-     * the gap. See Codex PR #18 thread 3945030000 (round 4).
+     * the gap. See PR #18.
      *
      * @param playerUuid the player to check
      * @return the current invalidation generation, {@code 0} if never invalidated
@@ -613,15 +611,15 @@ public class LoginService {
      * Unconditionally cancel and remove whichever polling task is currently active for a player,
      * if any.
      * <p>
-     * Round 11 (Codex PR #18 thread 3947189541): {@code pollingTasks} is now keyed by request id
-     * (see its field javadoc), so an unconditional "stop this player's polling" caller cannot
-     * remove by player UUID directly. This resolves the player's current request id via {@link
-     * #currentPollingRequestId} first. Unlike the per-poll self-cleanup inside {@link
-     * #startAuthPolling(String, Player, String)} (which must only ever touch its own entry), this
-     * method is deliberately unconditional: it is only ever called by paths that mean to stop
-     * <em>all</em> polling for this player right now (an invalidation, or the player
-     * disconnecting), so removing "whatever is currently active" is exactly the intended
-     * behavior here, not the race the per-poll cleanup guards against.
+     * {@code pollingTasks} is now keyed by request id (see its field javadoc), so an
+     * unconditional "stop this player's polling" caller cannot remove by player UUID directly.
+     * This resolves the player's current request id via {@link #currentPollingRequestId} first.
+     * Unlike the per-poll self-cleanup inside {@link #startAuthPolling(String, Player, String)}
+     * (which must only ever touch its own entry), this method is deliberately unconditional: it
+     * is only ever called by paths that mean to stop <em>all</em> polling for this player right
+     * now (an invalidation, or the player disconnecting), so removing "whatever is currently
+     * active" is exactly the intended behavior here, not the race the per-poll cleanup guards
+     * against.
      *
      * @param playerUuid the player whose active polling task, if any, should be cancelled
      */
@@ -639,7 +637,7 @@ public class LoginService {
      * Revoke a currently online player's active login state and let {@link #checkTimeouts()}
      * enforce the configured login timeout on them again, as if they had just joined.
      * <p>
-     * Reported by Codex on PR #18: {@link #invalidateSession(UUID)} used to only end the
+     * Reported in review of PR #18: {@link #invalidateSession(UUID)} used to only end the
      * remembered {@code sessions} entry, but {@code LoginProtectionListener} authorizes in-game
      * actions through {@link #isLoggedIn(UUID)}, not {@link #hasValidSession(Player)} -- so an
      * already-authenticated online connection stayed fully authorized with the old credentials
@@ -653,17 +651,16 @@ public class LoginService {
      * since {@code invalidateSession} is the only remaining caller and the sole intended entry
      * point.
      * <p>
-     * Codex PR #18 thread 3945030004 (round 4): flipping the flag alone left a revoked online
-     * player with no way back to the credential screen -- {@code LoginProtectionListener} only
-     * ever opens the login/register GUI from {@code PlayerJoinEvent} or a blocked action,
-     * neither of which fires again on its own after this silent flag flip, so the player sat
-     * frozen by the action guards until {@link #checkTimeouts()} eventually kicked them. Now
-     * also calls {@link #presentCredentialPrompt(Player)} to show the same prompt immediately.
+     * Flipping the flag alone left a revoked online player with no way back to the credential
+     * screen -- {@code LoginProtectionListener} only ever opens the login/register GUI from
+     * {@code PlayerJoinEvent} or a blocked action, neither of which fires again on its own
+     * after this silent flag flip, so the player sat frozen by the action guards until {@link
+     * #checkTimeouts()} eventually kicked them. Now also calls {@link
+     * #presentCredentialPrompt(Player)} to show the same prompt immediately.
      * <p>
-     * Round 7 (Codex PR #18 thread 3946170649): {@code presentPrompt} lets {@link
-     * #invalidateSession(UUID, boolean)} suppress the prompt for the successful-recovery path,
-     * which re-authenticates the player itself immediately afterward -- see that overload's
-     * javadoc.
+     * {@code presentPrompt} lets {@link #invalidateSession(UUID, boolean)} suppress the prompt
+     * for the successful-recovery path, which re-authenticates the player itself immediately
+     * afterward -- see that overload's javadoc.
      *
      * @param playerUuid the player to force back into the unauthenticated state, if online
      * @param presentPrompt whether to show the credential prompt; {@code false} only for
@@ -686,13 +683,13 @@ public class LoginService {
      * configured spawn location -- that an unauthenticated player already receives on join, for a
      * player whose credentials have just been revoked while connected.
      * <p>
-     * Codex PR #18 round 8, thread 3946414499 ({@code forceReauthenticationIfOnline}): before this
-     * fix, revoking an online player's session (account deletion, an administrative password
-     * reset, or a self-service password change) only cleared the login flag and restarted the
-     * join timeout. {@link #onPlayerJoin(Player)} was the only code applying {@code blind-effect}
-     * / {@code spawn-location.enabled}, and it never runs again for an already-connected player,
-     * so a revoked client stayed fully sighted at its current, potentially sensitive location
-     * despite now being unauthenticated -- until it happened to reconnect.
+     * {@code forceReauthenticationIfOnline} (PR #18): before this fix, revoking an online
+     * player's session (account deletion, an administrative password reset, or a self-service
+     * password change) only cleared the login flag and restarted the join timeout. {@link
+     * #onPlayerJoin(Player)} was the only code applying {@code blind-effect} / {@code
+     * spawn-location.enabled}, and it never runs again for an already-connected player, so a
+     * revoked client stayed fully sighted at its current, potentially sensitive location despite
+     * now being unauthenticated -- until it happened to reconnect.
      * <p>
      * Shared with {@link #onPlayerJoin(Player)} so both paths apply the identical protections the
      * identical way; neither call site touches {@code loggedInPlayers}/{@code joinTimes} or
@@ -738,8 +735,7 @@ public class LoginService {
      * <p>
      * Delegates to {@link LoginProtectionListener#presentCredentialPrompt(Player,
      * UltiToolsPlugin, LoginService, Plugin)} so {@code forceReauthenticationIfOnline}
-     * can show the same prompt after an administrative credential change (Codex PR #18 thread
-     * 3945030004, round 4) without duplicating the GUI-vs-text branching a second time.
+     * can show the same prompt after an administrative credential change (PR #18) without duplicating the GUI-vs-text branching a second time.
      * <p>
      * Deliberately does not consult {@link #hasValidSession(Player)}: unlike {@link
      * #onPlayerJoin(Player)}, this must never silently re-authenticate the player through a
@@ -757,15 +753,14 @@ public class LoginService {
      * com.ultikits.plugins.login.gui.RegisterGUIPage#onClose} skip their own reopen logic for the
      * GUI a deliberate transition is in the process of replacing.
      * <p>
-     * Round 9 (Codex PR #18 thread 3946574852, P2): an online, registered-but-unauthenticated
-     * player with {@code LoginGUIPage} open, unregistered by an admin, had the revocation prompt
-     * open {@code RegisterGUIPage} over it -- which, in real Bukkit, implicitly fires an {@code
-     * InventoryCloseEvent} for the GUI being replaced, synchronously, as part of opening the new
-     * one. Without this marker, that close hook could schedule its own reopen of the GUI being
-     * replaced, which (once it fired) closed the new GUI in turn and triggered its own reopen --
-     * the two screens ping-ponging every 10 ticks until the player was kicked by the login
-     * timeout. See {@link #endCredentialGuiTransition(UUID)} and {@link
-     * #isCredentialGuiTransitioning(UUID)}.
+     * An online, registered-but-unauthenticated player with {@code LoginGUIPage} open,
+     * unregistered by an admin, had the revocation prompt open {@code RegisterGUIPage} over it
+     * -- which, in real Bukkit, implicitly fires an {@code InventoryCloseEvent} for the GUI
+     * being replaced, synchronously, as part of opening the new one. Without this marker, that
+     * close hook could schedule its own reopen of the GUI being replaced, which (once it fired)
+     * closed the new GUI in turn and triggered its own reopen -- the two screens ping-ponging
+     * every 10 ticks until the player was kicked by the login timeout. See {@link
+     * #endCredentialGuiTransition(UUID)} and {@link #isCredentialGuiTransitioning(UUID)}.
      *
      * @param playerUuid the player whose credential GUI is about to be deliberately replaced
      */
@@ -798,11 +793,11 @@ public class LoginService {
      * Mark a player as currently having a {@link LoginGUIPage} or {@link RegisterGUIPage} open,
      * called from that page's own {@code onOpen}.
      * <p>
-     * Round 10 (Codex PR #18 thread 3946842965): the delayed reopen callback scheduled by {@code
-     * onClose} (see {@link #registerCredentialGuiReopenTask(UUID, BukkitTask)}) checks this before
-     * opening another credential GUI, so a reopen queued before a credential change cannot stack a
-     * second GUI on top of one {@link #presentCredentialPrompt(Player)} already opened while the
-     * reopen was pending.
+     * The delayed reopen callback scheduled by {@code onClose} (see {@link
+     * #registerCredentialGuiReopenTask(UUID, BukkitTask)}) checks this before opening another
+     * credential GUI, so a reopen queued before a credential change cannot stack a second GUI on
+     * top of one {@link #presentCredentialPrompt(Player)} already opened while the reopen was
+     * pending.
      *
      * @param playerUuid the player whose credential GUI just opened
      */
@@ -837,7 +832,7 @@ public class LoginService {
      * player, cancelling whatever task was previously registered for them (a stale reopen this
      * new one supersedes).
      * <p>
-     * Round 10 (Codex PR #18 thread 3946842965).
+     * Added in PR #18.
      *
      * @param playerUuid the player the reopen task was scheduled for
      * @param task the task {@code Bukkit.getScheduler().runTaskLater(...)} returned
@@ -875,10 +870,9 @@ public class LoginService {
      * Cancel and remove any credential-GUI reopen task currently queued for a player, without
      * scheduling a replacement.
      * <p>
-     * Round 10 (Codex PR #18 thread 3946842965): called from {@link
-     * LoginProtectionListener#presentCredentialPrompt} before it opens a fresh credential GUI, so
-     * a reopen a player's own GUI close queued before this credential change cannot fire later and
-     * stack a second GUI on top of the one this call is about to open.
+     * Called from {@link LoginProtectionListener#presentCredentialPrompt} before it opens a fresh
+     * credential GUI, so a reopen a player's own GUI close queued before this credential change
+     * cannot fire later and stack a second GUI on top of the one this call is about to open.
      *
      * @param playerUuid the player whose queued reopen should be cancelled
      */
@@ -939,11 +933,11 @@ public class LoginService {
     /**
      * Complete login process.
      * <p>
-     * Round 7 (Codex PR #18 thread 3946170649): closes an already-open credential GUI, if the
-     * player is looking at one. Before this, a caller that authenticates a player directly --
-     * most notably the successful email-recovery path ({@code RecoverCommand.resetPassword} ->
-     * {@code EmailVerificationService.resetPasswordAfterRecovery} -> here) without going through
-     * that GUI's own {@code attemptLogin()} click handler -- left a {@link LoginGUIPage} or {@link
+     * Closes an already-open credential GUI, if the player is looking at one. Before this, a
+     * caller that authenticates a player directly -- most notably the successful email-recovery
+     * path ({@code RecoverCommand.resetPassword} -> {@code
+     * EmailVerificationService.resetPasswordAfterRecovery} -> here) without going through that
+     * GUI's own {@code attemptLogin()} click handler -- left a {@link LoginGUIPage} or {@link
      * RegisterGUIPage} open on screen even though {@code loggedInPlayers} was already flipped to
      * {@code true}: nothing else ever closes it for that caller. The flag is flipped above,
      * before this check runs, so if {@code closeInventory()} below triggers {@link
@@ -967,7 +961,7 @@ public class LoginService {
         // that a teleport actually happened (recorded by onPlayerJoin / applyNoSessionProtections
         // at teleport time). Gating this on the current config instead stranded a player at spawn
         // and discarded their saved location if the setting was flipped to false between the
-        // teleport and this call (Codex PR #18 round 13, thread 3947908093).
+        // teleport and this call (PR #18).
         Location original = originalLocations.get(uuid);
         if (original != null) {
             player.teleport(original);
@@ -1045,12 +1039,12 @@ public class LoginService {
     /**
      * Reset player password with specific password (admin command).
      * <p>
-     * Round 7 (Codex PR #18 thread 3946170649): the email-recovery flow used to delegate here
-     * too, but this overload's {@link #invalidateSession(UUID)} call presents the credential
-     * prompt -- correct for an admin resetting someone else's password, wrong for a player who
-     * just recovered their own and is about to be logged straight back in by the caller. Recovery
-     * now goes through {@link #resetPasswordForRecovery(UUID, String)} instead, which shares this
-     * method's account-update logic but suppresses the prompt.
+     * The email-recovery flow used to delegate here too, but this overload's {@link
+     * #invalidateSession(UUID)} call presents the credential prompt -- correct for an admin
+     * resetting someone else's password, wrong for a player who just recovered their own and is
+     * about to be logged straight back in by the caller. Recovery now goes through {@link
+     * #resetPasswordForRecovery(UUID, String)} instead, which shares this method's
+     * account-update logic but suppresses the prompt.
      */
     public boolean resetPassword(UUID playerUuid, String newPassword) {
         return resetPasswordInternal(playerUuid, newPassword, true);
@@ -1061,18 +1055,17 @@ public class LoginService {
      * account-update and invalidation as {@link #resetPassword(UUID, String)}, but without
      * presenting the credential prompt.
      * <p>
-     * Round 7 (Codex PR #18 thread 3946170649): {@code EmailVerificationService
-     * .resetPasswordAfterRecovery} is called from {@code RecoverCommand.resetPassword}, which
-     * calls {@link #completeLogin(Player)} immediately afterward on success. Going through the
-     * public, prompt-presenting {@link #resetPassword(UUID, String)} used to show the login/
-     * register prompt (text message, or in GUI mode a freshly reopened {@code LoginGUIPage}) an
-     * instant before {@code completeLogin} ran -- in text mode a jarring "log in now" immediately
-     * followed by "you are logged in"; in GUI mode a credential GUI left open that {@code
-     * completeLogin} never used to close (see the fix there). Package-private: {@code
-     * EmailVerificationService} (same package) is the only intended caller -- every other
-     * credential-changing path (unregister, admin resetPassword, changePassword) keeps presenting
-     * the prompt through the public overload above, since none of those callers re-authenticates
-     * the player themselves afterward.
+     * {@code EmailVerificationService .resetPasswordAfterRecovery} is called from {@code
+     * RecoverCommand.resetPassword}, which calls {@link #completeLogin(Player)} immediately
+     * afterward on success. Going through the public, prompt-presenting {@link
+     * #resetPassword(UUID, String)} used to show the login/ register prompt (text message, or in
+     * GUI mode a freshly reopened {@code LoginGUIPage}) an instant before {@code completeLogin}
+     * ran -- in text mode a jarring "log in now" immediately followed by "you are logged in"; in
+     * GUI mode a credential GUI left open that {@code completeLogin} never used to close (see the
+     * fix there). Package-private: {@code EmailVerificationService} (same package) is the only
+     * intended caller -- every other credential-changing path (unregister, admin resetPassword,
+     * changePassword) keeps presenting the prompt through the public overload above, since none
+     * of those callers re-authenticates the player themselves afterward.
      *
      * @param playerUuid the player recovering their account
      * @param newPassword the new password the recovery flow already validated
@@ -1124,7 +1117,7 @@ public class LoginService {
         dataOperator.delById(account.getId());
 
         // End every session and, if online, force the player back into the unauthenticated
-        // state and reinitialize their login timeout (Codex PR #18 comment 3944181260):
+        // state and reinitialize their login timeout (PR #18):
         // completeLogin already removed their joinTimes entry when they originally logged in,
         // so without re-adding one here checkTimeouts() would never see this
         // newly-unauthenticated player, silently disabling the login timeout while they remain
@@ -1375,13 +1368,13 @@ public class LoginService {
      * generation the caller captured before starting no longer matches the player's current
      * one.
      * <p>
-     * Codex PR #18 thread 3945030000 (round 4), see {@link #invalidateSession(UUID)}: {@code
-     * /panel} (see {@code PanelCommand}) captures {@link #getInvalidationGeneration(UUID)} before
-     * scheduling its asynchronous worker; this method runs later, on that worker thread, after a
-     * blocking HTTP call. An administrator's reset/unregister landing in the gap between those
-     * two points calls {@link #invalidateSession(UUID)}, which bumps the generation and calls
-     * {@link #cancelPendingPanelRequest(UUID)} -- but that cancellation finds nothing yet, since
-     * this request has not been inserted into {@code pendingPanelRequests} at that point.
+     * See {@link #invalidateSession(UUID)}: {@code /panel} (see {@code PanelCommand}) captures
+     * {@link #getInvalidationGeneration(UUID)} before scheduling its asynchronous worker; this
+     * method runs later, on that worker thread, after a blocking HTTP call. An administrator's
+     * reset/unregister landing in the gap between those two points calls {@link
+     * #invalidateSession(UUID)}, which bumps the generation and calls {@link
+     * #cancelPendingPanelRequest(UUID)} -- but that cancellation finds nothing yet, since this
+     * request has not been inserted into {@code pendingPanelRequests} at that point.
      * Without this check, the worker would go on to publish the (already-stale) request, send
      * the link, and start polling; since a password reset or change does not remove the
      * account, {@link #completePanelLogin(String, boolean)}'s registration check would later
@@ -1389,8 +1382,8 @@ public class LoginService {
      * before publishing closes that gap; once a request has been inserted, any subsequent
      * invalidation is already covered by {@link #cancelPendingPanelRequest(UUID)} and, for a
      * poll already in flight past that point, by {@link #handlePanelPollCompleted(Player, String,
-     * boolean)}'s request-id-keyed lookup (round 2, comment 3944418953; keyed by request id as of
-     * round 7) -- so this is the one remaining fence, not a duplicate of either.
+     * boolean)}'s request-id-keyed lookup -- so this is the one remaining fence, not a duplicate
+     * of either.
      * <p>
      * The generation check and the {@code pendingPanelRequests} insert below now run inside a
      * {@code synchronized} block keyed on the same per-player {@link AtomicLong} generation cell
@@ -1402,17 +1395,17 @@ public class LoginService {
      * inserted). Only the publish decision and the map insert are inside the lock; the blocking
      * HTTP call and everything after it run outside it.
      * <p>
-     * Round 7 (Codex PR #18 thread 3946170644): an invalidation racing an in-flight publish was
-     * still able to slip through, because nothing re-checked the generation or the pending-request
-     * entry after this method's own blocking HTTP call returned -- the method would hand back a
-     * success result (URL included) even though {@link #cancelPendingPanelRequest(UUID)} had
-     * already removed the entry and the generation had already moved on. This method now performs
-     * that re-check, under the same lock, immediately before returning a success result (see
-     * below); a stale result is discarded there rather than being returned. The returned {@link
-     * PanelLinkResult} also now carries the {@code requestId} it was published under, so a caller
-     * that goes on to poll for completion (see {@link #startAuthPolling(String, Player, String)})
-     * keys its poll on the exact request this call published -- never on "whatever is currently
-     * pending" for the player, which round 7 also found could pick up an unrelated, newer request.
+     * An invalidation racing an in-flight publish was still able to slip through, because nothing
+     * re-checked the generation or the pending-request entry after this method's own blocking
+     * HTTP call returned -- the method would hand back a success result (URL included) even
+     * though {@link #cancelPendingPanelRequest(UUID)} had already removed the entry and the
+     * generation had already moved on. This method now performs that re-check, under the same
+     * lock, immediately before returning a success result (see below); a stale result is
+     * discarded there rather than being returned. The returned {@link PanelLinkResult} also now
+     * carries the {@code requestId} it was published under, so a caller that goes on to poll for
+     * completion (see {@link #startAuthPolling(String, Player, String)}) keys its poll on the exact
+     * request this call published -- never on "whatever is currently pending" for the player, which
+     * a review also found could pick up an unrelated, newer request.
      *
      * @param player the player requesting the link
      * @param expectedGeneration the invalidation generation the caller captured before issuing
@@ -1488,16 +1481,16 @@ public class LoginService {
                     url = responseBody.get("url").getAsString();
                 }
                 if (url != null) {
-                    // Round 7 (Codex PR #18 thread 3946170644): the generation check and the
-                    // pendingPanelRequests insert above only fence the gap *before* this blocking
-                    // POST. An invalidateSession(...) landing anywhere *during* the POST (which
-                    // can run for an arbitrary, unbounded amount of time) removes this request's
-                    // pendingPanelRequests entry and bumps the generation, but neither of those
-                    // stops this in-flight HTTP call from finishing and this method from handing
-                    // back a success result regardless -- the caller (PanelCommand) would then
-                    // send the now-stale magic link and start a poll for it. Re-checking both,
-                    // under the same per-player lock invalidateSession synchronizes on, closes
-                    // that: either this re-check runs completely before invalidateSession's own
+                    // The generation check and the pendingPanelRequests insert above only fence
+                    // the gap *before* this blocking POST. An invalidateSession(...) landing
+                    // anywhere *during* the POST (which can run for an arbitrary, unbounded
+                    // amount of time) removes this request's pendingPanelRequests entry and
+                    // bumps the generation, but neither of those stops this in-flight HTTP call
+                    // from finishing and this method from handing back a success result
+                    // regardless -- the caller (PanelCommand) would then send the now-stale
+                    // magic link and start a poll for it. Re-checking both, under the same
+                    // per-player lock invalidateSession synchronizes on, closes that: either
+                    // this re-check runs completely before invalidateSession's own
                     // bump-and-cancel (so it still sees the matching generation and the request
                     // still pending, and the result is safe to publish), or completely after (so
                     // it observes the bumped generation or the already-removed entry, and
@@ -1529,8 +1522,8 @@ public class LoginService {
      * Check whether a published panel link request is still current for its player, immediately
      * before acting on a {@link PanelLinkResult} on the main thread.
      * <p>
-     * Round 9 (Codex PR #18 thread 3946574845, P2): {@link #requestPanelLink(Player, long)}'s own
-     * post-POST re-check (round 7) only closes the gap up to the moment that method returns.
+     * {@link #requestPanelLink(Player, long)}'s own post-POST re-check only closes the gap up to
+     * the moment that method returns.
      * {@code PanelCommand}'s result-delivery callback runs later still -- it is itself scheduled
      * via {@code Bukkit.getScheduler().runTask(...)} after the worker thread's blocking HTTP call
      * already returned -- so an invalidation landing in that final gap (between {@code
@@ -1560,24 +1553,23 @@ public class LoginService {
      * Start polling the Worker API for auth completion.
      * Polls every 3 seconds for up to 5 minutes, then auto-cancels.
      * <p>
-     * Round 7 (Codex PR #18 thread 3946170644): {@code requestId} is the exact pending request
-     * this poll exists to confirm -- captured by the caller from {@link PanelLinkResult#getUrl()}
-     * '}s sibling {@link PanelLinkResult#getRequestId()} at the moment the link was published, not
-     * re-derived here. {@link #handlePanelPollCompleted(Player, String, boolean)} passes it
-     * straight through to {@link #completePanelLogin(String, boolean)}, which only ever resolves
-     * this exact id. Before this round, completion was resolved by scanning {@code
-     * pendingPanelRequests} for "whatever is currently pending" for this player -- if this poll's
-     * own request had already been cancelled (e.g. by an invalidation) but a newer, unrelated
-     * request happened to be pending for the same player by the time this poll's HTTP call
-     * returned "completed", that scan would pick up the newer request and authenticate through
-     * it instead of failing closed.
+     * {@code requestId} is the exact pending request this poll exists to confirm -- captured by
+     * the caller from {@link PanelLinkResult#getUrl()} '}s sibling {@link
+     * PanelLinkResult#getRequestId()} at the moment the link was published, not re-derived here.
+     * {@link #handlePanelPollCompleted(Player, String, boolean)} passes it straight through to
+     * {@link #completePanelLogin(String, boolean)}, which only ever resolves this exact id.
+     * Before this round, completion was resolved by scanning {@code pendingPanelRequests} for
+     * "whatever is currently pending" for this player -- if this poll's own request had already
+     * been cancelled (e.g. by an invalidation) but a newer, unrelated request happened to be
+     * pending for the same player by the time this poll's HTTP call returned "completed", that
+     * scan would pick up the newer request and authenticate through it instead of failing
+     * closed.
      * <p>
-     * Round 11 (Codex PR #18 thread 3947189541): {@code requestId} is also this poll's own key
-     * into {@code pollingTasks} (see that field's javadoc) -- every removal/cancellation this
-     * method's own scheduled runnable performs below is scoped to {@code requestId} specifically,
-     * never to "whatever task is currently stored for this player". Cancelling a task that was
-     * already superseded by a newer poll for the same player must never remove or cancel that
-     * newer poll's own task.
+     * {@code requestId} is also this poll's own key into {@code pollingTasks} (see that field's
+     * javadoc) -- every removal/cancellation this method's own scheduled runnable performs below
+     * is scoped to {@code requestId} specifically, never to "whatever task is currently stored
+     * for this player". Cancelling a task that was already superseded by a newer poll for the
+     * same player must never remove or cancel that newer poll's own task.
      *
      * @param playerUuid the player's UUID string
      * @param player the online player
@@ -1588,8 +1580,8 @@ public class LoginService {
         UUID uuid = player.getUniqueId();
 
         // A new poll always supersedes whichever request was previously current for this
-        // player -- resolved via currentPollingRequestId (round 11), not by scanning
-        // pollingTasks, since pollingTasks is now keyed by request id rather than player UUID.
+        // player -- resolved via currentPollingRequestId, not by scanning pollingTasks, since
+        // pollingTasks is now keyed by request id rather than player UUID.
         String previousRequestId = currentPollingRequestId.put(uuid, requestId);
         if (previousRequestId != null) {
             BukkitTask existing = pollingTasks.remove(previousRequestId);
@@ -1643,8 +1635,8 @@ public class LoginService {
                 }
 
                 // Auth completed -- remove/cancel only this poll's own task, keyed by its own
-                // request id (round 11): see the class-level javadoc on pollingTasks for why a
-                // stale, superseded poll's completion must never touch a replacement's task.
+                // request id: see the class-level javadoc on pollingTasks for why a stale,
+                // superseded poll's completion must never touch a replacement's task.
                 BukkitTask self = pollingTasks.remove(requestId);
                 if (self != null) {
                     self.cancel();
@@ -1682,24 +1674,23 @@ public class LoginService {
      * cleanup) runs on this same main thread, so whichever removal happened first is guaranteed
      * to be visible here.
      * <p>
-     * Fixes a P1 Codex reported on PR #18 (review comment 3944418953, against the
-     * deleted-account fix): the original implementation looked up the request ID once, on the
-     * same call stack as the async HTTP fetch, and treated "not found" as authorization to call
-     * {@link #completeLogin(Player)} directly -- bypassing {@link #completePanelLogin(String,
-     * boolean)} 's registration check entirely. {@link BukkitTask#cancel()} only prevents a
-     * scheduled task's future executions; it does not interrupt an invocation already inside
-     * its HTTP call. A poll that started before an admin reset or unregister could therefore
-     * still observe "completed" and re-authenticate an online player after their credentials
-     * were revoked or their account deleted -- undoing {@code forceReauthenticationIfOnline} in
-     * the same stroke.
+     * Fixes a defect found in review of PR #18 (against the deleted-account fix): the original
+     * implementation looked up the request ID once, on the same call stack as the async HTTP
+     * fetch, and treated "not found" as authorization to call {@link #completeLogin(Player)}
+     * directly -- bypassing {@link #completePanelLogin(String, boolean)} 's registration check
+     * entirely. {@link BukkitTask#cancel()} only prevents a scheduled task's future executions;
+     * it does not interrupt an invocation already inside its HTTP call. A poll that started
+     * before an admin reset or unregister could therefore still observe "completed" and
+     * re-authenticate an online player after their credentials were revoked or their account
+     * deleted -- undoing {@code forceReauthenticationIfOnline} in the same stroke.
      * <p>
-     * Round 2's fix (comment 3944418953) replaced that with a fresh lookup at this main-thread
-     * completion point, scanning {@code pendingPanelRequests} for whichever entry was pending for
-     * this player -- an improvement, but still not keyed on this specific poll's own request.
-     * Round 7 (Codex PR #18 thread 3946170644) found that scan could pick up an unrelated,
-     * <em>newer</em> request for the same player: if this poll's original request had already
-     * been cancelled but the player had since started a fresh {@code /panel} request, the stale
-     * "completed" observation would authenticate through the newer request instead of failing.
+     * An earlier fix replaced that with a fresh lookup at this main-thread completion point,
+     * scanning {@code pendingPanelRequests} for whichever entry was pending for this player --
+     * an improvement, but still not keyed on this specific poll's own request.
+     * A review of PR #18 found that scan could pick up an unrelated, <em>newer</em> request for
+     * the same player: if this poll's original request had already been cancelled but the
+     * player had since started a fresh {@code /panel} request, the stale "completed"
+     * observation would authenticate through the newer request instead of failing.
      * Passing {@code requestId} straight through from {@link #startAuthPolling(String, Player,
      * String)} removes the scan entirely -- absence of exactly this id in {@code
      * pendingPanelRequests} (checked inside {@link #completePanelLogin(String, boolean)}) means
@@ -1837,7 +1828,7 @@ public class LoginService {
          *                  that goes on to poll for completion (see {@link #startAuthPolling
          *                  (String, Player, String)}) keys its poll on the exact request this
          *                  result corresponds to -- never on "whatever is currently pending" for
-         *                  the player. Round 7 (Codex PR #18 thread 3946170644) found the latter
+         *                  the player. A review of PR #18 found the latter
          *                  could pick up an unrelated, newer request. {@code null} for a failed
          *                  result, since there is nothing to poll for.
          */
