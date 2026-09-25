@@ -306,9 +306,9 @@ public class LoginConfig extends AbstractConfigEntity {
      * UltiKits/UltiLogin#20): each setting whose value is still built-in text -- the default an earlier
      * version shipped, or its colour code plus this jar's text for it in any language -- and differs
      * from the current text is replaced with its colour code plus {@code text}'s current text, when that
-     * text fits the setting's own limits. Any other value is the operator's and is kept. Idempotent. Must run after the module's language is loaded
-     * ({@code registerSelf()} and {@code onReload()}), never from a change listener; the caller saves
-     * the file when this returns {@code true}.
+     * text fits the setting's own limits. Any other value is the operator's and is kept. Idempotent.
+     * Must run after the module's language is loaded ({@code registerSelf()} and {@code onReload()}),
+     * never from a change listener; the caller saves the file when this returns {@code true}.
      *
      * @param text the module's {@code i18n}: catalogue key to text in the server's language
      * @return whether any value was rewritten
