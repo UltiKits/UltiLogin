@@ -70,6 +70,35 @@ class UltiLoginLanguageCatalogueTest {
      * entry: its callers are themselves {@code i18n(} calls and are checked one by one.
      */
     static final List<DynamicSite> DYNAMIC_KEY_SITES = Collections.unmodifiableList(Arrays.<DynamicSite>asList(
+            new DynamicSite("src/main/java/com/ultikits/plugins/login/UltiLogin.java",
+                    "::i18n",
+                    "UltiLogin#writeConfigTextInServerLanguage passes this::i18n to LoginConfig#materializeText, "
+                            + "which asks it for exactly the catalogue key of each of the 24 GUI titles and messages "
+                            + "(maintainer decision 2026-09-25, config text written in the server's language)",
+                    "gui_enter_password",
+                    "gui_set_password",
+                    "gui_confirm_password",
+                    "register_prompt",
+                    "register_prompt_gui",
+                    "login_prompt",
+                    "login_prompt_gui",
+                    "register_success",
+                    "login_success",
+                    "already_logged",
+                    "not_registered",
+                    "already_registered",
+                    "password_mismatch",
+                    "password_too_short",
+                    "password_too_long",
+                    "timeout_kick",
+                    "account_locked",
+                    "attempts_remaining",
+                    "gui_password_invalid",
+                    "admin_password_reset",
+                    "admin_force_login",
+                    "admin_unregister",
+                    "admin_player_not_found",
+                    "admin_account_not_found"),
             new DynamicSite("src/main/java/com/ultikits/plugins/login/commands/EmailBindCommand.java",
                     "result.getMessageKey()",
                     "/regs <email>: EmailVerificationService#requestEmailBind returns a BindResult "
