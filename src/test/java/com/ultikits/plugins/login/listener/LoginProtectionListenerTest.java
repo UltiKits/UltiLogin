@@ -217,6 +217,33 @@ class LoginProtectionListenerTest {
             assertThat(event.getTo()).isEqualTo(from);
         }
 
+        /**
+         * UltiKits/UltiLogin#33: a player steering a vehicle is moved through the same
+         * {@link PlayerMoveEvent} (Paper 1.21.11 fires it from
+         * {@code ServerGamePacketListenerImpl#handleMoveVehicle} for the controlling rider, measured
+         * with {@code javap -c}), and the handler's {@code setTo(from)} makes the server teleport the
+         * rider back, which dismounts them. This pins that the handler reverts a move whatever the
+         * player is riding: a vehicle exemption added to it would make this fail.
+         */
+        @Test
+        @DisplayName("Should block movement of a player riding a vehicle when not logged in (UltiKits/UltiLogin#33)")
+        void blockWhenRidingAVehicle() {
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+            org.bukkit.entity.Boat boat = mock(org.bukkit.entity.Boat.class);
+            lenient().when(player.isInsideVehicle()).thenReturn(true);
+            lenient().when(player.getVehicle()).thenReturn(boat);
+            lenient().when(boat.getPassengers()).thenReturn(java.util.Collections.singletonList(player));
+
+            org.bukkit.Location from = createMockLocation(0, 62, 0);
+            org.bukkit.Location to = createMockLocation(3, 62, 1);
+
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from, to);
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.getTo()).isEqualTo(from);
+        }
+
         @Test
         @DisplayName("Should allow looking around (no block change)")
         void allowLooking() {
@@ -440,22 +467,6 @@ class LoginProtectionListenerTest {
     class OnInventoryClick {
 
         @Test
-        @DisplayName("Should allow login GUI interaction")
-        void allowLoginGui() {
-            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
-
-            org.bukkit.event.inventory.InventoryClickEvent event = mock(org.bukkit.event.inventory.InventoryClickEvent.class);
-            org.bukkit.inventory.InventoryView view = mock(org.bukkit.inventory.InventoryView.class);
-            when(event.getWhoClicked()).thenReturn(player);
-            when(event.getView()).thenReturn(view);
-            when(view.getTitle()).thenReturn("\u00a76请输入密码");
-
-            listener.onInventoryClick(event);
-
-            verify(event, never()).setCancelled(true);
-        }
-
-        @Test
         @DisplayName("Should block other inventory interaction")
         void blockOtherInventory() {
             when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
@@ -473,14 +484,13 @@ class LoginProtectionListenerTest {
     }
 
     /**
-     * The credential GUI is recognised by the titles it is actually opened with, whatever language
-     * they are in (UltiKits/UltiLogin#20). Before the language sweep the allowance was "the title
-     * contains 密码, 登录 or 注册": under {@code language: en} the GUI's own English title matched none
-     * of them, so every keypad click was cancelled, while any other plugin's inventory whose title
-     * contained one of those words was let through.
+     * A title alone never opens anything to an unauthenticated player. The allowance used to be
+     * "the title contains 密码, 登录 or 注册", then (UltiKits/UltiLogin#20) "the title equals one of the
+     * three configured titles"; since UltiKits/UltiLogin#35 it is decided by identity, and the
+     * allowed cases are pinned against the real GUI library in {@code CredentialGuiIdentityTest}.
      */
     @Nested
-    @DisplayName("credential GUI recognised by its resolved titles, in any language (UltiKits/UltiLogin#20)")
+    @DisplayName("a title alone is not the credential GUI (UltiKits/UltiLogin#20, #35)")
     class CredentialGuiTitles {
 
         private org.bukkit.event.inventory.InventoryClickEvent clickIn(String title) {
@@ -510,31 +520,6 @@ class LoginProtectionListenerTest {
         }
 
         @Test
-        @DisplayName("keypad clicks in each English credential GUI title are allowed")
-        void englishTitlesAllowed() {
-            for (String title : new String[]{"\u00a76Enter Password", "\u00a76Set Password", "\u00a76Confirm Password"}) {
-                org.bukkit.event.inventory.InventoryClickEvent click = clickIn(title);
-                org.bukkit.event.inventory.InventoryOpenEvent open = openOf(title);
-
-                listener.onInventoryClick(click);
-                listener.onInventoryOpen(open);
-
-                verify(click, never()).setCancelled(true);
-                verify(open, never()).setCancelled(true);
-            }
-        }
-
-        @Test
-        @DisplayName("a title the server echoes with its colour codes rewritten is still the credential GUI")
-        void normalisedColourCodesAllowed() {
-            org.bukkit.event.inventory.InventoryClickEvent click = clickIn("\u00a76\u00a7rEnter Password");
-
-            listener.onInventoryClick(click);
-
-            verify(click, never()).setCancelled(true);
-        }
-
-        @Test
         @DisplayName("another inventory whose title merely contains 登录 is refused")
         void foreignTitleRefused() {
             org.bukkit.event.inventory.InventoryClickEvent click = clickIn("\u00a76登录奖励");
@@ -551,22 +536,6 @@ class LoginProtectionListenerTest {
     @Nested
     @DisplayName("onInventoryOpen")
     class OnInventoryOpen {
-
-        @Test
-        @DisplayName("Should allow login GUI opening")
-        void allowLoginGui() {
-            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
-
-            org.bukkit.event.inventory.InventoryOpenEvent event = mock(org.bukkit.event.inventory.InventoryOpenEvent.class);
-            org.bukkit.inventory.InventoryView view = mock(org.bukkit.inventory.InventoryView.class);
-            when(event.getPlayer()).thenReturn(player);
-            when(event.getView()).thenReturn(view);
-            when(view.getTitle()).thenReturn("\u00a76请设置密码");
-
-            listener.onInventoryOpen(event);
-
-            verify(event, never()).setCancelled(true);
-        }
 
         @Test
         @DisplayName("Should block other inventory opening")
@@ -614,22 +583,6 @@ class LoginProtectionListenerTest {
             listener.onInventoryOpen(event);
 
             // Should not interact since the cast (Player) won't apply
-            verify(event, never()).setCancelled(true);
-        }
-
-        @Test
-        @DisplayName("Should allow login GUI with title containing login keyword")
-        void allowLoginKeyword() {
-            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
-
-            org.bukkit.event.inventory.InventoryOpenEvent event = mock(org.bukkit.event.inventory.InventoryOpenEvent.class);
-            org.bukkit.inventory.InventoryView view = mock(org.bukkit.inventory.InventoryView.class);
-            when(event.getPlayer()).thenReturn(player);
-            when(event.getView()).thenReturn(view);
-            when(view.getTitle()).thenReturn("\u00a76请再次输入密码");
-
-            listener.onInventoryOpen(event);
-
             verify(event, never()).setCancelled(true);
         }
     }
@@ -794,38 +747,6 @@ class LoginProtectionListenerTest {
             org.bukkit.event.inventory.InventoryClickEvent event = mock(org.bukkit.event.inventory.InventoryClickEvent.class);
             org.bukkit.entity.HumanEntity humanEntity = mock(org.bukkit.entity.HumanEntity.class);
             when(event.getWhoClicked()).thenReturn(humanEntity);
-
-            listener.onInventoryClick(event);
-
-            verify(event, never()).setCancelled(true);
-        }
-
-        @Test
-        @DisplayName("Should allow register GUI interaction")
-        void allowRegisterGui() {
-            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
-
-            org.bukkit.event.inventory.InventoryClickEvent event = mock(org.bukkit.event.inventory.InventoryClickEvent.class);
-            org.bukkit.inventory.InventoryView view = mock(org.bukkit.inventory.InventoryView.class);
-            when(event.getWhoClicked()).thenReturn(player);
-            when(event.getView()).thenReturn(view);
-            when(view.getTitle()).thenReturn("\u00a76请设置密码");
-
-            listener.onInventoryClick(event);
-
-            verify(event, never()).setCancelled(true);
-        }
-
-        @Test
-        @DisplayName("Should allow login GUI with login keyword")
-        void allowLoginKeyword() {
-            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
-
-            org.bukkit.event.inventory.InventoryClickEvent event = mock(org.bukkit.event.inventory.InventoryClickEvent.class);
-            org.bukkit.inventory.InventoryView view = mock(org.bukkit.inventory.InventoryView.class);
-            when(event.getWhoClicked()).thenReturn(player);
-            when(event.getView()).thenReturn(view);
-            when(view.getTitle()).thenReturn("\u00a76请再次输入密码");
 
             listener.onInventoryClick(event);
 
@@ -1052,6 +973,106 @@ class LoginProtectionListenerTest {
             task.run();
 
             verify(player).sendMessage(anyString());
+        }
+    }
+
+    /**
+     * UltiKits/UltiLogin#41: an unauthenticated player who rides without steering is carried by the
+     * vehicle, and {@link PlayerMoveEvent} is not fired for that motion (Paper fires it only for the
+     * controlling rider), measured on a real server. An unauthenticated player therefore rides
+     * nothing: a mount is refused, a vehicle restored after the join is left one tick later, and a
+     * moving vehicle drops an unauthenticated passenger.
+     */
+    @Nested
+    @DisplayName("an unauthenticated player rides nothing (UltiKits/UltiLogin#41)")
+    class UnauthenticatedPassenger {
+
+        private org.bukkit.entity.Minecart cart;
+
+        @BeforeEach
+        void setUpCart() {
+            cart = mock(org.bukkit.entity.Minecart.class);
+        }
+
+        @Test
+        @DisplayName("mounting a vehicle is refused while not logged in")
+        void mountRefused() {
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+            org.bukkit.event.entity.EntityMountEvent event = new org.bukkit.event.entity.EntityMountEvent(player, cart);
+
+            listener.onEntityMount(event);
+
+            assertThat(event.isCancelled()).isTrue();
+        }
+
+        @Test
+        @DisplayName("mounting is allowed once logged in")
+        void mountAllowedWhenLoggedIn() {
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(true);
+            org.bukkit.event.entity.EntityMountEvent event = new org.bukkit.event.entity.EntityMountEvent(player, cart);
+
+            listener.onEntityMount(event);
+
+            assertThat(event.isCancelled()).isFalse();
+        }
+
+        @Test
+        @DisplayName("a mob mounting is none of this module's business")
+        void nonPlayerMountIgnored() {
+            org.bukkit.entity.Zombie zombie = mock(org.bukkit.entity.Zombie.class);
+            org.bukkit.event.entity.EntityMountEvent event = new org.bukkit.event.entity.EntityMountEvent(zombie, cart);
+
+            listener.onEntityMount(event);
+
+            assertThat(event.isCancelled()).isFalse();
+        }
+
+        @Test
+        @DisplayName("a moving vehicle drops its unauthenticated passenger and keeps a logged-in one")
+        void movingVehicleDropsUnauthenticatedPassenger() {
+            Player loggedIn = UltiLoginTestHelper.createMockPlayer("Driver", UUID.randomUUID());
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+            when(loginService.isLoggedIn(loggedIn.getUniqueId())).thenReturn(true);
+            when(cart.getPassengers()).thenReturn(java.util.Arrays.<org.bukkit.entity.Entity>asList(loggedIn, player));
+            org.bukkit.Location from = mock(org.bukkit.Location.class);
+            org.bukkit.Location to = mock(org.bukkit.Location.class);
+
+            listener.onVehicleMove(new org.bukkit.event.vehicle.VehicleMoveEvent(cart, from, to));
+
+            verify(cart).removePassenger(player);
+            verify(cart, never()).removePassenger(loggedIn);
+        }
+
+        @Test
+        @DisplayName("one tick after joining, a player still riding and not logged in is dismounted")
+        void joinDismountsTheRestoredVehicle() {
+            when(config.isGuiModeEnabled()).thenReturn(false);
+            listener.onPlayerJoin(new PlayerJoinEvent(player, "join message"));
+            ArgumentCaptor<Runnable> captor = ArgumentCaptor.forClass(Runnable.class);
+            verify(mockScheduler).runTaskLater(any(), captor.capture(), eq(1L));
+            when(player.isOnline()).thenReturn(true);
+            when(player.isInsideVehicle()).thenReturn(true);
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+
+            captor.getValue().run();
+
+            verify(player).leaveVehicle();
+        }
+
+        @Test
+        @DisplayName("one tick after joining, a player logged in by their session keeps their seat")
+        void joinKeepsTheSeatOfALoggedInPlayer() {
+            when(config.isGuiModeEnabled()).thenReturn(false);
+            listener.onPlayerJoin(new PlayerJoinEvent(player, "join message"));
+            ArgumentCaptor<Runnable> captor = ArgumentCaptor.forClass(Runnable.class);
+            verify(mockScheduler).runTaskLater(any(), captor.capture(), eq(1L));
+            when(player.isOnline()).thenReturn(true);
+            when(player.isInsideVehicle()).thenReturn(true);
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(true);
+
+            captor.getValue().run();
+
+            verify(player, never()).leaveVehicle();
         }
     }
 

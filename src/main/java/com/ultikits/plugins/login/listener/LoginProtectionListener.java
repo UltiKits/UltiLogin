@@ -2,10 +2,12 @@ package com.ultikits.plugins.login.listener;
 
 import com.ultikits.plugins.login.gui.LoginGUIPage;
 import com.ultikits.plugins.login.gui.RegisterGUIPage;
-import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.service.LoginService;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.EventListener;
+
+import mc.obliviate.inventory.Gui;
+import mc.obliviate.inventory.InventoryAPI;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -20,13 +22,20 @@ import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.block.SignChangeEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.EntityMountEvent;
 import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.*;
+import org.bukkit.event.vehicle.VehicleMoveEvent;
+import org.bukkit.entity.Entity;
+import org.bukkit.inventory.Inventory;
 
+import java.util.ArrayList;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Listener for login protection.
@@ -115,6 +124,15 @@ public class LoginProtectionListener implements Listener {
     private final LoginService loginService;
     private final Plugin bukkitPlugin;
 
+    /**
+     * Players whose join has not had its first tick yet. Paper restores the vehicle of a player who
+     * quit while riding in that tick, after {@link PlayerJoinEvent}; refusing that mount makes Paper
+     * discard the vehicle and everything riding it, so {@link #onEntityMount} lets it through for
+     * these players and the one-tick task in {@link #onPlayerJoin} takes an unauthenticated player
+     * off the vehicle instead (UltiKits/UltiLogin#41).
+     */
+    private final Set<UUID> inJoinTick = ConcurrentHashMap.newKeySet();
+
     public LoginProtectionListener(UltiToolsPlugin plugin, LoginService loginService) {
         this.plugin = plugin;
         this.loginService = loginService;
@@ -125,6 +143,22 @@ public class LoginProtectionListener implements Listener {
     public void onPlayerJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
         loginService.onPlayerJoin(player);
+
+        // A player who quit while riding is put back in the vehicle AFTER this event: Paper 1.21.11's
+        // PrepareSpawnTask$Ready calls PlayerList#placeNewPlayer (which fires this event) and only
+        // then ServerPlayer#loadAndSpawnParentVehicle (read with javap -c). That mount must not be
+        // refused -- Paper would then discard the vehicle and everything riding it (offsets 172-232)
+        // -- so it is let through during this tick, and one tick later a player who is still riding
+        // and not logged in is taken off the vehicle, which stays where it is (UltiKits/UltiLogin#41).
+        UUID joining = player.getUniqueId();
+        inJoinTick.add(joining);
+        Bukkit.getScheduler().runTaskLater(bukkitPlugin, () -> {
+            inJoinTick.remove(joining);
+            if (player.isOnline() && player.isInsideVehicle()
+                    && !loginService.isLoggedIn(joining)) {
+                player.leaveVehicle();
+            }
+        }, 1L);
         
         // Open GUI if enabled (with delay for proper loading)
         if (loginService.getConfig().isGuiModeEnabled()) {
@@ -147,6 +181,7 @@ public class LoginProtectionListener implements Listener {
     
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
+        inJoinTick.remove(event.getPlayer().getUniqueId());
         loginService.onPlayerQuit(event.getPlayer());
     }
     
@@ -161,6 +196,50 @@ public class LoginProtectionListener implements Listener {
         }
     }
     
+    /**
+     * Refuse a mount by an unauthenticated player (UltiKits/UltiLogin#41).
+     * <p>
+     * {@link #onPlayerMove} holds a walking player in place, and a player steering a vehicle too:
+     * Paper fires {@link PlayerMoveEvent} for the rider who controls the vehicle. A passenger who does
+     * not steer — a minecart rider, a boat's second seat, a rider carried by rails or water — gets no
+     * such event, and the vehicle's own motion carried an unauthenticated player across blocks
+     * (the carriage measured on a real server, 2026-09-25; the missing event read from the server's
+     * bytecode). So an unauthenticated player rides nothing.
+     * <p>
+     * One mount is let through: the vehicle Paper restores in the join tick for a player who quit
+     * while riding ({@code Entity#startRiding} fires this event for it too). Refusing it makes Paper
+     * discard the vehicle and its riders, so the player is taken off it one tick later instead
+     * ({@link #onPlayerJoin}).
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onEntityMount(EntityMountEvent event) {
+        if (event.getEntity() instanceof Player) {
+            Player player = (Player) event.getEntity();
+            if (!inJoinTick.contains(player.getUniqueId())) {
+                cancelIfNotLoggedIn(player, event);
+            }
+        }
+    }
+
+    /**
+     * Drop an unauthenticated passenger from a moving minecart or boat (UltiKits/UltiLogin#41).
+     * <p>
+     * A backstop for {@link #onEntityMount} and the one-tick check after a join: whatever put an
+     * unauthenticated player into a vehicle, the vehicle does not carry them. {@link VehicleMoveEvent}
+     * cannot be cancelled, and holding the vehicle back would also hold back its other riders, so the
+     * unauthenticated passenger is dismounted instead — what {@link #onPlayerMove} already does to an
+     * unauthenticated player who steers (the server's teleport back dismounts them).
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onVehicleMove(VehicleMoveEvent event) {
+        // A copy: removing a passenger must not disturb the list being walked.
+        for (Entity passenger : new ArrayList<>(event.getVehicle().getPassengers())) {
+            if (passenger instanceof Player && !loginService.isLoggedIn(passenger.getUniqueId())) {
+                event.getVehicle().removePassenger(passenger);
+            }
+        }
+    }
+
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerChat(AsyncPlayerChatEvent event) {
         if (shouldCancel(event.getPlayer())) {
@@ -190,15 +269,28 @@ public class LoginProtectionListener implements Listener {
         cancelIfNotLoggedIn(event.getPlayer(), event);
     }
     
+    /**
+     * Cancel an inventory click for an unauthenticated player, except a click on the credential GUI
+     * itself.
+     * <p>
+     * The allowance is decided by what the open GUI is, not by what its title says
+     * (UltiKits/UltiLogin#35): the view's top inventory must be the inventory of the player's current
+     * {@link LoginGUIPage} or {@link RegisterGUIPage}, and the click must land in that top inventory.
+     * A view's title covers the whole view, including the player's own inventory rows, so a title
+     * test let an unauthenticated player rearrange, merge or split their own stacks while the keypad
+     * was open; it also let any other inventory titled like the keypad through, and refused the
+     * keypad itself under a title the check did not know. A click outside the window has no clicked
+     * inventory and is refused too.
+     */
     @EventHandler(priority = EventPriority.LOWEST)
     public void onInventoryClick(InventoryClickEvent event) {
         if (event.getWhoClicked() instanceof Player) {
             Player player = (Player) event.getWhoClicked();
-            // Allow GUI interactions for login/register GUI
             if (!loginService.isLoggedIn(player.getUniqueId())) {
-                String title = event.getView().getTitle();
-                // Allow clicking in login/register GUI
-                if (!isCredentialGuiTitle(title)) {
+                Inventory top = event.getView().getTopInventory();
+                boolean inCredentialGui = isCredentialGuiInventory(player, top)
+                        && top.equals(event.getClickedInventory());
+                if (!inCredentialGui) {
                     event.setCancelled(true);
                 }
             }
@@ -227,7 +319,7 @@ public class LoginProtectionListener implements Listener {
      * real-server run measured that premise and disproved it.
      * <p>
      * Unlike {@link #onInventoryClick} this deliberately does <em>not</em> mirror the credential-GUI
-     * title allowance. A drag cannot enter a digit into {@code LoginGUIPage}/{@code RegisterGUIPage},
+     * allowance. A drag cannot enter a digit into {@code LoginGUIPage}/{@code RegisterGUIPage},
      * so allowing it buys no functionality; and because the credential GUI's view includes the
      * player's own inventory rows, allowing drags there would let an unauthenticated player
      * rearrange their items and push stacks toward the GUI's container slots. Cancelling
@@ -241,43 +333,45 @@ public class LoginProtectionListener implements Listener {
     }
 
     /**
-     * Whether {@code title} is one of the titles the credential GUI is opened with: the login title,
-     * the register title, or the confirm title {@code RegisterGUIPage} switches to. Compared with the
-     * resolved titles, by their words, so the allowance holds in every language and for an operator's
-     * own titles (UltiKits/UltiLogin#20). It used to test whether
-     * the title contained 密码, 登录 or 注册: that refused every keypad click under an English title,
-     * and let an unauthenticated player click in any other inventory whose title held one of those
-     * words.
+     * Whether {@code inventory} is the inventory of the credential GUI {@code player} currently has
+     * open: the GUI library's current GUI for the player is a {@link LoginGUIPage} or
+     * {@link RegisterGUIPage}, and {@code inventory} is that page's own inventory
+     * (UltiKits/UltiLogin#35).
+     * <p>
+     * The GUI library registers a page as the player's current GUI before it opens the page's
+     * inventory ({@code Gui#open()} in obliviate-invs 4.3.0, read with {@code javap -c}: the
+     * {@code HashMap#put} into {@code InventoryAPI#getPlayers()} at offset 64 precedes
+     * {@code Player#openInventory} at offset 126), so this already holds when the page's own
+     * {@code InventoryOpenEvent} fires. The page's inventory has no holder ({@code createInventory}
+     * is passed {@code null}), which is why the holder cannot be used instead.
+     * <p>
+     * It replaced a comparison of the view's title with the three configured titles
+     * (UltiKits/UltiLogin#20), and before that a test for three Chinese words in the title.
      */
-    private boolean isCredentialGuiTitle(String title) {
-        if (title == null) {
+    private static boolean isCredentialGuiInventory(Player player, Inventory inventory) {
+        if (inventory == null) {
             return false;
         }
-        LoginConfig config = loginService.getConfig();
-        String shown = ChatColor.stripColor(title);
-        return shown.equals(words(config.getGuiLoginTitle()))
-                || shown.equals(words(config.getGuiRegisterTitle()))
-                || shown.equals(words(config.getGuiConfirmTitle()));
+        InventoryAPI api = InventoryAPI.getInstance();
+        if (api == null) {
+            return false;
+        }
+        Gui gui = api.getPlayersCurrentGui(player);
+        return (gui instanceof LoginGUIPage || gui instanceof RegisterGUIPage)
+                && inventory.equals(gui.getInventory());
     }
 
     /**
-     * A title as it reads: colour codes applied, then stripped. Compared without its colour codes,
-     * because a server may echo a title's codes rewritten.
+     * Cancel an inventory open for an unauthenticated player unless it is the credential GUI's own
+     * inventory, decided by identity as in {@link #onInventoryClick} (UltiKits/UltiLogin#35).
      */
-    private static String words(String text) {
-        return text == null ? null : ChatColor.stripColor(ChatColor.translateAlternateColorCodes('&', text));
-    }
-
     @EventHandler(priority = EventPriority.LOWEST)
     public void onInventoryOpen(InventoryOpenEvent event) {
         if (event.getPlayer() instanceof Player) {
             Player player = (Player) event.getPlayer();
-            // Allow opening login/register GUI
-            if (!loginService.isLoggedIn(player.getUniqueId())) {
-                String title = event.getView().getTitle();
-                if (!isCredentialGuiTitle(title)) {
-                    event.setCancelled(true);
-                }
+            if (!loginService.isLoggedIn(player.getUniqueId())
+                    && !isCredentialGuiInventory(player, event.getInventory())) {
+                event.setCancelled(true);
             }
         }
     }
