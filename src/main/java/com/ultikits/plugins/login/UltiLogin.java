@@ -1,11 +1,13 @@
 package com.ultikits.plugins.login;
 
+import com.ultikits.plugins.login.config.ConfigTextDefaults;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.config.RemovedConfigKeys;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
 
 import java.io.File;
+import java.io.IOException;
 
 /**
  * UltiLogin - Player login and registration system.
@@ -31,10 +33,11 @@ public class UltiLogin extends UltiToolsPlugin {
 
     @Override
     public boolean registerSelf() {
-        getLogger().info(i18n("UltiLogin 已启用！"));
+        getLogger().info(i18n("login_enabled"));
         // Deleting a key from LoginConfig does nothing to the operator's existing file, so tell
         // them about any key this version no longer reads (UltiKits/UltiLogin#23).
         warnAboutRemovedConfigKeys();
+        writeConfigTextInServerLanguage();
         return true;
     }
 
@@ -46,16 +49,40 @@ public class UltiLogin extends UltiToolsPlugin {
     @Override
     protected void onReload() {
         warnAboutRemovedConfigKeys();
+        writeConfigTextInServerLanguage();
+    }
+
+    /**
+     * Writes every GUI title and message in {@code login.yml} that is still built-in text in the
+     * server's language and saves the file once, so the file holds what the module sends; any other
+     * value is the operator's and is kept (maintainer decision 2026-09-25, UltiKits/UltiLogin#20). Runs
+     * from {@link #registerSelf()} and from {@link #onReload()}, both after the module's language is
+     * loaded -- never from a configuration change listener, which the framework fires before it reloads
+     * the language. A value already in the current language matches nothing to replace, so a second
+     * start writes nothing.
+     * The text comes from this jar's own catalogue for the server's language, not from {@code i18n} (which
+     * reads the operator's extracted language file first), so every value written is one the next pass
+     * recognises.
+     */
+    private void writeConfigTextInServerLanguage() {
+        LoginConfig config = getConfig(LoginConfig.class);
+        if (config == null || !config.materializeText(ConfigTextDefaults.jarLanguage(LoginConfig.class, getLanguageCode())::getLocalizedText)) {
+            return;
+        }
+        try {
+            config.save();
+        } catch (IOException e) {
+            getLogger().warn(e, i18n("log_config_default_save_failed").replace("{FILE}", LoginConfig.CONFIG_FILE));
+        }
     }
 
     private void warnAboutRemovedConfigKeys() {
         // Advisory only: this runs on the enable path of the module whose absence means nobody is
         // asked to log in, so nothing it throws may cost the module its enable or its reload.
         try {
-            RemovedConfigKeys.warnAboutLeftovers(operatorConfigFile(), getLogger()::warn);
+            RemovedConfigKeys.warnAboutLeftovers(operatorConfigFile(), getLogger()::warn, this);
         } catch (RuntimeException e) {
-            getLogger().warn(e, "Could not check " + LoginConfig.CONFIG_FILE
-                    + " for removed configuration keys; the module continues without that check.");
+            getLogger().warn(e, i18n("log_removed_key_check_failed").replace("{FILE}", LoginConfig.CONFIG_FILE));
         }
     }
 

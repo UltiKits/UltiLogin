@@ -68,9 +68,9 @@ public class RegisterGUIPage extends Gui {
     
     @Override
     public void onOpen(InventoryOpenEvent event) {
-        // Round 10 (Codex PR #18 thread 3946842965): mark this player as having a credential GUI
-        // open, so a delayed reopen queued by a previous close of this or the login GUI (see
-        // onClose below) refuses to stack a second one on top of this one.
+        // Mark this player as having a credential GUI open, so a delayed reopen queued by a
+        // previous close of this or the login GUI (see onClose below) refuses to stack a second
+        // one on top of this one.
         loginService.markCredentialGuiOpen(player.getUniqueId());
 
         // Fill background
@@ -99,23 +99,22 @@ public class RegisterGUIPage extends Gui {
     public void onClose(InventoryCloseEvent event) {
         UUID uuid = player.getUniqueId();
 
-        // Round 10 (Codex PR #18 thread 3946842965): this GUI is genuinely closing regardless of
-        // why -- clear the "credential GUI open" marker unconditionally, before the transition
-        // check below -- see LoginGUIPage#onClose for the full explanation (symmetric other half).
+        // This GUI is genuinely closing regardless of why -- clear the "credential GUI open"
+        // marker unconditionally, before the transition check below -- see LoginGUIPage#onClose
+        // for the full explanation (symmetric other half).
         loginService.markCredentialGuiClosed(uuid);
 
-        // Round 9 (Codex PR #18 thread 3946574852, P2): skip entirely while
-        // LoginProtectionListener.presentCredentialPrompt is mid-transition to a different
-        // credential GUI for this player -- see LoginGUIPage#onClose for the full explanation of
-        // why (this is the symmetric other half of that same fix).
+        // Skip entirely while LoginProtectionListener.presentCredentialPrompt is mid-transition
+        // to a different credential GUI for this player -- see LoginGUIPage#onClose for the full
+        // explanation of why (this is the symmetric other half of that same fix).
         if (loginService.isCredentialGuiTransitioning(uuid)) {
             return;
         }
 
         // If not registered, reopen GUI after a short delay
         if (!loginService.isRegistered(uuid)) {
-            // Round 10 (Codex PR #18 thread 3946842965): see LoginGUIPage#onClose for why this
-            // task is tracked and re-checked fresh at fire time (symmetric other half of that fix).
+            // See LoginGUIPage#onClose for why this task is tracked and re-checked fresh at fire
+            // time (symmetric other half of that fix).
             BukkitTask task = org.bukkit.Bukkit.getScheduler().runTaskLater(
                 bukkitPlugin,
                 () -> {
@@ -168,7 +167,7 @@ public class RegisterGUIPage extends Gui {
             setTitle(ChatColor.translateAlternateColorCodes('&', config.getGuiConfirmTitle()));
             
             updatePasswordDisplay();
-            player.sendMessage(ChatColor.YELLOW + "请再次输入密码进行确认");
+            player.sendMessage(ChatColor.translateAlternateColorCodes('&', plugin.i18n("gui_register_confirm_prompt")));
         } else {
             // Second phase: confirm password
             if (password.equals(firstPassword)) {
@@ -177,7 +176,7 @@ public class RegisterGUIPage extends Gui {
                     player.closeInventory();
                     player.sendMessage(ChatColor.translateAlternateColorCodes('&', config.getRegisterSuccess()));
                 } else {
-                    player.sendMessage(ChatColor.RED + "注册失败！请联系管理员。");
+                    player.sendMessage(ChatColor.translateAlternateColorCodes('&', plugin.i18n("register_failed")));
                     resetToFirstPhase();
                 }
             } else {
@@ -207,9 +206,9 @@ public class RegisterGUIPage extends Gui {
         ItemMeta meta = display.getItemMeta();
         if (meta != null) {
             if (confirmPhase) {
-                meta.setDisplayName(ChatColor.GOLD + "确认密码");
+                meta.setDisplayName(ChatColor.GOLD + plugin.i18n("gui_display_confirm"));
             } else {
-                meta.setDisplayName(ChatColor.GOLD + "设置密码");
+                meta.setDisplayName(ChatColor.GOLD + plugin.i18n("gui_display_set"));
             }
             
             List<String> lore = new ArrayList<>();
@@ -229,14 +228,17 @@ public class RegisterGUIPage extends Gui {
             }
             lore.add(ChatColor.WHITE + masked.toString());
             lore.add("");
-            lore.add(ChatColor.GRAY + "已输入 " + passwordInput.length() + "/" + passwordLength + " 位");
+            lore.add(ChatColor.GRAY + plugin.i18n("gui_entered")
+                .replace("{CURRENT}", String.valueOf(passwordInput.length()))
+                .replace("{TOTAL}", String.valueOf(passwordLength)));
             
             if (confirmPhase) {
                 lore.add("");
-                lore.add(ChatColor.YELLOW + "请再次输入刚才的密码");
+                lore.add(ChatColor.YELLOW + plugin.i18n("gui_register_repeat_hint"));
             } else {
                 lore.add("");
-                lore.add(ChatColor.YELLOW + "请输入 " + passwordLength + " 位数字密码");
+                lore.add(ChatColor.YELLOW + plugin.i18n("gui_register_digits_hint")
+                    .replace("{LENGTH}", String.valueOf(passwordLength)));
             }
             
             meta.setLore(lore);
@@ -276,9 +278,9 @@ public class RegisterGUIPage extends Gui {
         ItemStack glass = XVersionUtils.getColoredPlaneGlass(Colors.GREEN);
         ItemMeta meta = glass.getItemMeta();
         if (meta != null) {
-            meta.setDisplayName(ChatColor.GREEN + "" + ChatColor.BOLD + "确认");
+            meta.setDisplayName(ChatColor.GREEN + "" + ChatColor.BOLD + plugin.i18n("gui_confirm_button"));
             List<String> lore = new ArrayList<>();
-            lore.add(ChatColor.GRAY + "点击确认当前输入");
+            lore.add(ChatColor.GRAY + plugin.i18n("gui_register_confirm_lore"));
             meta.setLore(lore);
             glass.setItemMeta(meta);
         }
@@ -295,9 +297,9 @@ public class RegisterGUIPage extends Gui {
         ItemStack glass = XVersionUtils.getColoredPlaneGlass(Colors.RED);
         ItemMeta meta = glass.getItemMeta();
         if (meta != null) {
-            meta.setDisplayName(ChatColor.RED + "" + ChatColor.BOLD + "清空");
+            meta.setDisplayName(ChatColor.RED + "" + ChatColor.BOLD + plugin.i18n("gui_clear_button"));
             List<String> lore = new ArrayList<>();
-            lore.add(ChatColor.GRAY + "点击清空已输入的密码");
+            lore.add(ChatColor.GRAY + plugin.i18n("gui_clear_lore"));
             meta.setLore(lore);
             glass.setItemMeta(meta);
         }
@@ -317,10 +319,10 @@ public class RegisterGUIPage extends Gui {
         ItemStack glass = XVersionUtils.getColoredPlaneGlass(Colors.ORANGE);
         ItemMeta meta = glass.getItemMeta();
         if (meta != null) {
-            meta.setDisplayName(ChatColor.GOLD + "" + ChatColor.BOLD + "退出");
+            meta.setDisplayName(ChatColor.GOLD + "" + ChatColor.BOLD + plugin.i18n("gui_exit_button"));
             List<String> lore = new ArrayList<>();
-            lore.add(ChatColor.GRAY + "点击退出注册界面");
-            lore.add(ChatColor.RED + "注意: 你需要注册才能游玩");
+            lore.add(ChatColor.GRAY + plugin.i18n("gui_register_exit_lore"));
+            lore.add(ChatColor.RED + plugin.i18n("gui_register_exit_warning"));
             meta.setLore(lore);
             glass.setItemMeta(meta);
         }

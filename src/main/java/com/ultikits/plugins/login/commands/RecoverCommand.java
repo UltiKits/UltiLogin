@@ -23,7 +23,7 @@ import org.bukkit.entity.Player;
 @CmdExecutor(
     alias = {"recover"},
     permission = "ultilogin.recover",
-    description = "找回密码"
+    description = "command_recover_description"
 )
 public class RecoverCommand extends BaseCommandExecutor {
 
@@ -92,7 +92,13 @@ public class RecoverCommand extends BaseCommandExecutor {
         // Verify code first
         RecoverVerifyResult verifyResult = emailVerificationService.verifyRecoveryCode(player, code);
         if (!verifyResult.isSuccess()) {
-            player.sendMessage(ChatColor.translateAlternateColorCodes('&', plugin.i18n(verifyResult.getMessageKey())));
+            String msg = plugin.i18n(verifyResult.getMessageKey());
+            if (verifyResult.getReplacements() != null) {
+                for (int i = 0; i < verifyResult.getReplacements().length - 1; i += 2) {
+                    msg = msg.replace(verifyResult.getReplacements()[i], verifyResult.getReplacements()[i + 1]);
+                }
+            }
+            player.sendMessage(ChatColor.translateAlternateColorCodes('&', msg));
             return;
         }
 

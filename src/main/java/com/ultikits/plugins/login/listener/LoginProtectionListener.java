@@ -2,6 +2,7 @@ package com.ultikits.plugins.login.listener;
 
 import com.ultikits.plugins.login.gui.LoginGUIPage;
 import com.ultikits.plugins.login.gui.RegisterGUIPage;
+import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.service.LoginService;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.EventListener;
@@ -69,10 +70,10 @@ import java.util.UUID;
  * was and was not measured.
  * <p>
  * {@link #onSignChange} and {@link #onPlayerEditBook} were both in this group until their premises
- * were measured and disproved — {@code onSignChange} by gate 1's {@code PLUGIN} sign-open finding,
- * {@code onPlayerEditBook} by the wave-1 real-machine run of
- * {@code ultilogin.protection.world-interaction-block}. Both are load-bearing, each is the only
- * thing refusing its write, and neither may be deleted as unreachable. See their own javadoc.
+ * were measured and disproved — {@code onSignChange} by the {@code PLUGIN} sign-open finding,
+ * {@code onPlayerEditBook} by a real-server run of {@code
+ * ultilogin.protection.world-interaction-block}. Both are load-bearing, each is the only thing
+ * refusing its write, and neither may be deleted as unreachable. See their own javadoc.
  *
  * <h2>Priority, and who gets the last word</h2>
  *
@@ -80,8 +81,8 @@ import java.util.UUID;
  * this class's long-standing convention and is deliberate: it lets another plugin see these events
  * after this listener and make its own decision. The consequence, recorded so it is not a surprise, is
  * that a plugin listening at {@code HIGH}/{@code HIGHEST} can call {@code setCancelled(false)} and
- * undo any protection here (gate 1 IN-08). Raising the priority would stop that, but would also start
- * overriding other plugins' deliberate allowances, so it is not changed unilaterally.
+ * undo any protection here. Raising the priority would stop that, but would also start overriding
+ * other plugins' deliberate allowances, so it is not changed unilaterally.
  *
  * <h2>Events deliberately left uncovered</h2>
  *
@@ -197,7 +198,7 @@ public class LoginProtectionListener implements Listener {
             if (!loginService.isLoggedIn(player.getUniqueId())) {
                 String title = event.getView().getTitle();
                 // Allow clicking in login/register GUI
-                if (!title.contains("密码") && !title.contains("登录") && !title.contains("注册")) {
+                if (!isCredentialGuiTitle(title)) {
                     event.setCancelled(true);
                 }
             }
@@ -213,17 +214,17 @@ public class LoginProtectionListener implements Listener {
      * {@link #onInventoryClick} never receives a drag, and a drag moves items.
      * <p>
      * <strong>Covered defensively: no reachable drag bypass was demonstrated.</strong> An earlier
-     * revision of this javadoc, and of the changelog entry, implied one was live. Gate 1 (WR-05)
-     * measured otherwise, and the measurement points the other way on both branches. A meaningful
-     * drag needs a non-empty cursor, and the only way to load the cursor is a pick-up click: with
-     * {@code gui-mode.enabled: false} (the shipped default) {@link #onInventoryClick} refuses every
-     * click, so the cursor can never be loaded; with it {@code true} the click is allowed inside the
+     * revision of this javadoc, and of the changelog entry, implied one was live. A review measured
+     * otherwise, and the measurement points the other way on both branches. A meaningful drag needs
+     * a non-empty cursor, and the only way to load the cursor is a pick-up click: with {@code
+     * gui-mode.enabled: false} (the shipped default) {@link #onInventoryClick} refuses every click,
+     * so the cursor can never be loaded; with it {@code true} the click is allowed inside the
      * credential GUI, but obliviate-invs cancels <em>every</em> drag while one of its GUIs is open
      * ({@code InvListener#onDrag} is {@code setCancelled(!gui.onDrag(event))} and the default
      * {@code onDrag} returns {@code false}). So it is refused explicitly rather than left resting on
      * the expectation that the click guard and a third-party library make it unreachable. It is now
-     * the only handler here in that register: {@link #onPlayerEditBook} was its peer until the
-     * wave-1 real-machine run measured that premise and disproved it.
+     * the only handler here in that register: {@link #onPlayerEditBook} was its peer until a
+     * real-server run measured that premise and disproved it.
      * <p>
      * Unlike {@link #onInventoryClick} this deliberately does <em>not</em> mirror the credential-GUI
      * title allowance. A drag cannot enter a digit into {@code LoginGUIPage}/{@code RegisterGUIPage},
@@ -239,6 +240,34 @@ public class LoginProtectionListener implements Listener {
         }
     }
 
+    /**
+     * Whether {@code title} is one of the titles the credential GUI is opened with: the login title,
+     * the register title, or the confirm title {@code RegisterGUIPage} switches to. Compared with the
+     * resolved titles, by their words, so the allowance holds in every language and for an operator's
+     * own titles (UltiKits/UltiLogin#20). It used to test whether
+     * the title contained 密码, 登录 or 注册: that refused every keypad click under an English title,
+     * and let an unauthenticated player click in any other inventory whose title held one of those
+     * words.
+     */
+    private boolean isCredentialGuiTitle(String title) {
+        if (title == null) {
+            return false;
+        }
+        LoginConfig config = loginService.getConfig();
+        String shown = ChatColor.stripColor(title);
+        return shown.equals(words(config.getGuiLoginTitle()))
+                || shown.equals(words(config.getGuiRegisterTitle()))
+                || shown.equals(words(config.getGuiConfirmTitle()));
+    }
+
+    /**
+     * A title as it reads: colour codes applied, then stripped. Compared without its colour codes,
+     * because a server may echo a title's codes rewritten.
+     */
+    private static String words(String text) {
+        return text == null ? null : ChatColor.stripColor(ChatColor.translateAlternateColorCodes('&', text));
+    }
+
     @EventHandler(priority = EventPriority.LOWEST)
     public void onInventoryOpen(InventoryOpenEvent event) {
         if (event.getPlayer() instanceof Player) {
@@ -246,7 +275,7 @@ public class LoginProtectionListener implements Listener {
             // Allow opening login/register GUI
             if (!loginService.isLoggedIn(player.getUniqueId())) {
                 String title = event.getView().getTitle();
-                if (!title.contains("密码") && !title.contains("登录") && !title.contains("注册")) {
+                if (!isCredentialGuiTitle(title)) {
                     event.setCancelled(true);
                 }
             }
@@ -310,8 +339,8 @@ public class LoginProtectionListener implements Listener {
      * <strong>This handler is load-bearing — do not delete it as unreachable.</strong> An earlier
      * revision of this javadoc called it defensive, on the premise that the client opens the book
      * editor only after a server packet following an uncancelled {@link PlayerInteractEvent}, so
-     * that {@link #onPlayerInteract} would already have stopped everything downstream. The wave-1
-     * real-machine run of {@code ultilogin.protection.world-interaction-block} measured that
+     * that {@link #onPlayerInteract} would already have stopped everything downstream. A
+     * real-server run of {@code ultilogin.protection.world-interaction-block} measured that
      * premise and it is false: an unauthenticated player right-clicking a writable book at air
      * <em>does</em> get the editor, and the edit packet then arrives at the server on its own.
      * <p>
@@ -364,14 +393,14 @@ public class LoginProtectionListener implements Listener {
      * <strong>This handler is load-bearing — do not delete it as unreachable.</strong> An earlier
      * revision of this javadoc called it defensive, on the premise that a sign editor only ever opens
      * after an uncancelled {@link PlayerInteractEvent} or
-     * {@link org.bukkit.event.block.BlockPlaceEvent}. Gate 1 (WR-06) measured that premise and it is
-     * false: {@link org.bukkit.event.player.PlayerSignOpenEvent}'s {@code Cause} enum has four
-     * constants — {@code INTERACT}, {@code PLACE}, <strong>{@code PLUGIN}</strong> and
-     * {@code UNKNOWN} — and {@code HumanEntity#openSign(Sign, Side)} is public API
-     * ("Opens an editor window for the specified sign"). {@code INTERACT} and {@code PLACE} are both
-     * already refused here; {@code PLUGIN} is not, and cannot be, because it follows no player
-     * interaction at all. So any co-installed plugin that opens a sign editor for a joining player
-     * reaches this event, and this handler is the only thing refusing the write.
+     * {@link org.bukkit.event.block.BlockPlaceEvent}. That premise was measured, and it is false:
+     * {@link org.bukkit.event.player.PlayerSignOpenEvent}'s {@code Cause} enum has four constants —
+     * {@code INTERACT}, {@code PLACE}, <strong>{@code PLUGIN}</strong> and {@code UNKNOWN} — and
+     * {@code HumanEntity#openSign(Sign, Side)} is public API ("Opens an editor window for the
+     * specified sign"). {@code INTERACT} and {@code PLACE} are both already refused here; {@code
+     * PLUGIN} is not, and cannot be, because it follows no player interaction at all. So any
+     * co-installed plugin that opens a sign editor for a joining player reaches this event, and this
+     * handler is the only thing refusing the write.
      * <p>
      * {@link LoginProtectionPaperListener#onPlayerOpenSign} refuses the editor at the point it opens;
      * the two are complementary rather than redundant — that one prevents, this one is the backstop.
@@ -379,7 +408,7 @@ public class LoginProtectionListener implements Listener {
      * {@code SignChangeEvent#getPlayer()} is annotated {@code @NotNull}, so the null branch below
      * should be unreachable. It is there anyway because the annotation is not enforced at runtime and
      * the wrong side of that bet is fail-open: an exception thrown out of a handler is logged and
-     * swallowed by Bukkit, leaving the event <em>uncancelled</em> (gate 1 IN-09).
+     * swallowed by Bukkit, leaving the event <em>uncancelled</em>.
      */
     @EventHandler(priority = EventPriority.LOWEST)
     public void onSignChange(SignChangeEvent event) {
@@ -449,8 +478,7 @@ public class LoginProtectionListener implements Listener {
      * <p>
      * {@code static} and package-visible via a full parameter list (rather than an instance
      * method reached through a bean reference) so {@link LoginService#presentCredentialPrompt
-     * (Player)} can call this exact same branching after an administrative credential change
-     * (Codex PR #18 thread 3945030004, round 4) without duplicating it a second time, and
+     * (Player)} can call this exact same branching after an administrative credential change (PR #18) without duplicating it a second time, and
      * without introducing a circular bean dependency between the listener and the service --
      * {@code LoginService} already has {@code plugin} and {@code bukkitPlugin} as constructor-
      * injected fields, so it can call this like any other static utility. This class's own
@@ -459,8 +487,7 @@ public class LoginProtectionListener implements Listener {
      * <p>
      * Both branches are dispatched onto the main thread via {@link #dispatchOnMainThread}:
      * inventory APIs are not thread-safe, and a caller revoking a session (e.g. an admin
-     * command) is not guaranteed to already be on the main thread. Round 5 (13-REVIEW-UltiLogin
-     * .md, own deep review of bcadfb5, Info finding): the text branch used to send synchronously
+     * command) is not guaranteed to already be on the main thread. The text branch used to send synchronously
      * on whatever thread the caller was on, safe only because every current caller of {@code
      * LoginService.invalidateSession(UUID)} happens to be a synchronous command body. Dispatching
      * it the same way as the GUI branch removes that latent assumption, so a future async caller
@@ -479,19 +506,19 @@ public class LoginProtectionListener implements Listener {
             dispatchOnMainThread(player, plugin, bukkitPlugin, () -> {
                 if (player.isOnline() && !loginService.isLoggedIn(player.getUniqueId())) {
                     UUID uuid = player.getUniqueId();
-                    // Round 9 (Codex PR #18 thread 3946574852, P2): mark this player as
-                    // mid-transition before opening the new credential GUI. In real Bukkit,
-                    // opening a new inventory implicitly closes whatever the player currently has
-                    // open, which runs that GUI's own onClose reopen hook synchronously, on this
-                    // same call -- without this marker, that hook could schedule its own reopen
-                    // of the GUI being replaced, fighting (in the unregister case, permanently)
-                    // the GUI this method is deliberately opening. Cleared in the finally block
-                    // once the new GUI has actually been opened, so it never leaks past this call.
-                    // Round 10 (Codex PR #18 thread 3946842965): a GUI the player already closed
-                    // for an unrelated reason may have a delayed reopen queued (see
-                    // LoginGUIPage/RegisterGUIPage#onClose). Cancel it before opening this fresh
-                    // GUI so it cannot fire afterward and stack a second credential GUI on top of
-                    // this one, whose own onClose would then queue yet another reopen in turn.
+                    // Mark this player as mid-transition before opening the new credential GUI.
+                    // In real Bukkit, opening a new inventory implicitly closes whatever the
+                    // player currently has open, which runs that GUI's own onClose reopen hook
+                    // synchronously, on this same call -- without this marker, that hook could
+                    // schedule its own reopen of the GUI being replaced, fighting (in the
+                    // unregister case, permanently) the GUI this method is deliberately opening.
+                    // Cleared in the finally block once the new GUI has actually been opened, so
+                    // it never leaks past this call.
+                    // A GUI the player already closed for an unrelated reason may have a delayed
+                    // reopen queued (see LoginGUIPage/RegisterGUIPage#onClose). Cancel it before
+                    // opening this fresh GUI so it cannot fire afterward and stack a second
+                    // credential GUI on top of this one, whose own onClose would then queue yet
+                    // another reopen in turn.
                     loginService.cancelPendingCredentialGuiReopen(uuid);
                     loginService.beginCredentialGuiTransition(uuid);
                     try {
@@ -508,14 +535,14 @@ public class LoginProtectionListener implements Listener {
         } else {
             // Send text prompt
             dispatchOnMainThread(player, plugin, bukkitPlugin, () -> {
-                // Round 12 (Codex PR #18 thread 3947572910, P3): unlike the GUI branch above,
-                // this queued callback used to send unconditionally, with no re-check of the
-                // player's state at execution time. AsyncPlayerChatEvent already runs off the
-                // main thread, so this callback is *always* queued for a later tick here, not
-                // just occasionally -- if the player was force-logged-in (or otherwise
-                // authenticated) in the gap between queuing and this tick, it still sent the
-                // login/register instruction to an already-authenticated player. Re-check
-                // exactly what the GUI branch checks before sending anything.
+                // Unlike the GUI branch above, this queued callback used to send
+                // unconditionally, with no re-check of the player's state at execution time.
+                // AsyncPlayerChatEvent already runs off the main thread, so this callback is
+                // *always* queued for a later tick here, not just occasionally -- if the player
+                // was force-logged-in (or otherwise authenticated) in the gap between queuing
+                // and this tick, it still sent the login/register instruction to an
+                // already-authenticated player. Re-check exactly what the GUI branch checks
+                // before sending anything.
                 if (player.isOnline() && !loginService.isLoggedIn(player.getUniqueId())) {
                     if (loginService.isRegistered(player.getUniqueId())) {
                         player.sendMessage(ChatColor.translateAlternateColorCodes('&',
@@ -533,13 +560,13 @@ public class LoginProtectionListener implements Listener {
      * Run {@code task} on the main thread, without letting {@link Bukkit#getScheduler()}'s
      * unchecked exception on a disabling plugin escape to the caller.
      * <p>
-     * Round 6 (13-REVIEW-UltiLogin.md, own review of 29ba589, Warning finding): both branches of
-     * {@link #presentCredentialPrompt} call {@code Bukkit.getScheduler().runTask(bukkitPlugin,
-     * ...)} unconditionally. Bukkit's scheduler validates {@code plugin.isEnabled()} before
-     * accepting a task and throws an unchecked exception if the owning plugin is disabled at the
-     * moment {@code runTask} is called -- and nothing upstream of this method (including {@code
-     * LoginService.invalidateSession}/{@code forceReauthenticationIfOnline}) catches it. Three
-     * rules close that gap and its symmetric restriction against needlessly hopping threads:
+     * Both branches of {@link #presentCredentialPrompt} call {@code
+     * Bukkit.getScheduler().runTask(bukkitPlugin, ...)} unconditionally. Bukkit's scheduler
+     * validates {@code plugin.isEnabled()} before accepting a task and throws an unchecked
+     * exception if the owning plugin is disabled at the moment {@code runTask} is called -- and
+     * nothing upstream of this method (including {@code LoginService.invalidateSession}/{@code
+     * forceReauthenticationIfOnline}) catches it. Three rules close that gap and its symmetric
+     * restriction against needlessly hopping threads:
      * <ol>
      *   <li>Already on the main thread ({@link Bukkit#isPrimaryThread()}) -- run {@code task}
      *   inline. Scheduling a task from the main thread to run on the main thread only adds a tick
@@ -554,12 +581,12 @@ public class LoginProtectionListener implements Listener {
      *   propagate out of the credential-invalidation call chain that triggered this prompt.</li>
      * </ol>
      * <p>
-     * Round 8 (Codex PR #18, thread 3946414499): widened from {@code private} to {@code public}
-     * so {@code LoginService}'s own {@code applyNoSessionProtections(Player)} -- the blind-effect
-     * and spawn-teleport reapplication shared with {@link
-     * com.ultikits.plugins.login.service.LoginService#onPlayerJoin(Player)} -- can dispatch
-     * through the identical main-thread rules, since potion effects and teleports are exactly as
-     * main-thread-only as the GUI/text prompt this method already guards.
+     * Widened from {@code private} to {@code public} so {@code LoginService}'s own {@code
+     * applyNoSessionProtections(Player)} -- the blind-effect and spawn-teleport reapplication
+     * shared with {@link com.ultikits.plugins.login.service.LoginService#onPlayerJoin(Player)}
+     * -- can dispatch through the identical main-thread rules, since potion effects and
+     * teleports are exactly as main-thread-only as the GUI/text prompt this method already
+     * guards.
      *
      * @param player the player the prompt is for, used only for the skip warning's message
      * @param plugin the UltiTools plugin instance, used to log the skip warning
@@ -574,8 +601,8 @@ public class LoginProtectionListener implements Listener {
         } else if (bukkitPlugin.isEnabled()) {
             Bukkit.getScheduler().runTask(bukkitPlugin, task);
         } else {
-            plugin.getLogger().warn("Skipped presenting the credential prompt to "
-                + player.getName() + " because the plugin is disabling");
+            plugin.getLogger().warn(plugin.i18n("log_prompt_skipped_disabling")
+                .replace("{PLAYER}", player.getName()));
         }
     }
 }

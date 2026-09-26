@@ -672,6 +672,14 @@ class LoginConfigTest {
      * but the explicit constructor just calls super("config/login.yml") which only sets the path).
      */
     private LoginConfig createRealConfig() {
-        return new LoginConfig();
+        // Bound to a plugin answering from the Chinese language file, as the framework's init()
+        // binds it: a blank text setting reads its text from there (UltiKits/UltiLogin#20).
+        LoginConfig config = new LoginConfig();
+        com.ultikits.ultitools.abstracts.UltiToolsPlugin plugin =
+                org.mockito.Mockito.mock(com.ultikits.ultitools.abstracts.UltiToolsPlugin.class);
+        org.mockito.Mockito.when(plugin.i18n(org.mockito.ArgumentMatchers.anyString()))
+                .thenAnswer(com.ultikits.plugins.login.i18n.CatalogueText.answer("zh"));
+        com.ultikits.plugins.login.i18n.LoginSeams.bind(config, plugin);
+        return config;
     }
 }

@@ -27,7 +27,7 @@ import org.bukkit.plugin.Plugin;
 @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
 @CmdExecutor(
     alias = {"panel"},
-    description = "Open UltiCloud web panel"
+    description = "command_panel_description"
 )
 public class PanelCommand extends BaseCommandExecutor {
 
@@ -57,7 +57,7 @@ public class PanelCommand extends BaseCommandExecutor {
         // not inside it. An admin reset/unregister landing between this line and the worker's
         // call to requestPanelLink() finds nothing to cancel yet (the request has not been
         // published), so requestPanelLink() itself refuses to publish a request whose captured
-        // generation no longer matches. See Codex PR #18 thread 3945030000 (round 4).
+        // generation no longer matches. See PR #18.
         long invalidationGeneration = loginService.getInvalidationGeneration(player.getUniqueId());
 
         // Run async to avoid blocking the main thread (HTTP call)
@@ -71,11 +71,10 @@ public class PanelCommand extends BaseCommandExecutor {
                 }
 
                 // Revalidate the request one last time, right here, before acting on it. This
-                // callback is itself scheduled -- requestPanelLink()'s own post-POST re-check
-                // (round 7) only closes the gap up to the moment that method returned; an
+                // callback is itself scheduled -- requestPanelLink()'s own post-POST re-check only closes the gap up to the moment that method returned; an
                 // invalidation landing between that return and this callback actually running on
                 // the main thread would otherwise still let a revoked player receive the magic
-                // link and start a new poll for it. See Codex PR #18 thread 3946574845 (round 9).
+                // link and start a new poll for it. See PR #18.
                 boolean current = result.isSuccess()
                         && loginService.isPanelRequestCurrent(player.getUniqueId(),
                                 result.getRequestId(), invalidationGeneration);
@@ -89,12 +88,13 @@ public class PanelCommand extends BaseCommandExecutor {
                                 .replace("{URL}", url)));
                     message.setClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, url));
                     message.setHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT,
-                        new ComponentBuilder(ChatColor.GRAY + "Click to open panel").create()));
+                        new ComponentBuilder(ChatColor.translateAlternateColorCodes('&',
+                            plugin.i18n("panel_hover"))).create()));
                     player.spigot().sendMessage(message);
 
                     // Start polling for auth completion, keyed on the exact request id this
                     // result was published under -- never on "whatever is currently pending" for
-                    // this player (Codex PR #18 thread 3946170644, round 7).
+                    // this player (PR #18).
                     loginService.startAuthPolling(player.getUniqueId().toString(), player,
                             result.getRequestId());
                 } else {
@@ -107,6 +107,6 @@ public class PanelCommand extends BaseCommandExecutor {
 
     @Override
     protected void handleHelp(CommandSender sender) {
-        sender.sendMessage(ChatColor.YELLOW + "Usage: /panel - Open UltiCloud web panel");
+        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', plugin.i18n("help_panel")));
     }
 }

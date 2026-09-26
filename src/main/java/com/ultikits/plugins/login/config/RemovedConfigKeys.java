@@ -7,6 +7,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.Consumer;
 
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+
 import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
 
@@ -27,19 +29,16 @@ import org.bukkit.configuration.file.YamlConfiguration;
 public final class RemovedConfigKeys {
 
     /**
-     * Every key removed from {@code config/login.yml}, mapped to what an operator should be told
-     * about it. Insertion order is the order the warnings are emitted in.
+     * Every key removed from {@code config/login.yml}, mapped to the language-file key of the
+     * guidance printed for it. Insertion order is the order the warnings are emitted in. The guidance
+     * text itself lives in the language file, so it follows the server's language setting
+     * (UltiKits/UltiLogin#20); {@link #reasonFor} is what reads it.
      */
     private static final Map<String, String> REMOVED;
 
     static {
         Map<String, String> removed = new LinkedHashMap<String, String>();
-        removed.put("messages.wrong-password",
-                "Its value was never shown to players. The reply to a wrong password now comes "
-                        + "from the 'wrong_password' entry of this module's language file "
-                        + "(lang/<language>.json, in the same module folder as config/login.yml), "
-                        + "so it follows the server's language setting; edit it there "
-                        + "(UltiKits/UltiLogin#23).");
+        removed.put("messages.wrong-password", "removed_key_reason_wrong_password");
         REMOVED = Collections.unmodifiableMap(removed);
     }
 
@@ -50,10 +49,24 @@ public final class RemovedConfigKeys {
     /**
      * The keys this class knows about, in the order it reports them.
      *
-     * @return an unmodifiable map of removed key path to the guidance printed for it
+     * @return an unmodifiable map of removed key path to the language-file key of its guidance
      */
     public static Map<String, String> removedKeys() {
         return REMOVED;
+    }
+
+    /**
+     * The guidance printed for {@code removedKey}, in the server's language. Every removed key has
+     * its own case, so a key added to {@link #REMOVED} without guidance fails loudly rather than
+     * printing someone else's.
+     */
+    private static String reasonFor(String removedKey, UltiToolsPlugin plugin) {
+        switch (removedKey) {
+            case "messages.wrong-password":
+                return plugin.i18n("removed_key_reason_wrong_password");
+            default:
+                throw new IllegalStateException("No guidance for removed key " + removedKey);
+        }
     }
 
     /**
@@ -66,8 +79,9 @@ public final class RemovedConfigKeys {
      *
      * @param configFile the operator's {@code config/login.yml}; may be {@code null}
      * @param warn       where to send each warning, normally the module logger's warn method
+     * @param plugin     the module, whose language file supplies the warning's text
      */
-    public static void warnAboutLeftovers(File configFile, Consumer<String> warn) {
+    public static void warnAboutLeftovers(File configFile, Consumer<String> warn, UltiToolsPlugin plugin) {
         if (configFile == null || !configFile.isFile()) {
             return;
         }
@@ -81,10 +95,10 @@ public final class RemovedConfigKeys {
             if (yaml.contains(entry.getKey())) {
                 // No "[UltiLogin]" prefix: the module logger adds that itself, and the module is
                 // still named in the sentence for any consumer that does not.
-                warn.accept(configFile.getPath() + " still contains '"
-                        + entry.getKey() + "', which this version of UltiLogin no longer reads. "
-                        + entry.getValue()
-                        + " Delete the key from the file to silence this warning.");
+                warn.accept(plugin.i18n("removed_key_warning")
+                        .replace("{FILE}", configFile.getPath())
+                        .replace("{KEY}", entry.getKey())
+                        .replace("{REASON}", reasonFor(entry.getKey(), plugin)));
             }
         }
     }
