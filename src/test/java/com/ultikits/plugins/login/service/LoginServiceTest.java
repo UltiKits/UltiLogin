@@ -853,6 +853,30 @@ class LoginServiceTest {
         }
 
         @Test
+        @DisplayName("Dismounts an online player whose credentials are revoked while they ride (UltiKits/UltiLogin#41)")
+        void dismountsWhenAnOnlineRiderIsRevoked() throws Exception {
+            when(config.isBlindEffect()).thenReturn(false);
+            when(config.isSpawnLocationEnabled()).thenReturn(false);
+            when(player.isInsideVehicle()).thenReturn(true);
+
+            String salt = "testSalt";
+            String password = "password123";
+            String hash = hashPasswordForTest(password, salt);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+            service.login(player, password);
+
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+                stubSchedulerToRunSynchronously(bukkitMock);
+
+                assertThat(service.resetPassword(playerUuid)).isNotNull();
+            }
+
+            verify(player).leaveVehicle();
+        }
+
+        @Test
         @DisplayName("Does not reapply the no-session protections for the silent"
                 + " recovery re-authentication path")
         void doesNotApplyNoSessionProtectionsOnSilentRecovery() throws Exception {
@@ -2729,6 +2753,25 @@ class LoginServiceTest {
             service.onPlayerJoin(player);
 
             verify(player).addPotionEffect(any(PotionEffect.class));
+        }
+
+        @Test
+        @DisplayName("The no-session protections dismount a rider (UltiKits/UltiLogin#41) -- checked through"
+                + " onPlayerJoin, which shares the helper with revocation; on a real server a restored vehicle"
+                + " arrives only after the join, and the listener's one-tick check handles that")
+        void dismountsARiderWhoJoinsWithoutASession() {
+            Location mockLoc = mock(Location.class);
+            when(mockLoc.clone()).thenReturn(mockLoc);
+            when(player.getLocation()).thenReturn(mockLoc);
+            when(config.isSessionEnabled()).thenReturn(false);
+            when(config.isBlindEffect()).thenReturn(false);
+            when(config.isSpawnLocationEnabled()).thenReturn(false);
+            when(player.isInsideVehicle()).thenReturn(true);
+            when(mockQuery.list()).thenReturn(Collections.emptyList());
+
+            service.onPlayerJoin(player);
+
+            verify(player).leaveVehicle();
         }
 
         @Test
