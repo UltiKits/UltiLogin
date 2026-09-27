@@ -470,32 +470,36 @@ class LoginServiceTest {
             verify(dataOperator, never()).update(any(AccountData.class));
         }
 
-        @Test
-        @DisplayName("a limited count below zero is still answered as locked when the attempt locks the account")
+        /**
+         * UltiKits/UltiLogin#38: with {@code lockout-type: UUID} an expired lock used to be cleared
+         * without clearing the per-IP failure count, so the first wrong password after expiry counted
+         * {@code max + 1}, locked again at once and left a remaining count of {@code -1}. An expired
+         * lock now resets the count under every lockout type, so the player has the full
+         * {@code max-login-attempts} again. (This replaces a test that pinned the old scenario to
+         * show why the locked reply is chosen from the recorded lock rather than from the count.)
+         */
+        @ParameterizedTest(name = "lockout-type {0}")
+        @ValueSource(strings = {"IP", "UUID", "BOTH"})
+        @DisplayName("after a lock expires the player has the full attempts again (UltiKits/UltiLogin#38)")
         @SuppressWarnings("unchecked")
-        void negativeLimitedCountIsNotMistakenForUnlimited() throws Exception {
-            // A limited count can reach -1, the same value getRemainingAttempts() uses for
-            // "unlimited": with lockout-type UUID an expired lock is cleared without clearing the
-            // per-IP failure counter (UltiKits/UltiLogin#38), so the first wrong password after
-            // expiry counts max + 1, locks again at once, and computes max - (max + 1) = -1. That
-            // lock is real, so the reply must be the locked one -- which is why the reply is chosen
-            // from whether a lock was recorded, and never from the count's value.
+        void anExpiredLockGivesTheFullAttemptsAgain(String lockoutType) throws Exception {
             when(config.getMaxLoginAttempts()).thenReturn(2);
-            when(config.getLockoutType()).thenReturn("UUID");
+            when(config.getLockoutType()).thenReturn(lockoutType);
             service.login(player, "wrong1");
             assertThat(service.login(player, "wrong2").getMessage()).isEqualTo("LOCKED 900");
 
             Map<UUID, Long> lockedUuids = (Map<UUID, Long>) getFieldValue(service, "lockedUuids");
-            lockedUuids.put(playerUuid, System.currentTimeMillis() - 1000);
+            Map<String, Long> lockedIps = (Map<String, Long>) getFieldValue(service, "lockedIps");
+            long past = System.currentTimeMillis() - 1000;
+            lockedUuids.replaceAll((k, v) -> past);
+            lockedIps.replaceAll((k, v) -> past);
             assertThat(service.isLocked(player)).as("scenario: the lock has expired").isFalse();
 
-            LoginService.LoginResult result = service.login(player, "wrong3");
-
-            assertThat(service.getRemainingAttempts(player))
-                    .as("scenario: this is the limited case whose count is -1")
-                    .isEqualTo(-1);
+            assertThat(service.getRemainingAttempts(player)).isEqualTo(2);
+            assertThat(service.login(player, "wrong3").getMessage()).isEqualTo("REMAINING 1");
+            assertThat(service.isLocked(player)).isFalse();
+            assertThat(service.login(player, "wrong4").getMessage()).isEqualTo("LOCKED 900");
             assertThat(service.isLocked(player)).isTrue();
-            assertThat(result.getMessage()).isEqualTo("LOCKED 900");
         }
 
         /**
