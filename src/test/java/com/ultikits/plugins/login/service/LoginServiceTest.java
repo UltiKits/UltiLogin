@@ -2353,6 +2353,45 @@ class LoginServiceTest {
             service.onPlayerQuit(player);
             assertThat(service.isLoggedIn(playerUuid)).isFalse();
         }
+
+        /**
+         * UltiKits/UltiLogin#28: on a real server the quit row cannot tell genuine cleanup from a
+         * silent {@code isOnline()} no-op, because both are silent. This proves the cleanup
+         * directly: the player is still reported online (so no online check can explain the
+         * outcome), every one of the five tracking maps holds an entry for them, and after the quit
+         * none does and the in-flight panel-poll task has been cancelled.
+         * <p>
+         * It proves what the checklist row states and nothing more: quitting does not withdraw a
+         * pending panel request, which stays until its five-minute expiry.
+         */
+        @Test
+        @DisplayName("Quit clears all five tracking entries and cancels the poll task while the player still reads as online (UltiKits/UltiLogin#28)")
+        @SuppressWarnings("unchecked")
+        void clearsEveryTrackingEntryWhileStillReportedOnline() throws Exception {
+            when(player.isOnline()).thenReturn(true);
+            Map<UUID, Boolean> loggedInPlayers = (Map<UUID, Boolean>) getFieldValue(service, "loggedInPlayers");
+            Map<UUID, Long> joinTimes = (Map<UUID, Long>) getFieldValue(service, "joinTimes");
+            Map<UUID, org.bukkit.Location> originalLocations =
+                    (Map<UUID, org.bukkit.Location>) getFieldValue(service, "originalLocations");
+            Map<String, BukkitTask> pollingTasks = (Map<String, BukkitTask>) getFieldValue(service, "pollingTasks");
+            Map<UUID, String> currentPollingRequestId =
+                    (Map<UUID, String>) getFieldValue(service, "currentPollingRequestId");
+            BukkitTask pollTask = mock(BukkitTask.class);
+            loggedInPlayers.put(playerUuid, Boolean.TRUE);
+            joinTimes.put(playerUuid, System.currentTimeMillis());
+            originalLocations.put(playerUuid, mock(org.bukkit.Location.class));
+            pollingTasks.put("in-flight", pollTask);
+            currentPollingRequestId.put(playerUuid, "in-flight");
+
+            service.onPlayerQuit(player);
+
+            assertThat(loggedInPlayers).doesNotContainKey(playerUuid);
+            assertThat(joinTimes).doesNotContainKey(playerUuid);
+            assertThat(originalLocations).doesNotContainKey(playerUuid);
+            assertThat(pollingTasks).doesNotContainKey("in-flight");
+            assertThat(currentPollingRequestId).doesNotContainKey(playerUuid);
+            verify(pollTask).cancel();
+        }
     }
 
     // ==================== shutdown ====================
