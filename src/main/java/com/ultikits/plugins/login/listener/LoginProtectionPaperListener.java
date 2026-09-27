@@ -126,7 +126,8 @@ public class LoginProtectionPaperListener implements Listener {
     }
 
     /**
-     * Cancel {@code event} unless {@code player} is authenticated.
+     * Cancel {@code event} unless {@code player} is authenticated or is a plugin NPC
+     * ({@link LoginProtectionListener#isPluginNpc}, UltiKits/UltiLogin#42).
      * <p>
      * A {@code null} player cancels, rather than throwing. None of these four events documents a
      * nullable player, but an unchecked exception thrown out of a handler is logged and swallowed by
@@ -134,7 +135,8 @@ public class LoginProtectionPaperListener implements Listener {
      * the closed one.
      */
     private void cancelIfNotLoggedIn(Player player, Cancellable event) {
-        if (player == null || !loginService.isLoggedIn(player.getUniqueId())) {
+        if (player == null
+                || (!LoginProtectionListener.isPluginNpc(player) && !loginService.isLoggedIn(player.getUniqueId()))) {
             event.setCancelled(true);
         }
     }

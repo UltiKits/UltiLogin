@@ -142,6 +142,10 @@ public class LoginProtectionListener implements Listener {
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
+        if (isPluginNpc(player)) {
+            // Not a person who can log in: no tracking, no prompt, no timeout (UltiKits/UltiLogin#42).
+            return;
+        }
         loginService.onPlayerJoin(player);
 
         // A player who quit while riding is put back in the vehicle AFTER this event: Paper 1.21.11's
@@ -234,7 +238,7 @@ public class LoginProtectionListener implements Listener {
     public void onVehicleMove(VehicleMoveEvent event) {
         // A copy: removing a passenger must not disturb the list being walked.
         for (Entity passenger : new ArrayList<>(event.getVehicle().getPassengers())) {
-            if (passenger instanceof Player && !loginService.isLoggedIn(passenger.getUniqueId())) {
+            if (passenger instanceof Player && shouldCancel((Player) passenger)) {
                 event.getVehicle().removePassenger(passenger);
             }
         }
@@ -251,7 +255,7 @@ public class LoginProtectionListener implements Listener {
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerCommand(PlayerCommandPreprocessEvent event) {
         Player player = event.getPlayer();
-        if (!loginService.isLoggedIn(player.getUniqueId())) {
+        if (shouldCancel(player)) {
             if (!loginService.isCommandAllowed(event.getMessage())) {
                 event.setCancelled(true);
                 sendLoginPrompt(player);
@@ -286,7 +290,7 @@ public class LoginProtectionListener implements Listener {
     public void onInventoryClick(InventoryClickEvent event) {
         if (event.getWhoClicked() instanceof Player) {
             Player player = (Player) event.getWhoClicked();
-            if (!loginService.isLoggedIn(player.getUniqueId())) {
+            if (shouldCancel(player)) {
                 Inventory top = event.getView().getTopInventory();
                 boolean inCredentialGui = isCredentialGuiInventory(player, top)
                         && top.equals(event.getClickedInventory());
@@ -369,7 +373,7 @@ public class LoginProtectionListener implements Listener {
     public void onInventoryOpen(InventoryOpenEvent event) {
         if (event.getPlayer() instanceof Player) {
             Player player = (Player) event.getPlayer();
-            if (!loginService.isLoggedIn(player.getUniqueId())
+            if (shouldCancel(player)
                     && !isCredentialGuiInventory(player, event.getInventory())) {
                 event.setCancelled(true);
             }
@@ -544,10 +548,26 @@ public class LoginProtectionListener implements Listener {
     }
     
     /**
-     * Check if player actions should be cancelled.
+     * Whether the login protection refuses this player's actions: a player who has not logged in and
+     * is not a plugin NPC ({@link #isPluginNpc}).
      */
     private boolean shouldCancel(Player player) {
-        return !loginService.isLoggedIn(player.getUniqueId());
+        return !isPluginNpc(player) && !loginService.isLoggedIn(player.getUniqueId());
+    }
+
+    /**
+     * Whether {@code entity} is a plugin NPC rather than a person: it carries the {@code NPC}
+     * metadata that NPC plugins such as Citizens set on their player-type NPCs. Such an NPC never
+     * joins through the login flow, so it would otherwise read as permanently unauthenticated --
+     * invulnerable, unable to ride, dropped from moving vehicles. The whole login protection leaves
+     * it alone (maintainer decision on UltiKits/UltiLogin#42, following AuthMe's
+     * {@code PlayerUtils#isNpc}, which is the same metadata test).
+     *
+     * @param entity the entity to check
+     * @return true if it carries {@code NPC} metadata
+     */
+    public static boolean isPluginNpc(Entity entity) {
+        return entity != null && entity.hasMetadata("NPC");
     }
     
     /**

@@ -169,6 +169,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Plugin NPCs are no longer treated as unauthenticated players: a player-type NPC carrying the `NPC`
+  metadata that NPC plugins such as Citizens set is left alone by the whole login protection — it can take
+  damage, ride and move, and it is not prompted or timed out. Before, such an NPC was invulnerable, could not
+  ride and was dropped from moving vehicles (UltiKits/UltiLogin#42).
+- 插件 NPC 不再被当作未登录玩家：带有 Citizens 等 NPC 插件所设 `NPC` 元数据的玩家型 NPC 不受登录保护的任何限制——可以受伤、乘骑和移动，
+  也不会收到登录提示或因超时被踢出。此前这样的 NPC 无敌、无法乘骑，行驶中的载具还会让其下车（UltiKits/UltiLogin#42）。
+
 - With `security.lockout-type: UUID`, a player whose lockout has expired gets the full
   `security.max-login-attempts` again. Before, the failure count was kept, so the first wrong password
   after the lockout locked the account again at once (UltiKits/UltiLogin#38).
