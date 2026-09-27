@@ -127,6 +127,7 @@
   "gui_register_exit_warning": "Note: you need to register to play",
   "log_removed_key_check_failed": "Could not check {FILE} for removed configuration keys; the module continues without that check.",
   "log_config_default_save_failed": "Could not save {FILE} after writing its titles and messages in the server's language; the new text is used this session, and the file is written again at the next start.",
+  "log_unusable_lockout_type": "{FILE}: '{KEY}' is '{VALUE}', which this module cannot use (it takes IP, UUID or BOTH); the lockout uses the default, {DEFAULT}, until the value is corrected.",
   "log_prompt_skipped_disabling": "Skipped presenting the credential prompt to {PLAYER} because the plugin is disabling",
   "log_account_email_update_failed": "Failed to update account email",
   "log_account_update_failed": "Failed to update account",

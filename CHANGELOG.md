@@ -169,6 +169,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- An unrecognised `security.lockout-type` in `config/login.yml` (anything other than `IP`, `UUID` or
+  `BOTH`, in any letter case) now falls back to the default, `IP`, and the module names it in a console
+  warning at start-up and on `/ul reload`, quoting the value as written. Before, such a value switched the
+  lockout off while the wrong-password reply still said the account was locked (UltiKits/UltiLogin#37).
+- `config/login.yml` 中无法识别的 `security.lockout-type`（`IP`、`UUID`、`BOTH` 以外的任何值，不区分大小写）现在回落到默认值
+  `IP`，模块在启动和 `/ul reload` 时会在控制台警告中原样引用该值。此前这样的值会关闭登录封禁，而密码错误的回复仍称账号已被锁定
+  （UltiKits/UltiLogin#37）。
+
 - The registration window (`gui-mode.enabled: true`) now shows `gui-mode.title-confirm` once the first
   password is entered, and `gui-mode.title-register` again after a mismatch: the page re-opens its window
   with the new title, keeping what was entered. Before, the title was stored but the open window kept its

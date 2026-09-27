@@ -230,7 +230,7 @@ public class LoginService {
         UUID uuid = player.getUniqueId();
         long now = System.currentTimeMillis();
         
-        String lockoutType = config.getLockoutType().toUpperCase();
+        String lockoutType = LoginConfig.lockoutTypeOrDefault(config.getLockoutType());
         
         // Check IP lock
         if ("IP".equals(lockoutType) || "BOTH".equals(lockoutType)) {
@@ -291,7 +291,7 @@ public class LoginService {
         
         if (attempts >= config.getMaxLoginAttempts()) {
             long unlockTime = System.currentTimeMillis() + (config.getLockoutDuration() * 1000L);
-            String lockoutType = config.getLockoutType().toUpperCase();
+            String lockoutType = LoginConfig.lockoutTypeOrDefault(config.getLockoutType());
             
             if ("IP".equals(lockoutType) || "BOTH".equals(lockoutType)) {
                 lockedIps.put(ip, unlockTime);
