@@ -380,6 +380,24 @@ class LoginTextLanguageTest {
             verify(plugin.getLogger()).info(console("en", "login_enabled"));
         }
 
+        /**
+         * UltiKits/UltiLogin#30, per language: the enable line is read through {@code login_enabled},
+         * so it is the zh catalogue's line under {@code language: zh} as well as the en one under
+         * {@code en}. (Under zh the old literal key happened to equal the zh text, which is why the
+         * en case is the one that tells the two apart.)
+         */
+        @Test
+        @DisplayName("the enable line is Chinese under language: zh (UltiKits/UltiLogin#30)")
+        void enableLineChinese() {
+            UltiLogin plugin = pluginSpeaking("zh");
+            when(plugin.registerSelf()).thenCallRealMethod();
+
+            plugin.registerSelf();
+
+            verify(plugin.getLogger()).info(console("zh", "login_enabled"));
+            verify(plugin).i18n("login_enabled");
+        }
+
         @Test
         @DisplayName("the removed-key warning is Chinese under language: zh")
         void removedKeyWarning(@org.junit.jupiter.api.io.TempDir java.io.File dir) throws IOException {
