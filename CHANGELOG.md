@@ -169,6 +169,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The console warning about a setting this version no longer reads names the file exactly as it is: a
+  server installed under a directory whose name contains `{KEY}` or `{REASON}` used to get a path that does
+  not exist, because the path was inserted before those placeholders were filled. Every placeholder of the
+  line is now filled in one pass (the same fix as UltiKits/UltiMail#37).
+- 关于本版本已不再读取的配置项的控制台警告现在按原样给出文件路径：此前路径先于 `{KEY}`、`{REASON}` 占位符插入，
+  安装目录名含这两个占位符的服务器会看到不存在的路径。现在同一行的所有占位符一次性替换（与 UltiKits/UltiMail#37 相同的修复）。
+
 - Plugin NPCs are no longer treated as unauthenticated players: a player-type NPC carrying the `NPC`
   metadata that NPC plugins such as Citizens set is left alone by the whole login protection — it can take
   damage, ride and move, and it is not prompted or timed out. Before, such an NPC was invulnerable, could not

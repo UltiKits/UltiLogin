@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.Consumer;
 
+import com.ultikits.plugins.login.util.Placeholders;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 
 import org.bukkit.configuration.InvalidConfigurationException;
@@ -95,10 +96,12 @@ public final class RemovedConfigKeys {
             if (yaml.contains(entry.getKey())) {
                 // No "[UltiLogin]" prefix: the module logger adds that itself, and the module is
                 // still named in the sentence for any consumer that does not.
-                warn.accept(plugin.i18n("removed_key_warning")
-                        .replace("{FILE}", configFile.getPath())
-                        .replace("{KEY}", entry.getKey())
-                        .replace("{REASON}", reasonFor(entry.getKey(), plugin)));
+                // One pass: the operator's path is inserted exactly as it is, even when a directory
+                // name contains a placeholder token (the class of UltiKits/UltiMail#37).
+                warn.accept(Placeholders.fill(plugin.i18n("removed_key_warning"),
+                        "{FILE}", configFile.getPath(),
+                        "{KEY}", entry.getKey(),
+                        "{REASON}", reasonFor(entry.getKey(), plugin)));
             }
         }
     }
