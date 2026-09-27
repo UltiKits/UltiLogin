@@ -498,6 +498,37 @@ class LoginServiceTest {
             assertThat(result.getMessage()).isEqualTo("LOCKED 900");
         }
 
+        /**
+         * UltiKits/UltiLogin#37 (maintainer decision: refuse and name the value): a
+         * {@code security.lockout-type} other than IP / UUID / BOTH falls back to the default, IP,
+         * instead of switching the lockout off.
+         */
+        @ParameterizedTest(name = "lockout-type \"{0}\"")
+        @ValueSource(strings = {"NONE", "IPs", "", "ip-only"})
+        @DisplayName("an unrecognised lockout-type locks by IP, the default (UltiKits/UltiLogin#37)")
+        void unrecognisedLockoutTypeLocksByIp(String lockoutType) {
+            when(config.getMaxLoginAttempts()).thenReturn(2);
+            when(config.getLockoutType()).thenReturn(lockoutType);
+
+            assertThat(service.login(player, "wrong1").getMessage()).isEqualTo("REMAINING 1");
+            assertThat(service.login(player, "wrong2").getMessage()).isEqualTo("LOCKED 900");
+            assertThat(service.isLocked(player)).isTrue();
+
+            LoginService.LoginResult result = service.login(player, PASSWORD);
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+        }
+
+        @Test
+        @DisplayName("POSITIVE CONTROL: a lower-case recognised lockout-type is still recognised")
+        void lowerCaseLockoutTypeIsRecognised() {
+            when(config.getMaxLoginAttempts()).thenReturn(1);
+            when(config.getLockoutType()).thenReturn("uuid");
+
+            assertThat(service.login(player, "wrong1").getMessage()).isEqualTo("LOCKED 900");
+            assertThat(service.isLocked(player)).isTrue();
+        }
+
         @Test
         @DisplayName("an unrecognised lockout-type is never answered as locked unless a lock was recorded")
         void unrecognisedLockoutTypeIsNeverAnsweredAsLocked() {
