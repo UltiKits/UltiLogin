@@ -1,5 +1,6 @@
 package com.ultikits.plugins.login.commands;
 
+import com.ultikits.plugins.login.i18n.LoginSeams;
 import com.ultikits.plugins.login.UltiLogin;
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.service.LoginService;
@@ -50,6 +51,8 @@ class PanelCommandTest {
         serverField.set(null, mockServer);
 
         loginService = mock(LoginService.class);
+
+        LoginSeams.speak(loginService, "zh");
         command = new PanelCommand(UltiLoginTestHelper.getMockPlugin(), loginService);
 
         playerUuid = UUID.randomUUID();
@@ -98,23 +101,22 @@ class PanelCommandTest {
          * hops are involved -- runTaskAsynchronously (the HTTP call) then runTask (delivering the
          * result back on the main thread) -- so both Runnables are captured and the outer one is
          * run first to produce the inner one, per the capture-and-invoke idiom for this
-         * ecosystem's anonymous BukkitRunnable scheduler callbacks (09-PATTERNS.md).
+         * ecosystem's anonymous BukkitRunnable scheduler callbacks.
          */
         private Runnable captureResultDeliveryTask(LoginService.PanelLinkResult result) {
             when(loginService.isPanelEnabled()).thenReturn(true);
-            // Round 4 (Codex PR #18 thread 3945030000): openPanel() now captures the player's
-            // invalidation generation via getInvalidationGeneration() before scheduling the
-            // async worker, and passes it into the two-argument requestPanelLink() overload so
-            // the worker can refuse to publish a request that went stale in the gap. The
-            // captured value itself does not matter to this fixture (loginService is a plain
-            // mock, so getInvalidationGeneration() already returns 0 by default) -- only that
-            // the two-argument overload is the one stubbed and invoked.
+            // openPanel() now captures the player's invalidation generation via
+            // getInvalidationGeneration() before scheduling the async worker, and passes it
+            // into the two-argument requestPanelLink() overload so the worker can refuse to
+            // publish a request that went stale in the gap. The captured value itself does not
+            // matter to this fixture (loginService is a plain mock, so
+            // getInvalidationGeneration() already returns 0 by default) -- only that the
+            // two-argument overload is the one stubbed and invoked.
             when(loginService.requestPanelLink(eq(player), anyLong())).thenReturn(result);
-            // Round 9 (Codex PR #18 thread 3946574845): the result-delivery task now revalidates
-            // via isPanelRequestCurrent() before acting on a successful result -- default this to
-            // "still current" so the pre-existing success-path tests below keep exercising the
-            // link-sent/poll-started behaviour unchanged. The dedicated staleness test overrides
-            // this per-test.
+            // The result-delivery task now revalidates via isPanelRequestCurrent() before acting
+            // on a successful result -- default this to "still current" so the pre-existing
+            // success-path tests below keep exercising the link-sent/poll-started behaviour unchanged.
+            // The dedicated staleness test overrides this per-test.
             lenient().when(loginService.isPanelRequestCurrent(any(), any(), anyLong())).thenReturn(true);
 
             command.openPanel(player);
@@ -144,10 +146,9 @@ class PanelCommandTest {
         @Test
         @DisplayName("Should send a clickable panel link and start auth polling, keyed on the result's request id, when the link request succeeds")
         void sendsClickableLinkAndStartsPollingOnSuccess() {
-            // Round 7 (Codex PR #18 thread 3946170644): startAuthPolling must be keyed on the
-            // exact request id requestPanelLink() published, not re-derived from "whatever is
-            // pending now" -- so this result's requestId ("req-1") must reach startAuthPolling
-            // unchanged.
+            // startAuthPolling must be keyed on the exact request id requestPanelLink() published, not
+            // re-derived from "whatever is pending now" -- so this result's requestId ("req-1") must
+            // reach startAuthPolling unchanged.
             Runnable task = captureResultDeliveryTask(
                     new LoginService.PanelLinkResult(true, "https://panel.example/link", null, "req-1"));
 
@@ -165,12 +166,11 @@ class PanelCommandTest {
                 + " the request was invalidated between requestPanelLink()'s return and this"
                 + " callback actually running on the main thread")
         void discardsResultWhenInvalidatedBeforeCallbackRuns() {
-            // Round 9 (Codex PR #18 thread 3946574845, P2): requestPanelLink()'s own post-POST
-            // re-check (round 7) only closes the race up to the moment that method returns. This
-            // callback is itself scheduled via runTask(...) after that method already returned a
-            // success result -- an invalidateSession(...) landing in that final gap must still be
-            // caught here, or the revoked player would receive the magic link and start a new
-            // poll for it anyway.
+            // requestPanelLink()'s own post-POST re-check only closes the race up to the moment
+            // that method returns. This callback is itself scheduled via runTask(...) after that
+            // method already returned a success result -- an invalidateSession(...) landing in
+            // that final gap must still be caught here, or the revoked player would receive the
+            // magic link and start a new poll for it anyway.
             Runnable task = captureResultDeliveryTask(
                     new LoginService.PanelLinkResult(true, "https://panel.example/link", null, "req-1"));
             when(loginService.isPanelRequestCurrent(eq(playerUuid), eq("req-1"), anyLong()))

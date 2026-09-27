@@ -1,5 +1,6 @@
 package com.ultikits.plugins.login.commands;
 
+import com.ultikits.plugins.login.i18n.LoginSeams;
 import com.ultikits.plugins.login.UltiLogin;
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.service.EmailVerificationService;
@@ -31,8 +32,13 @@ class EmailBindCommandTest {
     void setUp() throws Exception {
         UltiLoginTestHelper.setUp();
         plugin = UltiLoginTestHelper.getMockPlugin();
+        // These tests pin which key each outcome selects and how its placeholders are filled, so
+        // i18n answers with the key itself here; the text behind each key is pinned by the
+        // language guards and the language test.
+        lenient().when(plugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
         emailVerificationService = mock(EmailVerificationService.class);
         loginService = mock(LoginService.class);
+        LoginSeams.speak(loginService, "zh");
         command = new EmailBindCommand(plugin, emailVerificationService, loginService);
 
         playerUuid = UUID.randomUUID();

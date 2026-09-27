@@ -111,7 +111,7 @@ class UltiLoginTest {
             UltiLogin plugin = mock(UltiLogin.class);
             logger = mock(PluginLogger.class);
             when(plugin.getLogger()).thenReturn(logger);
-            when(plugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
+            when(plugin.i18n(anyString())).thenAnswer(com.ultikits.plugins.login.i18n.CatalogueText.answer("en"));
             when(plugin.operatorConfigFile()).thenReturn(file);
             return plugin;
         }
@@ -149,11 +149,11 @@ class UltiLoginTest {
         @Test
         @DisplayName("the check reads the same file LoginConfig declares, from one source")
         void readsTheFileLoginConfigDeclares() {
-            // Gate 1 IN-01. Every other test here stubs operatorConfigFile(), so if the path the
-            // check resolves ever drifted from the file LoginConfig binds, the production check
-            // would read a file that does not exist, return silently, and look exactly like a
-            // server with no leftover key. The path the check uses must equal both places
-            // LoginConfig names its file: the @ConfigEntity value and the constructor argument.
+            // Every other test here stubs operatorConfigFile(), so if the path the check
+            // resolves ever drifted from the file LoginConfig binds, the production check would
+            // read a file that does not exist, return silently, and look exactly like a server
+            // with no leftover key. The path the check uses must equal both places LoginConfig
+            // names its file: the @ConfigEntity value and the constructor argument.
             UltiLogin plugin = mock(UltiLogin.class);
             when(plugin.operatorConfigPath()).thenCallRealMethod();
 
@@ -169,13 +169,13 @@ class UltiLoginTest {
         @Test
         @DisplayName("a failure inside the check never costs the module its enable or its reload")
         void aFailingCheckNeverFailsEnableOrReload() {
-            // Gate 1 IN-04. The check is advisory and sits on the enable path of the module whose
-            // absence means nobody is asked to log in, so an exception escaping it would fail open
-            // for the whole server. Simulated with the file lookup itself failing.
+            // The check is advisory and sits on the enable path of the module whose absence means
+            // nobody is asked to log in, so an exception escaping it would fail open for the
+            // whole server. Simulated with the file lookup itself failing.
             UltiLogin plugin = mock(UltiLogin.class);
             logger = mock(PluginLogger.class);
             when(plugin.getLogger()).thenReturn(logger);
-            when(plugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
+            when(plugin.i18n(anyString())).thenAnswer(com.ultikits.plugins.login.i18n.CatalogueText.answer("en"));
             when(plugin.operatorConfigFile())
                     .thenThrow(new java.io.UncheckedIOException(new IOException("disk unavailable")));
             when(plugin.registerSelf()).thenCallRealMethod();
@@ -204,6 +204,34 @@ class UltiLoginTest {
             doCallRealMethod().when(onReload).onReload();
             onReload.onReload();
             assertThat(warnings()).isEmpty();
+        }
+    }
+    /**
+     * The console line a failed removed-key check prints follows the language setting
+     * (UltiKits/UltiLogin#20). Here, not in the language test, because the file seam is
+     * package-private.
+     */
+    @Nested
+    @DisplayName("the check-failed console line follows the language setting (UltiKits/UltiLogin#20)")
+    class CheckFailedLanguage {
+
+        @Test
+        @DisplayName("reported in Chinese under language: zh")
+        void chinese() {
+            UltiLogin plugin = mock(UltiLogin.class);
+            PluginLogger logger = mock(PluginLogger.class);
+            when(plugin.getLogger()).thenReturn(logger);
+            when(plugin.i18n(anyString())).thenAnswer(com.ultikits.plugins.login.i18n.CatalogueText.answer("zh"));
+            when(plugin.operatorConfigFile())
+                    .thenThrow(new java.io.UncheckedIOException(new IOException("disk unavailable")));
+            when(plugin.registerSelf()).thenCallRealMethod();
+
+            plugin.registerSelf();
+
+            String expected = com.ultikits.plugins.login.i18n.CatalogueText.entries("zh")
+                    .getOrDefault("log_removed_key_check_failed", "<lang/zh has no log_removed_key_check_failed>")
+                    .replace("{FILE}", com.ultikits.plugins.login.config.LoginConfig.CONFIG_FILE);
+            verify(logger).warn(any(Throwable.class), org.mockito.ArgumentMatchers.eq(expected));
         }
     }
 }

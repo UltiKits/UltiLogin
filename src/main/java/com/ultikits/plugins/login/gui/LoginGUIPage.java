@@ -67,9 +67,9 @@ public class LoginGUIPage extends Gui {
     
     @Override
     public void onOpen(InventoryOpenEvent event) {
-        // Round 10 (Codex PR #18 thread 3946842965): mark this player as having a credential GUI
-        // open, so a delayed reopen queued by a previous close of this or the register GUI (see
-        // onClose below) refuses to stack a second one on top of this one.
+        // Mark this player as having a credential GUI open, so a delayed reopen queued by a
+        // previous close of this or the register GUI (see onClose below) refuses to stack a
+        // second one on top of this one.
         loginService.markCredentialGuiOpen(player.getUniqueId());
 
         // Fill background
@@ -98,17 +98,17 @@ public class LoginGUIPage extends Gui {
     public void onClose(InventoryCloseEvent event) {
         UUID uuid = player.getUniqueId();
 
-        // Round 10 (Codex PR #18 thread 3946842965): this GUI is genuinely closing regardless of
-        // why -- clear the "credential GUI open" marker unconditionally, before the transition
-        // check below, so a queued reopen's own guard (see below) and presentCredentialPrompt's
-        // state checks never see a GUI that no longer exists.
+        // This GUI is genuinely closing regardless of why -- clear the "credential GUI open"
+        // marker unconditionally, before the transition check below, so a queued reopen's own
+        // guard (see below) and presentCredentialPrompt's state checks never see a GUI that no
+        // longer exists.
         loginService.markCredentialGuiClosed(uuid);
 
-        // Round 9 (Codex PR #18 thread 3946574852, P2): skip entirely while
-        // LoginProtectionListener.presentCredentialPrompt is mid-transition to a different
-        // credential GUI for this player. That call is the one deliberately closing this GUI --
-        // it is already about to open the correct one itself -- so this hook must not schedule a
-        // reopen of its own, regardless of what the state checks below would otherwise say.
+        // Skip entirely while LoginProtectionListener.presentCredentialPrompt is mid-transition
+        // to a different credential GUI for this player. That call is the one deliberately
+        // closing this GUI -- it is already about to open the correct one itself -- so this hook
+        // must not schedule a reopen of its own, regardless of what the state checks below would
+        // otherwise say.
         if (loginService.isCredentialGuiTransitioning(uuid)) {
             return;
         }
@@ -119,10 +119,10 @@ public class LoginGUIPage extends Gui {
         // forever, so this hook kept reopening a login GUI for an account that no longer exists,
         // fighting the register GUI the revocation prompt opened over it every 10 ticks.
         if (loginService.isRegistered(uuid) && !loginService.isLoggedIn(uuid)) {
-            // Round 10 (Codex PR #18 thread 3946842965): an admin password reset (or self-service
-            // change) landing during this delay leaves isRegistered/isLoggedIn unchanged, so the
-            // state check above cannot by itself detect that a credential change has already
-            // opened a fresh credential GUI in the meantime. Two independent defenses close that:
+            // An admin password reset (or self-service change) landing during this delay leaves
+            // isRegistered/isLoggedIn unchanged, so the state check above cannot by itself detect
+            // that a credential change has already opened a fresh credential GUI in the meantime.
+            // Two independent defenses close that:
             // (1) presentCredentialPrompt cancels this exact task via
             // loginService.cancelPendingCredentialGuiReopen before opening its own GUI, and (2)
             // this runnable re-checks isCredentialGuiTransitioning/isCredentialGuiOpen fresh, at
@@ -190,7 +190,7 @@ public class LoginGUIPage extends Gui {
         ItemStack display = new ItemStack(Material.PAPER);
         ItemMeta meta = display.getItemMeta();
         if (meta != null) {
-            meta.setDisplayName(ChatColor.GOLD + "密码输入");
+            meta.setDisplayName(ChatColor.GOLD + plugin.i18n("gui_password_display"));
             
             List<String> lore = new ArrayList<>();
             lore.add("");
@@ -209,7 +209,9 @@ public class LoginGUIPage extends Gui {
             }
             lore.add(ChatColor.WHITE + masked.toString());
             lore.add("");
-            lore.add(ChatColor.GRAY + "已输入 " + passwordInput.length() + "/" + passwordLength + " 位");
+            lore.add(ChatColor.GRAY + plugin.i18n("gui_entered")
+                .replace("{CURRENT}", String.valueOf(passwordInput.length()))
+                .replace("{TOTAL}", String.valueOf(passwordLength)));
             
             meta.setLore(lore);
             display.setItemMeta(meta);
@@ -248,9 +250,9 @@ public class LoginGUIPage extends Gui {
         ItemStack glass = XVersionUtils.getColoredPlaneGlass(Colors.GREEN);
         ItemMeta meta = glass.getItemMeta();
         if (meta != null) {
-            meta.setDisplayName(ChatColor.GREEN + "" + ChatColor.BOLD + "确认登录");
+            meta.setDisplayName(ChatColor.GREEN + "" + ChatColor.BOLD + plugin.i18n("gui_login_confirm_button"));
             List<String> lore = new ArrayList<>();
-            lore.add(ChatColor.GRAY + "点击确认登录");
+            lore.add(ChatColor.GRAY + plugin.i18n("gui_login_confirm_lore"));
             meta.setLore(lore);
             glass.setItemMeta(meta);
         }
@@ -267,9 +269,9 @@ public class LoginGUIPage extends Gui {
         ItemStack glass = XVersionUtils.getColoredPlaneGlass(Colors.RED);
         ItemMeta meta = glass.getItemMeta();
         if (meta != null) {
-            meta.setDisplayName(ChatColor.RED + "" + ChatColor.BOLD + "清空");
+            meta.setDisplayName(ChatColor.RED + "" + ChatColor.BOLD + plugin.i18n("gui_clear_button"));
             List<String> lore = new ArrayList<>();
-            lore.add(ChatColor.GRAY + "点击清空已输入的密码");
+            lore.add(ChatColor.GRAY + plugin.i18n("gui_clear_lore"));
             meta.setLore(lore);
             glass.setItemMeta(meta);
         }
@@ -289,10 +291,10 @@ public class LoginGUIPage extends Gui {
         ItemStack glass = XVersionUtils.getColoredPlaneGlass(Colors.ORANGE);
         ItemMeta meta = glass.getItemMeta();
         if (meta != null) {
-            meta.setDisplayName(ChatColor.GOLD + "" + ChatColor.BOLD + "退出");
+            meta.setDisplayName(ChatColor.GOLD + "" + ChatColor.BOLD + plugin.i18n("gui_exit_button"));
             List<String> lore = new ArrayList<>();
-            lore.add(ChatColor.GRAY + "点击退出登录界面");
-            lore.add(ChatColor.RED + "注意: 你仍需要登录才能游玩");
+            lore.add(ChatColor.GRAY + plugin.i18n("gui_login_exit_lore"));
+            lore.add(ChatColor.RED + plugin.i18n("gui_login_exit_warning"));
             meta.setLore(lore);
             glass.setItemMeta(meta);
         }

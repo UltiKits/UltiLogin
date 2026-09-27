@@ -1,5 +1,6 @@
 package com.ultikits.plugins.login.listener;
 
+import com.ultikits.plugins.login.i18n.LoginSeams;
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.gui.LoginGUIPage;
@@ -39,6 +40,7 @@ class LoginProtectionListenerTest {
     void setUp() throws Exception {
         UltiLoginTestHelper.setUp();
         loginService = mock(LoginService.class);
+        LoginSeams.speak(loginService, "zh");
 
         // Mock config on loginService
         config = UltiLoginTestHelper.createDefaultConfig();
@@ -55,13 +57,12 @@ class LoginProtectionListenerTest {
         mockServer = mock(Server.class);
         org.bukkit.plugin.PluginManager mockPm = mock(org.bukkit.plugin.PluginManager.class);
         mockScheduler = mock(BukkitScheduler.class);
-        // Round 6 (13-REVIEW-UltiLogin.md, own review of 29ba589): presentCredentialPrompt's new
-        // dispatchOnMainThread helper only schedules via runTask(...) when bukkitPlugin.isEnabled()
-        // is true (off the primary thread, which this mock Server always reports since
-        // isPrimaryThread() is never stubbed). Default to enabled so every pre-existing
-        // scheduler-capturing test below keeps exercising the runTask path; DisabledPlugin below
-        // overrides it back to false for its own case, and PrimaryThread stubs isPrimaryThread()
-        // true instead.
+        // presentCredentialPrompt's new dispatchOnMainThread helper only schedules via runTask(...)
+        // when bukkitPlugin.isEnabled() is true (off the primary thread, which this mock Server
+        // always reports since isPrimaryThread() is never stubbed). Default to enabled so every
+        // pre-existing scheduler-capturing test below keeps exercising the runTask path;
+        // DisabledPlugin below overrides it back to false for its own case, and PrimaryThread
+        // stubs isPrimaryThread() true instead.
         mockBukkitPlugin = mock(org.bukkit.plugin.Plugin.class);
         lenient().when(mockBukkitPlugin.isEnabled()).thenReturn(true);
         lenient().when(mockServer.getPluginManager()).thenReturn(mockPm);
@@ -106,7 +107,7 @@ class LoginProtectionListenerTest {
     }
 
     @Nested
-    @DisplayName("presentCredentialPrompt dispatch (round 6, 13-REVIEW-UltiLogin.md own review of 29ba589)")
+    @DisplayName("presentCredentialPrompt dispatch")
     class PresentCredentialPromptDispatch {
 
         @Test
@@ -136,7 +137,11 @@ class LoginProtectionListenerTest {
 
             verify(mockScheduler, never()).runTask(any(org.bukkit.plugin.Plugin.class), any(Runnable.class));
             verify(player, never()).sendMessage(anyString());
-            verify(UltiLoginTestHelper.getMockLogger()).warn(anyString());
+            // The console line follows the language setting (UltiKits/UltiLogin#20)
+            String expected = com.ultikits.plugins.login.i18n.CatalogueText.entries("zh")
+                    .getOrDefault("log_prompt_skipped_disabling", "<lang/zh has no log_prompt_skipped_disabling>")
+                    .replace("{PLAYER}", "TestPlayer");
+            verify(UltiLoginTestHelper.getMockLogger()).warn(expected);
         }
     }
 
@@ -443,7 +448,7 @@ class LoginProtectionListenerTest {
             org.bukkit.inventory.InventoryView view = mock(org.bukkit.inventory.InventoryView.class);
             when(event.getWhoClicked()).thenReturn(player);
             when(event.getView()).thenReturn(view);
-            when(view.getTitle()).thenReturn("请输入密码");
+            when(view.getTitle()).thenReturn("\u00a76请输入密码");
 
             listener.onInventoryClick(event);
 
@@ -467,6 +472,82 @@ class LoginProtectionListenerTest {
         }
     }
 
+    /**
+     * The credential GUI is recognised by the titles it is actually opened with, whatever language
+     * they are in (UltiKits/UltiLogin#20). Before the language sweep the allowance was "the title
+     * contains 密码, 登录 or 注册": under {@code language: en} the GUI's own English title matched none
+     * of them, so every keypad click was cancelled, while any other plugin's inventory whose title
+     * contained one of those words was let through.
+     */
+    @Nested
+    @DisplayName("credential GUI recognised by its resolved titles, in any language (UltiKits/UltiLogin#20)")
+    class CredentialGuiTitles {
+
+        private org.bukkit.event.inventory.InventoryClickEvent clickIn(String title) {
+            org.bukkit.event.inventory.InventoryClickEvent event = mock(org.bukkit.event.inventory.InventoryClickEvent.class);
+            org.bukkit.inventory.InventoryView view = mock(org.bukkit.inventory.InventoryView.class);
+            when(event.getWhoClicked()).thenReturn(player);
+            when(event.getView()).thenReturn(view);
+            when(view.getTitle()).thenReturn(title);
+            return event;
+        }
+
+        private org.bukkit.event.inventory.InventoryOpenEvent openOf(String title) {
+            org.bukkit.event.inventory.InventoryOpenEvent event = mock(org.bukkit.event.inventory.InventoryOpenEvent.class);
+            org.bukkit.inventory.InventoryView view = mock(org.bukkit.inventory.InventoryView.class);
+            when(event.getPlayer()).thenReturn(player);
+            when(event.getView()).thenReturn(view);
+            when(view.getTitle()).thenReturn(title);
+            return event;
+        }
+
+        @BeforeEach
+        void englishTitles() {
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+            lenient().when(config.getGuiLoginTitle()).thenReturn("&6Enter Password");
+            lenient().when(config.getGuiRegisterTitle()).thenReturn("&6Set Password");
+            lenient().when(config.getGuiConfirmTitle()).thenReturn("&6Confirm Password");
+        }
+
+        @Test
+        @DisplayName("keypad clicks in each English credential GUI title are allowed")
+        void englishTitlesAllowed() {
+            for (String title : new String[]{"\u00a76Enter Password", "\u00a76Set Password", "\u00a76Confirm Password"}) {
+                org.bukkit.event.inventory.InventoryClickEvent click = clickIn(title);
+                org.bukkit.event.inventory.InventoryOpenEvent open = openOf(title);
+
+                listener.onInventoryClick(click);
+                listener.onInventoryOpen(open);
+
+                verify(click, never()).setCancelled(true);
+                verify(open, never()).setCancelled(true);
+            }
+        }
+
+        @Test
+        @DisplayName("a title the server echoes with its colour codes rewritten is still the credential GUI")
+        void normalisedColourCodesAllowed() {
+            org.bukkit.event.inventory.InventoryClickEvent click = clickIn("\u00a76\u00a7rEnter Password");
+
+            listener.onInventoryClick(click);
+
+            verify(click, never()).setCancelled(true);
+        }
+
+        @Test
+        @DisplayName("another inventory whose title merely contains 登录 is refused")
+        void foreignTitleRefused() {
+            org.bukkit.event.inventory.InventoryClickEvent click = clickIn("\u00a76登录奖励");
+            org.bukkit.event.inventory.InventoryOpenEvent open = openOf("\u00a76每日注册礼包");
+
+            listener.onInventoryClick(click);
+            listener.onInventoryOpen(open);
+
+            verify(click).setCancelled(true);
+            verify(open).setCancelled(true);
+        }
+    }
+
     @Nested
     @DisplayName("onInventoryOpen")
     class OnInventoryOpen {
@@ -480,7 +561,7 @@ class LoginProtectionListenerTest {
             org.bukkit.inventory.InventoryView view = mock(org.bukkit.inventory.InventoryView.class);
             when(event.getPlayer()).thenReturn(player);
             when(event.getView()).thenReturn(view);
-            when(view.getTitle()).thenReturn("注册账号");
+            when(view.getTitle()).thenReturn("\u00a76请设置密码");
 
             listener.onInventoryOpen(event);
 
@@ -545,7 +626,7 @@ class LoginProtectionListenerTest {
             org.bukkit.inventory.InventoryView view = mock(org.bukkit.inventory.InventoryView.class);
             when(event.getPlayer()).thenReturn(player);
             when(event.getView()).thenReturn(view);
-            when(view.getTitle()).thenReturn("登录界面");
+            when(view.getTitle()).thenReturn("\u00a76请再次输入密码");
 
             listener.onInventoryOpen(event);
 
@@ -728,7 +809,7 @@ class LoginProtectionListenerTest {
             org.bukkit.inventory.InventoryView view = mock(org.bukkit.inventory.InventoryView.class);
             when(event.getWhoClicked()).thenReturn(player);
             when(event.getView()).thenReturn(view);
-            when(view.getTitle()).thenReturn("注册");
+            when(view.getTitle()).thenReturn("\u00a76请设置密码");
 
             listener.onInventoryClick(event);
 
@@ -744,7 +825,7 @@ class LoginProtectionListenerTest {
             org.bukkit.inventory.InventoryView view = mock(org.bukkit.inventory.InventoryView.class);
             when(event.getWhoClicked()).thenReturn(player);
             when(event.getView()).thenReturn(view);
-            when(view.getTitle()).thenReturn("登录");
+            when(view.getTitle()).thenReturn("\u00a76请再次输入密码");
 
             listener.onInventoryClick(event);
 
@@ -768,10 +849,9 @@ class LoginProtectionListenerTest {
             listener.onPlayerChat(event);
 
             assertThat(event.isCancelled()).isTrue();
-            // Round 5 (13-REVIEW-UltiLogin.md, own deep review of bcadfb5, Info finding): the
-            // text-prompt branch is now dispatched via Bukkit.getScheduler().runTask(...), the
-            // same as the GUI branch already was, so this must capture and run that task rather
-            // than expect player.sendMessage(...) synchronously.
+            // The text-prompt branch is now dispatched via Bukkit.getScheduler().runTask(...),
+            // the same as the GUI branch already was, so this must capture and run that task
+            // rather than expect player.sendMessage(...) synchronously.
             ArgumentCaptor<Runnable> captor = ArgumentCaptor.forClass(Runnable.class);
             verify(mockScheduler).runTask(any(), captor.capture());
             captor.getValue().run();
@@ -790,9 +870,8 @@ class LoginProtectionListenerTest {
             listener.onPlayerChat(event);
 
             assertThat(event.isCancelled()).isTrue();
-            // Round 5 (13-REVIEW-UltiLogin.md, own deep review of bcadfb5, Info finding): see
-            // sendPromptRegistered() above -- the text-prompt branch now schedules onto the main
-            // thread the same way the GUI branch already did.
+            // See sendPromptRegistered() above -- the text-prompt branch now schedules onto the
+            // main thread the same way the GUI branch already did.
             ArgumentCaptor<Runnable> captor = ArgumentCaptor.forClass(Runnable.class);
             verify(mockScheduler).runTask(any(), captor.capture());
             captor.getValue().run();
@@ -909,9 +988,8 @@ class LoginProtectionListenerTest {
             listener.onPlayerCommand(event);
 
             assertThat(event.isCancelled()).isTrue();
-            // Round 5 (13-REVIEW-UltiLogin.md, own deep review of bcadfb5, Info finding): see
-            // OnPlayerChatExtended#sendPromptRegistered() above -- the text-prompt branch now
-            // schedules onto the main thread the same way the GUI branch already did.
+            // See OnPlayerChatExtended#sendPromptRegistered() above -- the text-prompt branch
+            // now schedules onto the main thread the same way the GUI branch already did.
             ArgumentCaptor<Runnable> captor = ArgumentCaptor.forClass(Runnable.class);
             verify(mockScheduler).runTask(any(), captor.capture());
             captor.getValue().run();
@@ -920,7 +998,7 @@ class LoginProtectionListenerTest {
     }
 
     @Nested
-    @DisplayName("sendLoginPrompt text-mode dispatch race (round 12, 13-REVIEW-UltiLogin.md Codex thread 3947572910)")
+    @DisplayName("sendLoginPrompt text-mode dispatch race")
     class SendLoginPromptTextModeCallback {
 
         /**
@@ -985,9 +1063,8 @@ class LoginProtectionListenerTest {
          * Triggers onPlayerJoin with GUI mode enabled, captures the Runnable scheduled via
          * runTaskLater without invoking it, so each test below can choose which tick's state
          * (online/offline, logged-in/not, session valid/not) the delayed task observes when it
-         * finally runs -- the ArgumentCaptor<Runnable> capture-and-invoke idiom documented in
-         * 09-PATTERNS.md / 09-15-SUMMARY.md for this ecosystem's anonymous BukkitRunnable
-         * scheduler callbacks.
+         * finally runs -- the ArgumentCaptor<Runnable> capture-and-invoke idiom used for this
+         * ecosystem's anonymous BukkitRunnable scheduler callbacks.
          */
         private Runnable captureDelayedTask() {
             when(config.isGuiModeEnabled()).thenReturn(true);

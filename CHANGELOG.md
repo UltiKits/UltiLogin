@@ -7,7 +7,61 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Fixed
+### Changed
+
+- Message and title settings in `config/login.yml` — the three GUI titles (`gui-mode.title-login`,
+  `gui-mode.title-register`, `gui-mode.title-confirm`) and the twenty-one messages (`messages.register-prompt`,
+  `register-prompt-gui`, `login-prompt`, `login-prompt-gui`, `register-success`, `login-success`, `already-logged`,
+  `not-registered`, `already-registered`, `password-mismatch`, `password-too-short`, `password-too-long`,
+  `timeout-kick`, `account-locked`, `attempts-remaining`, `gui-password-invalid`, and `messages.admin.password-reset`,
+  `force-login`, `unregister`, `player-not-found`, `account-not-found`) — are written in the server's language when
+  the module starts, and the file is what the module shows (for example `messages.login-success:
+  '&aLogin successful! Welcome back!'` under `language: en`); previously they were fixed Chinese text, so
+  `language: en` had no effect on them. A setting that is still built-in text — in any language, or a default an
+  earlier version shipped — follows `language`: it is rewritten when the module starts or after `/ul reload`. A
+  setting you edited is kept. To keep a built-in text but stop it following `language`, change at least one
+  character (UltiKits/UltiLogin#20). The text written is this module's built-in text: edit these settings in `config/login.yml`; an edit of the extracted
+  language file does not change them (earlier versions never read them from the language file either).
+- `config/login.yml` 中的消息与标题设置——三个界面标题（`gui-mode.title-login`、`gui-mode.title-register`、
+  `gui-mode.title-confirm`）与二十一条消息（`messages.register-prompt`、`register-prompt-gui`、`login-prompt`、
+  `login-prompt-gui`、`register-success`、`login-success`、`already-logged`、`not-registered`、`already-registered`、
+  `password-mismatch`、`password-too-short`、`password-too-long`、`timeout-kick`、`account-locked`、`attempts-remaining`、
+  `gui-password-invalid`，以及 `messages.admin.password-reset`、`force-login`、`unregister`、`player-not-found`、
+  `account-not-found`）——在模块启动时按服务器语言写入，文件内容即模块显示的内容；此前它们是写死的中文，`language: en`
+  对它们不起作用。仍为内置文本（任一语言的内置文本，或旧版本的出厂默认值）的设置会跟随 `language`：模块启动或执行
+  `/ul reload` 后改写为当前语言的文本。你改过的设置保持不变。若想保留内置文本又不让它跟随语言，请至少改动一个字符
+  （UltiKits/UltiLogin#20）。写入的是本模块的内置文本：请在 `config/login.yml` 中修改这些设置；修改已解压的语言文件不会改变它们（旧版本同样从不从语言文件读取它们）。
+
+- `language: en` now applies to everything this module shows or logs: the help of `/login`,
+  `/register`, `/changepassword`, `/logadmin` and `/panel`, the `/changepassword` and `/logadmin`
+  replies, the `/logadmin info` block, the registration refusal when an IP has reached its limit,
+  the session auto-login line, the login and registration keypads (item names, lore, the
+  confirmation step and the registration failure), the seven command descriptions, and the console
+  lines. Most of this was fixed Chinese text in every language, although the language files already
+  held English text for much of it that no code read; the console lines were fixed English text and
+  now follow `language: zh` too (UltiKits/UltiLogin#20).
+- The login and registration keypads are now recognised by the titles they are opened with, so
+  their buttons work under every language and under titles you have customised. They used to be
+  recognised by whether the inventory title contained the Chinese word for "password", "login" or
+  "register": a keypad whose title contained none of them cancelled every click, which with the
+  titles now following `language` would have included the English ones, and another plugin's
+  inventory whose title happened to contain one of those words could be clicked by a player who had
+  not logged in (UltiKits/UltiLogin#20).
+- `language: en` 现在对本模块显示或记录的全部内容生效：`/login`、`/register`、`/changepassword`、`/logadmin`、`/panel`
+  的帮助，`/changepassword` 与 `/logadmin` 的回复，`/logadmin info` 信息块，IP 注册数达到上限时的拒绝提示，会话自动登录
+  提示，登录与注册数字键盘（物品名称、说明、确认步骤与注册失败提示），七个命令描述以及控制台日志。其中大部分原先在任何
+  语言下都是写死的中文，而语言文件中其实已有其中许多内容的无人读取的英文文本；控制台日志原先写死为英文，现在也跟随
+  `language: zh`（UltiKits/UltiLogin#20）。
+- 登录与注册数字键盘现在按其打开时使用的标题识别，因此在任何语言以及你自定义的标题下按钮都能正常使用。此前的识别方式是
+  物品栏标题是否包含"密码"、"登录"或"注册"：标题不含这些词的键盘会取消每一次点击——标题跟随 `language` 后英文标题也会如此；
+  而其他插件的物品栏只要标题恰好含有其中一个词，未登录的玩家就能在其中点击（UltiKits/UltiLogin#20）。
+
+- A wrong code in `/recover <code> <password> <confirm>` now says how many attempts are left, for
+  example `Invalid verification code! Remaining attempts: 2`. It used to show the placeholder itself,
+  `Remaining attempts: {COUNT}`, because the recovery path never filled it in; `/regs <code>`
+  already did (UltiKits/UltiLogin#21).
+- `/recover <验证码> <密码> <确认密码>` 输错验证码时，现在会显示剩余尝试次数，例如 `验证码错误！剩余尝试次数: 2`。
+  此前找回密码流程从未填入该值，直接显示占位符 `{COUNT}`；`/regs <验证码>` 一直是正常的（UltiKits/UltiLogin#21）。
 
 - A player who has not logged in can no longer equip or remove an armor stand's items, interact with
   an entity at a precise point on its body, or swap their main hand and off hand. All three were
@@ -68,6 +122,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   显示账户锁定消息并锁定账户（UltiKits/UltiLogin#23）。
 
 ### Removed
+
+- `lang/en.yml` and `lang/zh.yml`. The framework reads only `lang/en.json` and `lang/zh.json`, and
+  every entry in the two YAML files was a copy of an entry in the JSON file of the same language, so
+  editing them never changed anything. If you customised `lang/*.yml` on disk, move those edits to
+  `lang/*.json`.
+- The `email_bind_reward` and `panel_auth_success` language entries. No code ever read them, so
+  removing them changes nothing players see.
+- 移除 `lang/en.yml` 与 `lang/zh.yml`。框架只读取 `lang/en.json` 与 `lang/zh.json`，两个 YAML 文件中的每一条都是同语言
+  JSON 文件中某一条的副本，因此修改它们从未产生任何效果。若你在磁盘上自定义过 `lang/*.yml`，请把这些修改移到
+  `lang/*.json`。
+- 移除 `email_bind_reward` 与 `panel_auth_success` 两个语言条目。从未有代码读取它们，因此移除它们不会改变玩家看到的任何内容。
 
 - The module's own `UltiLogin 已禁用！` ("UltiLogin disabled!") console line on unload and its own
   `UltiLogin 配置已重载！` ("UltiLogin configuration reloaded!") console line on `/ul reload UltiLogin`

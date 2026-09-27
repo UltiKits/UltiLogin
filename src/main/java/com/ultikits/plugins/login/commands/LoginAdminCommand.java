@@ -28,7 +28,7 @@ import java.util.UUID;
 @CmdExecutor(
     alias = {"logadmin", "loginadmin"},
     permission = "ultilogin.admin",
-    description = "登录系统管理命令"
+    description = "command_logadmin_description"
 )
 public class LoginAdminCommand extends BaseCommandExecutor {
 
@@ -63,7 +63,7 @@ public class LoginAdminCommand extends BaseCommandExecutor {
                 .replace("{PASSWORD}", newPassword);
             sender.sendMessage(ChatColor.translateAlternateColorCodes('&', message));
         } else {
-            sender.sendMessage(ChatColor.RED + "密码重置失败！");
+            sender.sendMessage(ChatColor.RED + i18n("admin_reset_failed"));
         }
     }
     
@@ -101,7 +101,7 @@ public class LoginAdminCommand extends BaseCommandExecutor {
                 .replace("{PASSWORD}", password);
             sender.sendMessage(ChatColor.translateAlternateColorCodes('&', message));
         } else {
-            sender.sendMessage(ChatColor.RED + "密码重置失败！");
+            sender.sendMessage(ChatColor.RED + i18n("admin_reset_failed"));
         }
     }
     
@@ -126,16 +126,16 @@ public class LoginAdminCommand extends BaseCommandExecutor {
         }
         
         if (loginService.isLoggedIn(player.getUniqueId())) {
-            sender.sendMessage(ChatColor.YELLOW + "玩家 " + playerName + " 已经登录！");
+            sender.sendMessage(ChatColor.YELLOW + i18n("admin_player_already_logged").replace("{PLAYER}", playerName));
             return;
         }
         
         if (loginService.forceLogin(player)) {
             String message = config.getAdminForceLogin().replace("{PLAYER}", playerName);
             sender.sendMessage(ChatColor.translateAlternateColorCodes('&', message));
-            player.sendMessage(ChatColor.GREEN + "管理员已帮助你登录！");
+            player.sendMessage(ChatColor.GREEN + i18n("admin_force_login_notify"));
         } else {
-            sender.sendMessage(ChatColor.RED + "强制登录失败！");
+            sender.sendMessage(ChatColor.RED + i18n("admin_force_login_failed"));
         }
     }
     
@@ -159,7 +159,7 @@ public class LoginAdminCommand extends BaseCommandExecutor {
             String message = config.getAdminUnregister().replace("{PLAYER}", playerName);
             sender.sendMessage(ChatColor.translateAlternateColorCodes('&', message));
         } else {
-            sender.sendMessage(ChatColor.RED + "删除账号失败！");
+            sender.sendMessage(ChatColor.RED + i18n("admin_unregister_failed"));
         }
     }
     
@@ -178,23 +178,23 @@ public class LoginAdminCommand extends BaseCommandExecutor {
             return;
         }
         
-        sender.sendMessage(ChatColor.GOLD + "===== 玩家账号信息 =====");
-        sender.sendMessage(ChatColor.YELLOW + "玩家名: " + ChatColor.WHITE + account.getPlayerName());
-        sender.sendMessage(ChatColor.YELLOW + "UUID: " + ChatColor.WHITE + account.getPlayerUuid());
-        sender.sendMessage(ChatColor.YELLOW + "注册IP: " + ChatColor.WHITE + account.getRegisterIp());
-        sender.sendMessage(ChatColor.YELLOW + "最后IP: " + ChatColor.WHITE + account.getLastIp());
-        sender.sendMessage(ChatColor.YELLOW + "登录次数: " + ChatColor.WHITE + account.getLoginCount());
-        sender.sendMessage(ChatColor.YELLOW + "邮箱: " + ChatColor.WHITE + 
-            (account.getEmail() != null ? account.getEmail() : "未绑定"));
-        sender.sendMessage(ChatColor.YELLOW + "邮箱验证: " + ChatColor.WHITE + 
-            (account.isEmailVerified() ? "已验证" : "未验证"));
+        sender.sendMessage(ChatColor.GOLD + i18n("info_header"));
+        sender.sendMessage(field(i18n("info_player_name"), account.getPlayerName()));
+        sender.sendMessage(field(i18n("info_uuid"), account.getPlayerUuid()));
+        sender.sendMessage(field(i18n("info_register_ip"), account.getRegisterIp()));
+        sender.sendMessage(field(i18n("info_last_ip"), account.getLastIp()));
+        sender.sendMessage(field(i18n("info_login_count"), account.getLoginCount()));
+        sender.sendMessage(field(i18n("info_email"),
+            account.getEmail() != null ? account.getEmail() : loginService.i18n("info_email_not_bound")));
+        sender.sendMessage(field(i18n("info_email_verified"),
+            account.isEmailVerified() ? loginService.i18n("info_verified") : loginService.i18n("info_not_verified")));
         
         // Format timestamps
         java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-        sender.sendMessage(ChatColor.YELLOW + "注册时间: " + ChatColor.WHITE + 
-            sdf.format(new java.util.Date(account.getRegisterTime())));
-        sender.sendMessage(ChatColor.YELLOW + "最后登录: " + ChatColor.WHITE + 
-            sdf.format(new java.util.Date(account.getLastLogin())));
+        sender.sendMessage(field(i18n("info_register_time"),
+            sdf.format(new java.util.Date(account.getRegisterTime()))));
+        sender.sendMessage(field(i18n("info_last_login"),
+            sdf.format(new java.util.Date(account.getLastLogin()))));
     }
     
     @CmdMapping(format = "")
@@ -204,10 +204,33 @@ public class LoginAdminCommand extends BaseCommandExecutor {
     
     @Override
     protected void handleHelp(CommandSender sender) {
-        sender.sendMessage(ChatColor.GOLD + "===== UltiLogin 管理命令 =====");
-        sender.sendMessage(ChatColor.YELLOW + "/logadmin reset <玩家> [密码]" + ChatColor.WHITE + " - 重置玩家密码");
-        sender.sendMessage(ChatColor.YELLOW + "/logadmin forcelogin <玩家>" + ChatColor.WHITE + " - 强制登录玩家");
-        sender.sendMessage(ChatColor.YELLOW + "/logadmin unregister <玩家>" + ChatColor.WHITE + " - 删除玩家账号");
-        sender.sendMessage(ChatColor.YELLOW + "/logadmin info <玩家>" + ChatColor.WHITE + " - 查看玩家账号信息");
+        sender.sendMessage(ChatColor.GOLD + i18n("help_admin_header"));
+        sender.sendMessage(usage(i18n("help_admin_reset")));
+        sender.sendMessage(usage(i18n("help_admin_forcelogin")));
+        sender.sendMessage(usage(i18n("help_admin_unregister")));
+        sender.sendMessage(usage(i18n("help_admin_info")));
+    }
+
+    /**
+     * One usage line: the command in yellow, and from its {@code " - "} on, the description in white,
+     * as this help always looked. The colour is the module's rather than the language file's, because a
+     * language file extracted by an earlier version holds these keys with the same words and no colour
+     * codes (UltiKits/UltiLogin#20). A line without {@code " - "} is shown all in yellow.
+     */
+    private static String usage(String line) {
+        int split = line.indexOf(" - ");
+        return split < 0
+                ? ChatColor.YELLOW + line
+                : ChatColor.YELLOW + line.substring(0, split) + ChatColor.WHITE + line.substring(split);
+    }
+
+    /** One line of the info block: {@code label}, then {@code value}. */
+    private static String field(String label, Object value) {
+        return ChatColor.YELLOW + label + ChatColor.WHITE + value;
+    }
+
+    /** This module's language-file text for {@code key}, through the service this command holds. */
+    private String i18n(String key) {
+        return loginService.i18n(key);
     }
 }

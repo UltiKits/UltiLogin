@@ -41,9 +41,9 @@ public class EmailVerificationService {
     private final DataOperator<AccountData> dataOperator;
 
     // Lazy-initialized framework EmailService. volatile: two Bukkit-scheduler threads calling
-    // getEmailService() concurrently on first use must not race on this field (WR-01,
-    // 13-REVIEW-UltiLogin.md) -- SimpleContainer.getBean returns the same singleton either way,
-    // so this is a visibility fix, not a functional one.
+    // getEmailService() concurrently on first use must not race on this field --
+    // SimpleContainer.getBean returns the same singleton either way, so this is a visibility
+    // fix, not a functional one.
     private volatile EmailService emailService;
 
     // Pending email binds: playerUUID -> PendingVerification
@@ -208,7 +208,7 @@ public class EmailVerificationService {
             try {
                 dataOperator.update(account);
             } catch (IllegalAccessException e) {
-                plugin.getLogger().error("Failed to update account email", e);
+                plugin.getLogger().error(plugin.i18n("log_account_email_update_failed"), e);
             }
         }
 
@@ -307,7 +307,8 @@ public class EmailVerificationService {
                 pendingRecoveries.remove(uuid);
                 return new RecoverVerifyResult(false, "email_code_max_attempts");
             }
-            return new RecoverVerifyResult(false, "email_code_invalid");
+            int remaining = emailConfig.getMaxAttempts() - pending.attempts;
+            return new RecoverVerifyResult(false, "email_code_invalid", "{COUNT}", String.valueOf(remaining));
         }
 
         // Store verified IP for IP restriction
@@ -323,11 +324,11 @@ public class EmailVerificationService {
     /**
      * Reset password after recovery verification.
      * <p>
-     * Round 7 (Codex PR #18 thread 3946170649): delegates to {@code
-     * LoginService.resetPasswordForRecovery} rather than the public {@code resetPassword}, since
-     * {@code RecoverCommand.resetPassword} calls {@code LoginService.completeLogin(Player)}
-     * immediately after this returns {@code true} -- presenting the credential prompt in between
-     * (as the public overload does) would show it an instant before logging the player back in.
+     * Delegates to {@code LoginService.resetPasswordForRecovery} rather than the public {@code
+     * resetPassword}, since {@code RecoverCommand.resetPassword} calls {@code
+     * LoginService.completeLogin(Player)} immediately after this returns {@code true} --
+     * presenting the credential prompt in between (as the public overload does) would show it
+     * an instant before logging the player back in.
      *
      * @param player      the player
      * @param newPassword the new password
@@ -484,13 +485,17 @@ public class EmailVerificationService {
     public static class RecoverVerifyResult {
         private final boolean success;
         private final String messageKey;
+        private final String[] replacements;
 
-        public RecoverVerifyResult(boolean success, String messageKey) {
+        public RecoverVerifyResult(boolean success, String messageKey, String... replacements) {
             this.success = success;
             this.messageKey = messageKey;
+            this.replacements = replacements;
         }
 
         public boolean isSuccess() { return success; }
         public String getMessageKey() { return messageKey; }
+        /** Placeholder/value pairs for the message, as {@link VerifyResult} carries them (UltiKits/UltiLogin#21). */
+        public String[] getReplacements() { return replacements; }
     }
 }

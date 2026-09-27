@@ -1,5 +1,8 @@
 package com.ultikits.plugins.login.config;
 
+import com.ultikits.plugins.login.i18n.CatalogueText;
+import com.ultikits.plugins.login.i18n.LoginSeams;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -26,6 +29,20 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @DisplayName("RemovedConfigKeys (UltiKits/UltiLogin#23)")
 class RemovedConfigKeysTest {
+
+    /**
+     * The module, answering {@code i18n} from its English catalogue: the assertions below quote the
+     * English guidance an operator reads under {@code language: en}.
+     */
+    private static final UltiToolsPlugin ENGLISH = englishPlugin();
+
+    private static UltiToolsPlugin englishPlugin() {
+        UltiToolsPlugin plugin = org.mockito.Mockito.mock(UltiToolsPlugin.class);
+        org.mockito.Mockito.when(plugin.i18n(org.mockito.ArgumentMatchers.anyString()))
+                .thenAnswer(CatalogueText.answer("en"));
+        return plugin;
+    }
+
 
     /** The shape the framework writes on an upgraded server: the key sits among its siblings. */
     private static final String FILE_WITH_THE_REMOVED_KEY =
@@ -54,7 +71,7 @@ class RemovedConfigKeysTest {
         File file = write(dir, FILE_WITH_THE_REMOVED_KEY);
         List<String> warnings = new ArrayList<>();
 
-        RemovedConfigKeys.warnAboutLeftovers(file, warnings::add);
+        LoginSeams.warnAboutLeftovers(file, warnings::add, ENGLISH);
 
         assertThat(warnings).hasSize(1);
         String warning = warnings.get(0);
@@ -73,7 +90,7 @@ class RemovedConfigKeysTest {
         File file = write(dir, "messages:\n  wrong-password: ''\n");
         List<String> warnings = new ArrayList<>();
 
-        RemovedConfigKeys.warnAboutLeftovers(file, warnings::add);
+        LoginSeams.warnAboutLeftovers(file, warnings::add, ENGLISH);
 
         assertThat(warnings).hasSize(1);
     }
@@ -84,7 +101,7 @@ class RemovedConfigKeysTest {
         File file = write(dir, FILE_WITHOUT_THE_REMOVED_KEY);
         List<String> warnings = new ArrayList<>();
 
-        RemovedConfigKeys.warnAboutLeftovers(file, warnings::add);
+        LoginSeams.warnAboutLeftovers(file, warnings::add, ENGLISH);
 
         assertThat(warnings).isEmpty();
     }
@@ -94,8 +111,8 @@ class RemovedConfigKeysTest {
     void silentWithoutAFile(@TempDir File dir) {
         List<String> warnings = new ArrayList<>();
 
-        RemovedConfigKeys.warnAboutLeftovers(new File(dir, "absent.yml"), warnings::add);
-        RemovedConfigKeys.warnAboutLeftovers(null, warnings::add);
+        LoginSeams.warnAboutLeftovers(new File(dir, "absent.yml"), warnings::add, ENGLISH);
+        LoginSeams.warnAboutLeftovers(null, warnings::add, ENGLISH);
 
         assertThat(warnings).isEmpty();
     }

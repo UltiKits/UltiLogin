@@ -23,7 +23,7 @@ import org.bukkit.entity.Player;
 @CmdExecutor(
     alias = {"regs"},
     permission = "ultilogin.email",
-    description = "绑定邮箱"
+    description = "command_regs_description"
 )
 public class EmailBindCommand extends BaseCommandExecutor {
 

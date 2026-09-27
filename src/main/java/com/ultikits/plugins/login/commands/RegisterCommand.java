@@ -18,7 +18,7 @@ import org.bukkit.entity.Player;
 @CmdTarget(CmdTarget.CmdTargetType.PLAYER)
 @CmdExecutor(
     alias = {"register", "reg"},
-    description = "注册账号"
+    description = "command_register_description"
 )
 public class RegisterCommand extends BaseCommandExecutor {
 
@@ -71,12 +71,14 @@ public class RegisterCommand extends BaseCommandExecutor {
     @Override
     protected void handleHelp(CommandSender sender) {
         LoginConfig config = loginService.getConfig();
+        sender.sendMessage(ChatColor.YELLOW + loginService.i18n("help_register"));
         if (config.isGuiModeEnabled()) {
-            sender.sendMessage(ChatColor.YELLOW + "使用方法: /register <密码> <确认密码>");
-            sender.sendMessage(ChatColor.GRAY + "密码必须是 " + config.getGuiPasswordLength() + " 位数字");
+            sender.sendMessage(ChatColor.translateAlternateColorCodes('&', loginService.i18n("help_password_digits")
+                .replace("{LENGTH}", String.valueOf(config.getGuiPasswordLength()))));
         } else {
-            sender.sendMessage(ChatColor.YELLOW + "使用方法: /register <密码> <确认密码>");
-            sender.sendMessage(ChatColor.GRAY + "密码长度: " + config.getMinPasswordLength() + "-" + config.getMaxPasswordLength() + " 字符");
+            sender.sendMessage(ChatColor.translateAlternateColorCodes('&', loginService.i18n("help_password_length")
+                .replace("{MIN}", String.valueOf(config.getMinPasswordLength()))
+                .replace("{MAX}", String.valueOf(config.getMaxPasswordLength()))));
         }
     }
 }

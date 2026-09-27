@@ -46,9 +46,10 @@ public final class UltiLoginTestHelper {
         mockLogger = mock(PluginLogger.class);
         lenient().when(mockPlugin.getLogger()).thenReturn(mockLogger);
 
-        // Mock i18n to return the key as-is
+        // i18n answers from the Chinese catalogue this module really ships, so a test sees the
+        // text an operator on the default language sees
         lenient().when(mockPlugin.i18n(anyString()))
-                .thenAnswer(inv -> inv.getArgument(0));
+                .thenAnswer(com.ultikits.plugins.login.i18n.CatalogueText.answer("zh"));
 
         // Mock getDataOperator
         lenient().when(mockPlugin.getDataOperator(any()))
@@ -186,11 +187,11 @@ public final class UltiLoginTestHelper {
      * Null out the static {@code Bukkit.server} field. Call from {@code @AfterEach} in any test class
      * that installs its own {@code Server} mock directly (bypassing {@link #bootstrapLiveServer()}),
      * so the next test class that runs in the same Surefire fork does not inherit a stale singleton.
-     * This is the root-cause fix for the leak Codex's review found in three consumer classes
-     * ({@code PanelCommandTest}, {@code LoginProtectionListenerTest},
-     * {@code EmailVerificationServiceTest}) — each now calls this from its own teardown instead of
-     * relying on {@link #bootstrapLiveServer()}'s defensive null-out to paper over the leak on the
-     * next class's behalf.
+     * This is the root-cause fix for the leak a review found in three consumer classes ({@code
+     * PanelCommandTest}, {@code LoginProtectionListenerTest}, {@code EmailVerificationServiceTest})
+     * — each now calls this from its own teardown instead of relying on {@link
+     * #bootstrapLiveServer()}'s defensive null-out to paper over the leak on the next class's
+     * behalf.
      * <p>
      * This is <b>not</b> the teardown for {@link #bootstrapLiveServer()}. Use
      * {@link #tearDownLiveServer()} there: this method clears {@code Bukkit.server} only, leaving
@@ -246,6 +247,9 @@ public final class UltiLoginTestHelper {
         lenient().when(config.getRegisterPromptGui()).thenReturn("&e请在弹出的界面中设置密码");
         lenient().when(config.getGuiPasswordInvalid()).thenReturn("&c密码必须是 {LENGTH} 位数字！");
         lenient().when(config.getTimeoutKick()).thenReturn("&c登录超时！请重新连接。");
+        lenient().when(config.getGuiLoginTitle()).thenReturn("&6请输入密码");
+        lenient().when(config.getGuiRegisterTitle()).thenReturn("&6请设置密码");
+        lenient().when(config.getGuiConfirmTitle()).thenReturn("&6请再次输入密码");
         lenient().when(config.getSpawnWorld()).thenReturn("world");
         lenient().when(config.getSpawnX()).thenReturn(0.0);
         lenient().when(config.getSpawnY()).thenReturn(64.0);

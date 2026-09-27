@@ -33,13 +33,13 @@ import org.bukkit.event.Listener;
  * same class. These four events are Paper-only and comparatively recent, while this module declares
  * Bukkit {@code api-version} compatibility well below the version it compiles against, so that is a
  * live risk rather than a hypothetical one — and its blast radius is exactly the catastrophic outcome
- * gate 1's WR-02 describes, reached by a version difference instead of a refactor. The framework
- * registers listener beans one at a time ({@code ListenerManager#registerAll} calls
- * {@code registerEvents} per bean, `ListenerManager.java:62`), so putting them here bounds the damage
- * to this class.
+ * of a listener class failing to register, reached by a version difference instead of a refactor. The
+ * framework registers listener beans one at a time ({@code ListenerManager#registerAll} calls {@code
+ * registerEvents} per bean, `ListenerManager.java:62`), so putting them here bounds the damage to
+ * this class.
  *
- * <p>This is a deliberate divergence from gate 1 WR-03's suggested fix direction ("add
- * {@code onPlayerPickItem(PlayerPickItemEvent)}" to the existing listener), taken because of the
+ * <p>This is a deliberate divergence from the obvious fix direction ("add {@code
+ * onPlayerPickItem(PlayerPickItemEvent)}" to the existing listener), taken because of the
  * measurement above. The coverage is the same; the failure mode is not.
  *
  * <h2>What these cover</h2>
