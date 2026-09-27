@@ -65,6 +65,26 @@ class RemovedConfigKeysTest {
         return file;
     }
 
+    /**
+     * The placeholder class of UltiKits/UltiMail#37, swept into this module (maintainer decision to
+     * fix it as one class across the modules): the operator's file path is inserted before
+     * {@code {KEY}} and {@code {REASON}}, so a server installed under a directory whose name contains
+     * either token had it rewritten, and the warning named a path that does not exist.
+     */
+    @Test
+    @DisplayName("A path containing a later placeholder's token is named exactly as it is (one-pass fill)")
+    void aPathContainingAPlaceholderTokenIsNamedAsWritten(@TempDir File dir) throws IOException {
+        File odd = new File(dir, "srv-{KEY}-{REASON}");
+        assertThat(odd.mkdirs()).isTrue();
+        File file = write(odd, FILE_WITH_THE_REMOVED_KEY);
+        List<String> warnings = new ArrayList<>();
+
+        LoginSeams.warnAboutLeftovers(file, warnings::add, ENGLISH);
+
+        assertThat(warnings).hasSize(1);
+        assertThat(warnings.get(0)).contains(file.getPath()).contains("messages.wrong-password");
+    }
+
     @Test
     @DisplayName("POSITIVE CONTROL: a leftover messages.wrong-password produces one warning naming the module, the file and the key")
     void warnsAboutTheLeftoverKey(@TempDir File dir) throws IOException {
