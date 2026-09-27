@@ -169,6 +169,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- With `security.lockout-type: UUID`, a player whose lockout has expired gets the full
+  `security.max-login-attempts` again. Before, the failure count was kept, so the first wrong password
+  after the lockout locked the account again at once (UltiKits/UltiLogin#38).
+- 在 `security.lockout-type: UUID` 下，封禁到期后玩家重新获得完整的 `security.max-login-attempts` 次机会。
+  此前失败计数被保留，封禁结束后第一次输错密码就会立即再次锁定（UltiKits/UltiLogin#38）。
+
 - An unrecognised `security.lockout-type` in `config/login.yml` (anything other than `IP`, `UUID` or
   `BOTH`, in any letter case) now falls back to the default, `IP`, and the module names it in a console
   warning at start-up and on `/ul reload`, quoting the value as written. Before, such a value switched the

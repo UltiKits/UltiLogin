@@ -249,7 +249,11 @@ public class LoginService {
             if (uuidLockEnd != null && now < uuidLockEnd) {
                 return true;
             } else if (uuidLockEnd != null) {
+                // An expired lock resets the failure count too, as the IP branch does; otherwise the
+                // first wrong password after a UUID lock expired re-locked at once
+                // (UltiKits/UltiLogin#38).
                 lockedUuids.remove(uuid);
+                failedAttempts.remove(ip);
             }
         }
         
