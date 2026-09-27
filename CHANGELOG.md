@@ -169,6 +169,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The registration window (`gui-mode.enabled: true`) now shows `gui-mode.title-confirm` once the first
+  password is entered, and `gui-mode.title-register` again after a mismatch: the page re-opens its window
+  with the new title, keeping what was entered. Before, the title was stored but the open window kept its
+  first title, so both stages looked the same (UltiKits/UltiLogin#25).
+- 注册窗口（`gui-mode.enabled: true`）在输入第一次密码后会显示 `gui-mode.title-confirm`，密码不一致后重新显示
+  `gui-mode.title-register`：页面以新标题重新打开窗口，已输入的内容保留。此前标题只被记录，已打开的窗口仍显示最初的标题，
+  两个阶段看起来一样（UltiKits/UltiLogin#25）。
+
 - On the login screen an unauthenticated player can no longer rearrange their own inventory. While
   the login or registration keypad was open, clicks in the player's own inventory rows were allowed,
   because the keypad was recognised by the title of the whole window, and that window includes the
