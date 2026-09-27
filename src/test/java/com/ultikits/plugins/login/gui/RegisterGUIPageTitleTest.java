@@ -86,6 +86,16 @@ class RegisterGUIPageTitleTest {
         lenient().when(config.getPasswordMismatch()).thenReturn("&cmismatch");
         lenient().when(config.getRegisterSuccess()).thenReturn("&aregistered");
 
+        // The transition marker, kept the way LoginService keeps it, so this page's onClose sees a
+        // deliberate re-open for what it is.
+        java.util.Set<UUID> transitioning = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        lenient().doAnswer(inv -> transitioning.add(inv.getArgument(0)))
+                .when(loginService).beginCredentialGuiTransition(any(UUID.class));
+        lenient().doAnswer(inv -> transitioning.remove(inv.getArgument(0)))
+                .when(loginService).endCredentialGuiTransition(any(UUID.class));
+        lenient().when(loginService.isCredentialGuiTransitioning(any(UUID.class)))
+                .thenAnswer(inv -> transitioning.contains(inv.getArgument(0)));
+
         player = server.addPlayer("Newcomer");
     }
 
