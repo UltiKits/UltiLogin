@@ -163,9 +163,8 @@ public class RegisterGUIPage extends Gui {
             confirmPhase = true;
             passwordInput.setLength(0);
             
-            // Update title
-            setTitle(ChatColor.translateAlternateColorCodes('&', config.getGuiConfirmTitle()));
-            
+            showStageTitle(ChatColor.translateAlternateColorCodes('&', config.getGuiConfirmTitle()));
+
             updatePasswordDisplay();
             player.sendMessage(ChatColor.translateAlternateColorCodes('&', plugin.i18n("gui_register_confirm_prompt")));
         } else {
@@ -194,8 +193,42 @@ public class RegisterGUIPage extends Gui {
         firstPassword = null;
         confirmPhase = false;
         passwordInput.setLength(0);
-        setTitle(ChatColor.translateAlternateColorCodes('&', config.getGuiRegisterTitle()));
+        showStageTitle(ChatColor.translateAlternateColorCodes('&', config.getGuiRegisterTitle()));
         updatePasswordDisplay();
+    }
+
+    /**
+     * Shows {@code title} on the window the player has open.
+     * <p>
+     * {@code Gui#setTitle} only stores the title for the next inventory this page creates; the window
+     * already open keeps the title it was created with, so the confirmation stage used to look like
+     * the first one (UltiKits/UltiLogin#25). This page therefore re-opens itself with the new title.
+     * It is the same page object, so the stage and the first password are kept, and {@code onOpen}
+     * redraws the keypad and the display for the current stage.
+     * <p>
+     * The re-open runs on the next tick rather than here, because this can be reached from a click
+     * on the confirm button and a window must not be opened from inside the click that is being
+     * handled. It is skipped if the page is no longer what the player sees (they closed it, or
+     * something else replaced it), and it is marked as a credential GUI transition so this page's own
+     * {@link #onClose} does not schedule its reopen for the window being replaced.
+     *
+     * @param title the new title, colour codes already translated
+     */
+    private void showStageTitle(String title) {
+        setTitle(title);
+        org.bukkit.Bukkit.getScheduler().runTask(bukkitPlugin, () -> {
+            if (!player.isOnline() || getInventory() == null
+                    || !getInventory().equals(player.getOpenInventory().getTopInventory())) {
+                return;
+            }
+            UUID uuid = player.getUniqueId();
+            loginService.beginCredentialGuiTransition(uuid);
+            try {
+                open();
+            } finally {
+                loginService.endCredentialGuiTransition(uuid);
+            }
+        });
     }
     
     /**

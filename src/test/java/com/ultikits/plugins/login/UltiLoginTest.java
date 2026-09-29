@@ -207,6 +207,82 @@ class UltiLoginTest {
         }
     }
     /**
+     * UltiKits/UltiLogin#37 (maintainer decision: refuse and name the value): a
+     * {@code security.lockout-type} the module cannot use is named in a warning at enable and at
+     * reload, with the value as written and the default it falls back to.
+     */
+    @Nested
+    @DisplayName("an unusable security.lockout-type is named at enable and reload (UltiKits/UltiLogin#37)")
+    class UnusableLockoutTypeWarning {
+
+        private PluginLogger logger;
+
+        private UltiLogin pluginWithLockoutType(String lockoutType) {
+            UltiLogin plugin = mock(UltiLogin.class);
+            logger = mock(PluginLogger.class);
+            when(plugin.getLogger()).thenReturn(logger);
+            when(plugin.i18n(anyString())).thenAnswer(com.ultikits.plugins.login.i18n.CatalogueText.answer("en"));
+            com.ultikits.plugins.login.config.LoginConfig config =
+                    mock(com.ultikits.plugins.login.config.LoginConfig.class);
+            when(config.getLockoutType()).thenReturn(lockoutType);
+            when(plugin.getConfig(com.ultikits.plugins.login.config.LoginConfig.class)).thenReturn(config);
+            return plugin;
+        }
+
+        private List<String> warnings() {
+            ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+            verify(logger, atLeast(0)).warn(captor.capture());
+            return captor.getAllValues();
+        }
+
+        @Test
+        @DisplayName("enabling the module names the value and the default")
+        void registerSelfWarns() {
+            UltiLogin plugin = pluginWithLockoutType("NONE");
+            when(plugin.registerSelf()).thenCallRealMethod();
+
+            plugin.registerSelf();
+
+            assertThat(warnings()).anySatisfy(w -> assertThat(w)
+                    .contains("security.lockout-type").contains("'NONE'").contains("IP"));
+        }
+
+        @Test
+        @DisplayName("/ul reload UltiLogin names the value and the default")
+        void onReloadWarns() {
+            UltiLogin plugin = pluginWithLockoutType("IPs");
+            doCallRealMethod().when(plugin).onReload();
+
+            plugin.onReload();
+
+            assertThat(warnings()).anySatisfy(w -> assertThat(w)
+                    .contains("security.lockout-type").contains("'IPs'").contains("IP"));
+        }
+
+        @Test
+        @DisplayName("POSITIVE CONTROL: a recognised value, in any case, is not warned about")
+        void recognisedValueIsQuiet() {
+            UltiLogin plugin = pluginWithLockoutType("both");
+            when(plugin.registerSelf()).thenCallRealMethod();
+
+            plugin.registerSelf();
+
+            assertThat(warnings()).noneSatisfy(w -> assertThat(w).contains("security.lockout-type"));
+        }
+
+        @Test
+        @DisplayName("a value that contains a placeholder token is named as written (the one-pass fill)")
+        void valueWithAPlaceholderTokenIsNamedAsWritten() {
+            UltiLogin plugin = pluginWithLockoutType("x{DEFAULT}");
+            when(plugin.registerSelf()).thenCallRealMethod();
+
+            plugin.registerSelf();
+
+            assertThat(warnings()).anySatisfy(w -> assertThat(w).contains("'x{DEFAULT}'"));
+        }
+    }
+
+    /**
      * The console line a failed removed-key check prints follows the language setting
      * (UltiKits/UltiLogin#20). Here, not in the language test, because the file seam is
      * package-private.

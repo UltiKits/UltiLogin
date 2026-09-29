@@ -106,6 +106,136 @@ class LoginProtectionListenerTest {
         }
     }
 
+    /**
+     * UltiKits/UltiLogin#42 (maintainer decision, AuthMe precedent {@code PlayerUtils#isNpc}): a
+     * {@code Player} entity carrying the {@code NPC} metadata a plugin such as Citizens sets is not a
+     * person who can log in, so the whole login protection leaves it alone. Each case is paired with
+     * the same event for an unauthenticated real player, which is still refused.
+     */
+    @Nested
+    @DisplayName("plugin NPCs are exempt from the login protection (UltiKits/UltiLogin#42)")
+    class PluginNpcExemption {
+
+        private Player npc;
+
+        @BeforeEach
+        void anUnauthenticatedNpc() {
+            npc = UltiLoginTestHelper.createMockPlayer("CitizensNpc", UUID.randomUUID());
+            lenient().when(npc.hasMetadata("NPC")).thenReturn(true);
+            lenient().when(loginService.isLoggedIn(any(UUID.class))).thenReturn(false);
+        }
+
+        @Test
+        @DisplayName("a joining NPC is not tracked, prompted or timed")
+        void joinIsIgnored() {
+            listener.onPlayerJoin(new PlayerJoinEvent(npc, "join"));
+
+            verify(loginService, never()).onPlayerJoin(npc);
+            verify(mockScheduler, never()).runTaskLater(any(org.bukkit.plugin.Plugin.class), any(Runnable.class), anyLong());
+        }
+
+        @Test
+        @DisplayName("an NPC takes damage; POSITIVE CONTROL: an unauthenticated player does not")
+        void damageIsNotRefused() {
+            EntityDamageEvent npcHit = mock(EntityDamageEvent.class);
+            when(npcHit.getEntity()).thenReturn(npc);
+            EntityDamageEvent playerHit = mock(EntityDamageEvent.class);
+            when(playerHit.getEntity()).thenReturn(player);
+
+            listener.onPlayerDamage(npcHit);
+            listener.onPlayerDamage(playerHit);
+
+            verify(npcHit, never()).setCancelled(true);
+            verify(playerHit).setCancelled(true);
+        }
+
+        @Test
+        @DisplayName("an NPC can mount; POSITIVE CONTROL: an unauthenticated player cannot")
+        void mountIsNotRefused() {
+            org.bukkit.event.entity.EntityMountEvent npcMount = mock(org.bukkit.event.entity.EntityMountEvent.class);
+            when(npcMount.getEntity()).thenReturn(npc);
+            org.bukkit.event.entity.EntityMountEvent playerMount = mock(org.bukkit.event.entity.EntityMountEvent.class);
+            when(playerMount.getEntity()).thenReturn(player);
+
+            listener.onEntityMount(npcMount);
+            listener.onEntityMount(playerMount);
+
+            verify(npcMount, never()).setCancelled(true);
+            verify(playerMount).setCancelled(true);
+        }
+
+        @Test
+        @DisplayName("a moving vehicle keeps an NPC passenger and drops an unauthenticated player")
+        void vehicleKeepsTheNpc() {
+            org.bukkit.entity.Vehicle vehicle = mock(org.bukkit.entity.Vehicle.class);
+            when(vehicle.getPassengers()).thenReturn(java.util.Arrays.<org.bukkit.entity.Entity>asList(npc, player));
+            org.bukkit.event.vehicle.VehicleMoveEvent move = mock(org.bukkit.event.vehicle.VehicleMoveEvent.class);
+            when(move.getVehicle()).thenReturn(vehicle);
+
+            listener.onVehicleMove(move);
+
+            verify(vehicle, never()).removePassenger(npc);
+            verify(vehicle).removePassenger(player);
+        }
+
+        @Test
+        @DisplayName("an NPC can break blocks and walk; POSITIVE CONTROL: an unauthenticated player cannot")
+        void blockBreakAndMoveAreNotRefused() {
+            BlockBreakEvent npcBreak = mock(BlockBreakEvent.class);
+            when(npcBreak.getPlayer()).thenReturn(npc);
+            BlockBreakEvent playerBreak = mock(BlockBreakEvent.class);
+            when(playerBreak.getPlayer()).thenReturn(player);
+            PlayerMoveEvent npcMove = mock(PlayerMoveEvent.class);
+            when(npcMove.getPlayer()).thenReturn(npc);
+            org.bukkit.Location from = new org.bukkit.Location(null, 0, 64, 0);
+            org.bukkit.Location to = new org.bukkit.Location(null, 3, 64, 0);
+            lenient().when(npcMove.getFrom()).thenReturn(from);
+            lenient().when(npcMove.getTo()).thenReturn(to);
+
+            listener.onBlockBreak(npcBreak);
+            listener.onBlockBreak(playerBreak);
+            listener.onPlayerMove(npcMove);
+
+            verify(npcBreak, never()).setCancelled(true);
+            verify(playerBreak).setCancelled(true);
+            verify(npcMove, never()).setTo(any());
+        }
+
+        @Test
+        @DisplayName("an NPC's command is not refused; POSITIVE CONTROL: an unauthenticated player's is")
+        void commandIsNotRefused() {
+            when(loginService.isCommandAllowed(anyString())).thenReturn(false);
+            PlayerCommandPreprocessEvent npcCommand = mock(PlayerCommandPreprocessEvent.class);
+            when(npcCommand.getPlayer()).thenReturn(npc);
+            lenient().when(npcCommand.getMessage()).thenReturn("/spawn");
+            PlayerCommandPreprocessEvent playerCommand = mock(PlayerCommandPreprocessEvent.class);
+            when(playerCommand.getPlayer()).thenReturn(player);
+            when(playerCommand.getMessage()).thenReturn("/spawn");
+
+            listener.onPlayerCommand(npcCommand);
+            listener.onPlayerCommand(playerCommand);
+
+            verify(npcCommand, never()).setCancelled(true);
+            verify(playerCommand).setCancelled(true);
+        }
+
+        @Test
+        @DisplayName("the Paper-only handlers leave an NPC alone too")
+        void paperHandlersLeaveTheNpcAlone() {
+            LoginProtectionPaperListener paper = new LoginProtectionPaperListener(loginService);
+            io.papermc.paper.event.player.PlayerPickItemEvent npcPick = mock(io.papermc.paper.event.player.PlayerPickItemEvent.class);
+            when(npcPick.getPlayer()).thenReturn(npc);
+            io.papermc.paper.event.player.PlayerPickItemEvent playerPick = mock(io.papermc.paper.event.player.PlayerPickItemEvent.class);
+            when(playerPick.getPlayer()).thenReturn(player);
+
+            paper.onPlayerPickItem(npcPick);
+            paper.onPlayerPickItem(playerPick);
+
+            verify(npcPick, never()).setCancelled(true);
+            verify(playerPick).setCancelled(true);
+        }
+    }
+
     @Nested
     @DisplayName("presentCredentialPrompt dispatch")
     class PresentCredentialPromptDispatch {

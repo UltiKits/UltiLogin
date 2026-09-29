@@ -93,7 +93,39 @@ public class LoginConfig extends AbstractConfigEntity {
 
     @NotEmpty
     @ConfigEntry(path = "security.lockout-type", comment = "封禁类型：IP / UUID / BOTH")
-    private String lockoutType = "IP";
+    private String lockoutType = LOCKOUT_TYPE_DEFAULT;
+
+    /** The declared default of {@code security.lockout-type}, and what an unusable value falls back to. */
+    public static final String LOCKOUT_TYPE_DEFAULT = "IP";
+
+    /**
+     * Whether {@code value} is a {@code security.lockout-type} this module can use: {@code IP},
+     * {@code UUID} or {@code BOTH}, in any letter case, ignoring surrounding spaces.
+     *
+     * @param value the value as written in the file
+     * @return true if the lockout understands it
+     */
+    public static boolean isUsableLockoutType(String value) {
+        if (value == null) {
+            return false;
+        }
+        String normalised = value.trim().toUpperCase(java.util.Locale.ROOT);
+        return "IP".equals(normalised) || "UUID".equals(normalised) || "BOTH".equals(normalised);
+    }
+
+    /**
+     * The lockout type the module applies for {@code value}: the value itself when it is usable,
+     * otherwise the default {@code IP}. An unusable value used to switch the lockout off while the
+     * reply still said the account was locked (UltiKits/UltiLogin#37); the maintainer's rule is that
+     * a value the module cannot use falls back to the default and is named in a warning. The file
+     * keeps what the operator wrote.
+     *
+     * @param value the value as written in the file
+     * @return {@code IP}, {@code UUID} or {@code BOTH}
+     */
+    public static String lockoutTypeOrDefault(String value) {
+        return isUsableLockoutType(value) ? value.trim().toUpperCase(java.util.Locale.ROOT) : LOCKOUT_TYPE_DEFAULT;
+    }
     
     // ==================== 位置设置 ====================
 

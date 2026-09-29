@@ -3,6 +3,7 @@ package com.ultikits.plugins.login;
 import com.ultikits.plugins.login.config.ConfigTextDefaults;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.config.RemovedConfigKeys;
+import com.ultikits.plugins.login.util.Placeholders;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
 
@@ -37,6 +38,7 @@ public class UltiLogin extends UltiToolsPlugin {
         // Deleting a key from LoginConfig does nothing to the operator's existing file, so tell
         // them about any key this version no longer reads (UltiKits/UltiLogin#23).
         warnAboutRemovedConfigKeys();
+        warnAboutUnusableLockoutType();
         writeConfigTextInServerLanguage();
         return true;
     }
@@ -49,7 +51,27 @@ public class UltiLogin extends UltiToolsPlugin {
     @Override
     protected void onReload() {
         warnAboutRemovedConfigKeys();
+        warnAboutUnusableLockoutType();
         writeConfigTextInServerLanguage();
+    }
+
+    /**
+     * Names a {@code security.lockout-type} the module cannot use, with the value as written and the
+     * default it falls back to (UltiKits/UltiLogin#37). The lockout itself already applies the
+     * default ({@link LoginConfig#lockoutTypeOrDefault}); this only tells the operator.
+     */
+    private void warnAboutUnusableLockoutType() {
+        LoginConfig config = getConfig(LoginConfig.class);
+        if (config == null || LoginConfig.isUsableLockoutType(config.getLockoutType())) {
+            return;
+        }
+        // The value as written is inserted in the same pass as the rest (Placeholders#fill), so a
+        // value that contains a placeholder token is shown exactly as the operator wrote it.
+        getLogger().warn(Placeholders.fill(i18n("log_unusable_lockout_type"),
+                "{FILE}", LoginConfig.CONFIG_FILE,
+                "{KEY}", "security.lockout-type",
+                "{VALUE}", String.valueOf(config.getLockoutType()),
+                "{DEFAULT}", LoginConfig.LOCKOUT_TYPE_DEFAULT));
     }
 
     /**

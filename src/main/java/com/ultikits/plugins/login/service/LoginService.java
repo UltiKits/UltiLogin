@@ -230,7 +230,7 @@ public class LoginService {
         UUID uuid = player.getUniqueId();
         long now = System.currentTimeMillis();
         
-        String lockoutType = config.getLockoutType().toUpperCase();
+        String lockoutType = LoginConfig.lockoutTypeOrDefault(config.getLockoutType());
         
         // Check IP lock
         if ("IP".equals(lockoutType) || "BOTH".equals(lockoutType)) {
@@ -249,7 +249,11 @@ public class LoginService {
             if (uuidLockEnd != null && now < uuidLockEnd) {
                 return true;
             } else if (uuidLockEnd != null) {
+                // An expired lock resets the failure count too, as the IP branch does; otherwise the
+                // first wrong password after a UUID lock expired re-locked at once
+                // (UltiKits/UltiLogin#38).
                 lockedUuids.remove(uuid);
+                failedAttempts.remove(ip);
             }
         }
         
@@ -291,7 +295,7 @@ public class LoginService {
         
         if (attempts >= config.getMaxLoginAttempts()) {
             long unlockTime = System.currentTimeMillis() + (config.getLockoutDuration() * 1000L);
-            String lockoutType = config.getLockoutType().toUpperCase();
+            String lockoutType = LoginConfig.lockoutTypeOrDefault(config.getLockoutType());
             
             if ("IP".equals(lockoutType) || "BOTH".equals(lockoutType)) {
                 lockedIps.put(ip, unlockTime);

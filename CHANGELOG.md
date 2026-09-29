@@ -169,6 +169,42 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The console warning about a setting this version no longer reads names the file exactly as it is: a
+  server installed under a directory whose name contains `{KEY}` or `{REASON}` used to get a path that does
+  not exist, because the path was inserted before those placeholders were filled. Every placeholder of the
+  line is now filled in one pass (the same fix as UltiKits/UltiMail#37).
+- 关于本版本已不再读取的配置项的控制台警告现在按原样给出文件路径：此前路径先于 `{KEY}`、`{REASON}` 占位符插入，
+  安装目录名含这两个占位符的服务器会看到不存在的路径。现在同一行的所有占位符一次性替换（与 UltiKits/UltiMail#37 相同的修复）。
+
+- Plugin NPCs are no longer treated as unauthenticated players: a player-type NPC carrying the `NPC`
+  metadata that NPC plugins such as Citizens set is left alone by the whole login protection — it can take
+  damage, ride and move, and it is not prompted or timed out. Before, such an NPC was invulnerable, could not
+  ride and was dropped from moving vehicles (UltiKits/UltiLogin#42).
+- 插件 NPC 不再被当作未登录玩家：带有 Citizens 等 NPC 插件所设 `NPC` 元数据的玩家型 NPC 不受登录保护的任何限制——可以受伤、乘骑和移动，
+  也不会收到登录提示或因超时被踢出。此前这样的 NPC 无敌、无法乘骑，行驶中的载具还会让其下车（UltiKits/UltiLogin#42）。
+
+- With `security.lockout-type: UUID`, a player whose lockout has expired gets the full
+  `security.max-login-attempts` again. Before, the failure count was kept, so the first wrong password
+  after the lockout locked the account again at once (UltiKits/UltiLogin#38).
+- 在 `security.lockout-type: UUID` 下，封禁到期后玩家重新获得完整的 `security.max-login-attempts` 次机会。
+  此前失败计数被保留，封禁结束后第一次输错密码就会立即再次锁定（UltiKits/UltiLogin#38）。
+
+- An unrecognised `security.lockout-type` in `config/login.yml` (anything other than `IP`, `UUID` or
+  `BOTH`, in any letter case) now falls back to the default, `IP`, and the module names it in a console
+  warning at start-up and on `/ul reload`, quoting the value as written. Before, such a value switched the
+  lockout off while the wrong-password reply still said the account was locked (UltiKits/UltiLogin#37).
+- `config/login.yml` 中无法识别的 `security.lockout-type`（`IP`、`UUID`、`BOTH` 以外的任何值，不区分大小写）现在回落到默认值
+  `IP`，模块在启动和 `/ul reload` 时会在控制台警告中原样引用该值。此前这样的值会关闭登录封禁，而密码错误的回复仍称账号已被锁定
+  （UltiKits/UltiLogin#37）。
+
+- The registration window (`gui-mode.enabled: true`) now shows `gui-mode.title-confirm` once the first
+  password is entered, and `gui-mode.title-register` again after a mismatch: the page re-opens its window
+  with the new title, keeping what was entered. Before, the title was stored but the open window kept its
+  first title, so both stages looked the same (UltiKits/UltiLogin#25).
+- 注册窗口（`gui-mode.enabled: true`）在输入第一次密码后会显示 `gui-mode.title-confirm`，密码不一致后重新显示
+  `gui-mode.title-register`：页面以新标题重新打开窗口，已输入的内容保留。此前标题只被记录，已打开的窗口仍显示最初的标题，
+  两个阶段看起来一样（UltiKits/UltiLogin#25）。
+
 - On the login screen an unauthenticated player can no longer rearrange their own inventory. While
   the login or registration keypad was open, clicks in the player's own inventory rows were allowed,
   because the keypad was recognised by the title of the whole window, and that window includes the

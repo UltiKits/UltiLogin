@@ -470,32 +470,67 @@ class LoginServiceTest {
             verify(dataOperator, never()).update(any(AccountData.class));
         }
 
-        @Test
-        @DisplayName("a limited count below zero is still answered as locked when the attempt locks the account")
+        /**
+         * UltiKits/UltiLogin#38: with {@code lockout-type: UUID} an expired lock used to be cleared
+         * without clearing the per-IP failure count, so the first wrong password after expiry counted
+         * {@code max + 1}, locked again at once and left a remaining count of {@code -1}. An expired
+         * lock now resets the count under every lockout type, so the player has the full
+         * {@code max-login-attempts} again. (This replaces a test that pinned the old scenario to
+         * show why the locked reply is chosen from the recorded lock rather than from the count.)
+         */
+        @ParameterizedTest(name = "lockout-type {0}")
+        @ValueSource(strings = {"IP", "UUID", "BOTH"})
+        @DisplayName("after a lock expires the player has the full attempts again (UltiKits/UltiLogin#38)")
         @SuppressWarnings("unchecked")
-        void negativeLimitedCountIsNotMistakenForUnlimited() throws Exception {
-            // A limited count can reach -1, the same value getRemainingAttempts() uses for
-            // "unlimited": with lockout-type UUID an expired lock is cleared without clearing the
-            // per-IP failure counter (UltiKits/UltiLogin#38), so the first wrong password after
-            // expiry counts max + 1, locks again at once, and computes max - (max + 1) = -1. That
-            // lock is real, so the reply must be the locked one -- which is why the reply is chosen
-            // from whether a lock was recorded, and never from the count's value.
+        void anExpiredLockGivesTheFullAttemptsAgain(String lockoutType) throws Exception {
             when(config.getMaxLoginAttempts()).thenReturn(2);
-            when(config.getLockoutType()).thenReturn("UUID");
+            when(config.getLockoutType()).thenReturn(lockoutType);
             service.login(player, "wrong1");
             assertThat(service.login(player, "wrong2").getMessage()).isEqualTo("LOCKED 900");
 
             Map<UUID, Long> lockedUuids = (Map<UUID, Long>) getFieldValue(service, "lockedUuids");
-            lockedUuids.put(playerUuid, System.currentTimeMillis() - 1000);
+            Map<String, Long> lockedIps = (Map<String, Long>) getFieldValue(service, "lockedIps");
+            long past = System.currentTimeMillis() - 1000;
+            lockedUuids.replaceAll((k, v) -> past);
+            lockedIps.replaceAll((k, v) -> past);
             assertThat(service.isLocked(player)).as("scenario: the lock has expired").isFalse();
 
-            LoginService.LoginResult result = service.login(player, "wrong3");
-
-            assertThat(service.getRemainingAttempts(player))
-                    .as("scenario: this is the limited case whose count is -1")
-                    .isEqualTo(-1);
+            assertThat(service.getRemainingAttempts(player)).isEqualTo(2);
+            assertThat(service.login(player, "wrong3").getMessage()).isEqualTo("REMAINING 1");
+            assertThat(service.isLocked(player)).isFalse();
+            assertThat(service.login(player, "wrong4").getMessage()).isEqualTo("LOCKED 900");
             assertThat(service.isLocked(player)).isTrue();
-            assertThat(result.getMessage()).isEqualTo("LOCKED 900");
+        }
+
+        /**
+         * UltiKits/UltiLogin#37 (maintainer decision: refuse and name the value): a
+         * {@code security.lockout-type} other than IP / UUID / BOTH falls back to the default, IP,
+         * instead of switching the lockout off.
+         */
+        @ParameterizedTest(name = "lockout-type \"{0}\"")
+        @ValueSource(strings = {"NONE", "IPs", "", "ip-only"})
+        @DisplayName("an unrecognised lockout-type locks by IP, the default (UltiKits/UltiLogin#37)")
+        void unrecognisedLockoutTypeLocksByIp(String lockoutType) {
+            when(config.getMaxLoginAttempts()).thenReturn(2);
+            when(config.getLockoutType()).thenReturn(lockoutType);
+
+            assertThat(service.login(player, "wrong1").getMessage()).isEqualTo("REMAINING 1");
+            assertThat(service.login(player, "wrong2").getMessage()).isEqualTo("LOCKED 900");
+            assertThat(service.isLocked(player)).isTrue();
+
+            LoginService.LoginResult result = service.login(player, PASSWORD);
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+        }
+
+        @Test
+        @DisplayName("POSITIVE CONTROL: a lower-case recognised lockout-type is still recognised")
+        void lowerCaseLockoutTypeIsRecognised() {
+            when(config.getMaxLoginAttempts()).thenReturn(1);
+            when(config.getLockoutType()).thenReturn("uuid");
+
+            assertThat(service.login(player, "wrong1").getMessage()).isEqualTo("LOCKED 900");
+            assertThat(service.isLocked(player)).isTrue();
         }
 
         @Test
@@ -2352,6 +2387,45 @@ class LoginServiceTest {
             // Quit
             service.onPlayerQuit(player);
             assertThat(service.isLoggedIn(playerUuid)).isFalse();
+        }
+
+        /**
+         * UltiKits/UltiLogin#28: on a real server the quit row cannot tell genuine cleanup from a
+         * silent {@code isOnline()} no-op, because both are silent. This proves the cleanup
+         * directly: the player is still reported online (so no online check can explain the
+         * outcome), every one of the five tracking maps holds an entry for them, and after the quit
+         * none does and the in-flight panel-poll task has been cancelled.
+         * <p>
+         * It proves what the checklist row states and nothing more: quitting does not withdraw a
+         * pending panel request, which stays until its five-minute expiry.
+         */
+        @Test
+        @DisplayName("Quit clears all five tracking entries and cancels the poll task while the player still reads as online (UltiKits/UltiLogin#28)")
+        @SuppressWarnings("unchecked")
+        void clearsEveryTrackingEntryWhileStillReportedOnline() throws Exception {
+            when(player.isOnline()).thenReturn(true);
+            Map<UUID, Boolean> loggedInPlayers = (Map<UUID, Boolean>) getFieldValue(service, "loggedInPlayers");
+            Map<UUID, Long> joinTimes = (Map<UUID, Long>) getFieldValue(service, "joinTimes");
+            Map<UUID, org.bukkit.Location> originalLocations =
+                    (Map<UUID, org.bukkit.Location>) getFieldValue(service, "originalLocations");
+            Map<String, BukkitTask> pollingTasks = (Map<String, BukkitTask>) getFieldValue(service, "pollingTasks");
+            Map<UUID, String> currentPollingRequestId =
+                    (Map<UUID, String>) getFieldValue(service, "currentPollingRequestId");
+            BukkitTask pollTask = mock(BukkitTask.class);
+            loggedInPlayers.put(playerUuid, Boolean.TRUE);
+            joinTimes.put(playerUuid, System.currentTimeMillis());
+            originalLocations.put(playerUuid, mock(org.bukkit.Location.class));
+            pollingTasks.put("in-flight", pollTask);
+            currentPollingRequestId.put(playerUuid, "in-flight");
+
+            service.onPlayerQuit(player);
+
+            assertThat(loggedInPlayers).doesNotContainKey(playerUuid);
+            assertThat(joinTimes).doesNotContainKey(playerUuid);
+            assertThat(originalLocations).doesNotContainKey(playerUuid);
+            assertThat(pollingTasks).doesNotContainKey("in-flight");
+            assertThat(currentPollingRequestId).doesNotContainKey(playerUuid);
+            verify(pollTask).cancel();
         }
     }
 
