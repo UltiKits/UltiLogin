@@ -188,5 +188,6 @@
   "login_config_comment_email_domain_blacklist": "邮箱域名黑名单（临时邮箱）",
   "login_config_comment_email_max_accounts_per_email": "每个邮箱最多绑定账号数",
   "login_config_comment_email_reward_enabled": "启用绑定邮箱奖励",
-  "login_config_comment_email_reward_commands": "绑定奖励命令（%player% 替换为玩家名）"
+  "login_config_comment_email_reward_commands": "绑定奖励命令（%player% 替换为玩家名）",
+  "log_account_row_gone": "已存储的账号记录已不存在，未写入任何内容"
 }

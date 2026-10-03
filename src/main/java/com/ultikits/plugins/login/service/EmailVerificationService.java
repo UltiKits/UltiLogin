@@ -205,11 +205,8 @@ public class EmailVerificationService {
         if (account != null) {
             account.setEmail(pending.email);
             account.setEmailVerified(true);
-            try {
-                dataOperator.update(account);
-            } catch (IllegalAccessException e) {
-                plugin.getLogger().error(plugin.i18n("log_account_email_update_failed"), e);
-            }
+            AccountWrites.update(dataOperator, plugin.getLogger(), account,
+                    plugin.i18n("log_account_email_update_failed"), plugin.i18n("log_account_row_gone"));
         }
 
         // Execute rewards if enabled

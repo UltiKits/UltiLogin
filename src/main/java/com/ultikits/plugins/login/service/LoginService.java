@@ -455,11 +455,8 @@ public class LoginService {
         account.setLastLogin(System.currentTimeMillis());
         account.setLoginCount(account.getLoginCount() + 1);
         account.setFailedAttempts(0);
-        try {
-            dataOperator.update(account);
-        } catch (IllegalAccessException e) {
-            plugin.getLogger().error(i18n("log_account_update_failed"), e);
-        }
+        AccountWrites.update(dataOperator, plugin.getLogger(), account,
+                i18n("log_account_update_failed"), i18n("log_account_row_gone"));
         
         // Create session
         if (config.isSessionEnabled()) {
@@ -1032,10 +1029,8 @@ public class LoginService {
         
         account.setSalt(newSalt);
         account.setPasswordHash(newHash);
-        try {
-            dataOperator.update(account);
-        } catch (IllegalAccessException e) {
-            plugin.getLogger().error(i18n("log_password_reset_failed"), e);
+        if (!AccountWrites.update(dataOperator, plugin.getLogger(), account,
+                i18n("log_password_reset_failed"), i18n("log_account_row_gone"))) {
             return null;
         }
 
@@ -1102,10 +1097,8 @@ public class LoginService {
 
         account.setSalt(newSalt);
         account.setPasswordHash(newHash);
-        try {
-            dataOperator.update(account);
-        } catch (IllegalAccessException e) {
-            plugin.getLogger().error(i18n("log_password_reset_failed"), e);
+        if (!AccountWrites.update(dataOperator, plugin.getLogger(), account,
+                i18n("log_password_reset_failed"), i18n("log_account_row_gone"))) {
             return false;
         }
 
@@ -1210,10 +1203,8 @@ public class LoginService {
         
         account.setSalt(newSalt);
         account.setPasswordHash(newHash);
-        try {
-            dataOperator.update(account);
-        } catch (IllegalAccessException e) {
-            plugin.getLogger().error(i18n("log_account_update_failed"), e);
+        if (!AccountWrites.update(dataOperator, plugin.getLogger(), account,
+                i18n("log_account_update_failed"), i18n("log_account_row_gone"))) {
             return false;
         }
 
@@ -1774,11 +1765,8 @@ public class LoginService {
             account.setLastIp(getPlayerIp(player));
             account.setLastLogin(System.currentTimeMillis());
             account.setLoginCount(account.getLoginCount() + 1);
-            try {
-                dataOperator.update(account);
-            } catch (IllegalAccessException e) {
-                plugin.getLogger().error(i18n("log_account_update_after_panel_failed"), e);
-            }
+            AccountWrites.update(dataOperator, plugin.getLogger(), account,
+                    i18n("log_account_update_after_panel_failed"), i18n("log_account_row_gone"));
         }
 
         // Create session

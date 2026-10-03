@@ -188,5 +188,6 @@
   "login_config_comment_email_domain_blacklist": "Blocked email domains (disposable email services)",
   "login_config_comment_email_max_accounts_per_email": "Maximum accounts that can be bound to one email address",
   "login_config_comment_email_reward_enabled": "Enable the reward for binding an email address",
-  "login_config_comment_email_reward_commands": "Commands run as the binding reward (%player% is replaced with the player name)"
+  "login_config_comment_email_reward_commands": "Commands run as the binding reward (%player% is replaced with the player name)",
+  "log_account_row_gone": "The stored account row no longer exists, so nothing was written"
 }

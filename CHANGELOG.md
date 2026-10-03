@@ -169,6 +169,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- An account write whose stored row no longer exists is now reported as failed on every storage type. On a
+  database shared by several servers, another server's `/logadmin unregister` between this module's read and
+  its write used to leave a password reset, a password change, an email bind, a login or a panel login
+  reported as done while nothing had been written; each now takes the failure path a failed write already
+  had (its own error line followed by "The stored account row no longer exists, so nothing was written", and
+  its usual failed result: no new password from an admin or recovery reset, no password change) (UltiKits/UltiLogin#47).
+- 账号记录已不存在时的写入，现在在所有存储类型上都按失败处理。多台服务器共用数据库时，另一台服务器的
+  `/logadmin unregister` 恰好发生在本模块读与写之间，过去会让重置密码、修改密码、绑定邮箱、登录或面板登录在什么都没写入的
+  情况下被报告为已完成；现在这些操作走各自原有的失败路径（先输出该处原有的错误日志，再附上“已存储的账号记录已不存在，
+  未写入任何内容”，并返回原有的失败结果：管理员或找回重置不会得到新密码，修改密码不会生效）（UltiKits/UltiLogin#47）。
 - The comments above the keys of `config/login.yml` (42) and `config/email.yml` (8) now come from the
   module's language files: a server set to `language: en` writes English comments on a fresh install
   (earlier versions wrote Chinese-only comments in every language). An existing file's comments on these
