@@ -27,24 +27,24 @@ public class EmailConfig extends AbstractConfigEntity {
     // ==================== 验证码设置 ====================
 
     @Range(min = 4, max = 8)
-    @ConfigEntry(path = "verification.code-length", comment = "验证码长度 (4-8)")
+    @ConfigEntry(path = "verification.code-length", comment = "{login_config_comment_email_verification_code_length}")
     private int codeLength = 6;
 
     @Range(min = 60, max = 1800)
-    @ConfigEntry(path = "verification.code-expiry-seconds", comment = "验证码有效期（秒）")
+    @ConfigEntry(path = "verification.code-expiry-seconds", comment = "{login_config_comment_email_verification_code_expiry_seconds}")
     private int codeExpirySeconds = 300;
 
     @Range(min = 1, max = 10)
-    @ConfigEntry(path = "verification.max-attempts", comment = "每个验证码最大尝试次数")
+    @ConfigEntry(path = "verification.max-attempts", comment = "{login_config_comment_email_verification_max_attempts}")
     private int maxAttempts = 3;
 
     @Range(min = 30, max = 600)
-    @ConfigEntry(path = "verification.cooldown-seconds", comment = "重新发送验证码冷却时间（秒）")
+    @ConfigEntry(path = "verification.cooldown-seconds", comment = "{login_config_comment_email_verification_cooldown_seconds}")
     private int cooldownSeconds = 60;
 
     // ==================== 邮箱域名黑名单 ====================
 
-    @ConfigEntry(path = "domain-blacklist", comment = "邮箱域名黑名单（临时邮箱）")
+    @ConfigEntry(path = "domain-blacklist", comment = "{login_config_comment_email_domain_blacklist}")
     private List<String> domainBlacklist = Arrays.asList(
             "10minutemail.com",
             "tempmail.com",
@@ -56,15 +56,15 @@ public class EmailConfig extends AbstractConfigEntity {
     // ==================== 账号限制 ====================
 
     @Range(min = 1, max = 10)
-    @ConfigEntry(path = "max-accounts-per-email", comment = "每个邮箱最多绑定账号数")
+    @ConfigEntry(path = "max-accounts-per-email", comment = "{login_config_comment_email_max_accounts_per_email}")
     private int maxAccountsPerEmail = 1;
 
     // ==================== 绑定奖励 ====================
 
-    @ConfigEntry(path = "reward.enabled", comment = "启用绑定邮箱奖励")
+    @ConfigEntry(path = "reward.enabled", comment = "{login_config_comment_email_reward_enabled}")
     private boolean rewardEnabled = false;
 
-    @ConfigEntry(path = "reward.commands", comment = "绑定奖励命令（%player% 替换为玩家名）")
+    @ConfigEntry(path = "reward.commands", comment = "{login_config_comment_email_reward_commands}")
     private List<String> rewardCommands = Arrays.asList("givemoney %player% 500");
 
     public EmailConfig() {

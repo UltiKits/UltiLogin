@@ -169,6 +169,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The comments above the keys of `config/login.yml` (42) and `config/email.yml` (8) now come from the
+  module's language files: a server set to `language: en` writes English comments on a fresh install
+  (earlier versions wrote Chinese-only comments in every language). An existing file's comments on these
+  keys switch to the server's language at the next start; values are untouched, and a comment you wrote by
+  hand above one of these keys is replaced. The comment above `security.lockout-type` now also says that
+  failed logins are counted per IP address, so accounts behind one address share the count, that `IP` locks
+  the whole address, that `UUID` locks only the account that made the attempt reaching the limit, and that
+  `BOTH` locks both (UltiKits/UltiLogin#46, UltiKits/UltiLogin#45).
+- `config/login.yml` 与 `config/email.yml` 中各配置项上方的注释（分别 42 条和 8 条）现在取自模块的语言文件：
+  `language: en` 的服务器全新安装时写入英文注释（此前所有语言下都写入纯中文注释）。已有文件中这些项的注释会在下次启动
+  时切换为服务器语言；配置值不变，你手写在这些配置项上方的注释会被替换。`security.lockout-type` 上方的注释同时写明：
+  失败次数按 IP 地址计数，同一地址的账号共用计数；`IP` 封禁整个地址，`UUID` 只封禁达到上限的那个账号，`BOTH` 两者都封
+  （UltiKits/UltiLogin#46、UltiKits/UltiLogin#45）。
 - The console warning about a setting this version no longer reads names the file exactly as it is: a
   server installed under a directory whose name contains `{KEY}` or `{REASON}` used to get a path that does
   not exist, because the path was inserted before those placeholders were filled. Every placeholder of the
