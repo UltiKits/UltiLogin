@@ -169,6 +169,40 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The failed-login count now follows what `security.lockout-type` locks. With `UUID` it is kept per account, so
+  one account's lock no longer leaves every other account at the same address one wrong password away from being
+  locked, and one account's wrong passwords no longer count against another's; `messages.attempts-remaining`
+  is per account too. With `IP` it stays per address (accounts behind one address share it, by design). With
+  `BOTH` both counts are kept: the address is locked when its count reaches `security.max-login-attempts` and
+  the account when its own count does, and the attempts shown are those left before the nearer lock
+  (UltiKits/UltiLogin#48, UltiKits/UltiLogin#45).
+- 失败登录次数现在按 `security.lockout-type` 所封禁的对象计数。使用 `UUID` 时按账号计数：一个账号被封禁后，同一地址上
+  的其他账号不再只差一次输错就被封禁，一个账号输错密码也不再算到另一个账号头上；`messages.attempts-remaining`
+  同样按账号。使用 `IP` 时仍按地址计数（同一地址背后的账号共用，设计如此）。使用 `BOTH` 时两种计数都保留：地址的计数达到
+  `security.max-login-attempts` 时封禁该地址，账号自己的计数达到上限时封禁该账号，显示的剩余次数为离较近一次封禁所剩的次数
+  （UltiKits/UltiLogin#48、UltiKits/UltiLogin#45）。
+- An account write whose stored row no longer exists is now reported as failed on every storage type. On a
+  database shared by several servers, another server's `/logadmin unregister` between this module's read and
+  its write used to leave the write silently lost. Each of the six writes (login, panel login, `/changepassword`,
+  an admin password reset, a recovery password reset, an email bind) now logs its own error line followed by
+  "The stored account row no longer exists, so nothing was written" and takes the result it already has for a
+  failed write: an admin or recovery reset hands out no new password and `/changepassword` does not change
+  anything, while a login, a panel login and an email bind carry on as they do for a failed write (a player
+  whose bind was lost is still told it succeeded and still receives the reward) (UltiKits/UltiLogin#47).
+- 账号记录已不存在时的写入，现在在所有存储类型上都按失败处理。多台服务器共用数据库时，另一台服务器的
+  `/logadmin unregister` 恰好发生在本模块读与写之间，过去这次写入会悄悄落空。六处写入（登录、面板登录、`/changepassword`、
+  管理员重置密码、找回密码重置、绑定邮箱）现在都会先输出该处原有的错误日志，再附上“已存储的账号记录已不存在，未写入任何内容”，
+  并沿用该处对失败写入原有的结果：管理员或找回重置不会给出新密码，`/changepassword` 不会改动任何内容；登录、面板登录和
+  绑定邮箱则和写入失败时一样继续（绑定丢失的玩家仍会被告知绑定成功并领取奖励）（UltiKits/UltiLogin#47）。
+- The comments above the keys of `config/login.yml` (42) and `config/email.yml` (8) now come from the
+  module's language files: a server set to `language: en` writes English comments on a fresh install
+  (earlier versions wrote Chinese-only comments in every language). An existing file's comments on these
+  keys switch to the server's language at the next start; values are untouched, and a comment you wrote by
+  hand above one of these keys is replaced. The comment above `security.lockout-type` now also says
+  what each type counts and locks (see the failed-login count entry) (UltiKits/UltiLogin#46, UltiKits/UltiLogin#45).
+- `config/login.yml` 与 `config/email.yml` 中各配置项上方的注释（分别 42 条和 8 条）现在取自模块的语言文件：
+  `language: en` 的服务器全新安装时写入英文注释（此前所有语言下都写入纯中文注释）。已有文件中这些项的注释会在下次启动
+  时切换为服务器语言；配置值不变，你手写在这些配置项上方的注释会被替换。`security.lockout-type` 上方的注释同时写明各类型计数和封禁的对象（见失败登录次数一条）（UltiKits/UltiLogin#46、UltiKits/UltiLogin#45）。
 - The console warning about a setting this version no longer reads names the file exactly as it is: a
   server installed under a directory whose name contains `{KEY}` or `{REASON}` used to get a path that does
   not exist, because the path was inserted before those placeholders were filled. Every placeholder of the

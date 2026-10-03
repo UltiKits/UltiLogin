@@ -75,9 +75,18 @@ import java.util.stream.Stream;
  */
 final class I18nSourceScanner {
 
-    /** The Unicode block both guards detect: CJK Unified Ideographs, U+4E00 through U+9FFF. */
-    static final char CJK_FIRST = (char) 0x4E00;
-    static final char CJK_LAST = (char) 0x9FFF;
+    /**
+     * What both guards detect, character for character the contract of the framework's
+     * {@code .github/scripts/check-cjk-scope.sh}: the Han script (CJK Unified Ideographs, Extension A and
+     * the supplementary-plane extensions, the compatibility ideographs and the radicals), CJK Symbols and
+     * Punctuation (U+3000 through U+303F) and Halfwidth and Fullwidth Forms (U+FF00 through U+FFEF).
+     * Kana (U+3040 through U+30FF) is deliberately outside it. Widened from U+4E00 through U+9FFF in 6.3.0
+     * by the maintainer's decision of 2026-09-29 (UltiRemoteBag#44).
+     */
+    static final int SYMBOLS_FIRST = 0x3000;
+    static final int SYMBOLS_LAST = 0x303F;
+    static final int FULLWIDTH_FIRST = 0xFF00;
+    static final int FULLWIDTH_LAST = 0xFFEF;
 
     /** Method names whose argument is a catalogue key. */
     static final Set<String> KEY_METHODS = new HashSet<>(Arrays.asList("i18n", "getLocalizedText"));
@@ -86,11 +95,14 @@ final class I18nSourceScanner {
     }
 
     static boolean containsCjk(String s) {
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c >= CJK_FIRST && c <= CJK_LAST) {
+        for (int i = 0; i < s.length(); ) {
+            int cp = s.codePointAt(i);
+            if (Character.UnicodeScript.of(cp) == Character.UnicodeScript.HAN
+                    || (cp >= SYMBOLS_FIRST && cp <= SYMBOLS_LAST)
+                    || (cp >= FULLWIDTH_FIRST && cp <= FULLWIDTH_LAST)) {
                 return true;
             }
+            i += Character.charCount(cp);
         }
         return false;
     }
@@ -107,8 +119,9 @@ final class I18nSourceScanner {
         boolean key;
         /**
          * True when the literal is part of the value of a {@code @ConfigEntry} annotation's
-         * {@code comment} element -- and of nothing else. Guard 2 skips these; the reason is written
-         * next to the skip in {@code UltiLoginCjkLiteralScopeTest#reportable}.
+         * {@code comment} element -- and of nothing else. Recorded for the guards of modules whose
+         * guard 2 skips these; UltiLogin's no longer does (UltiKits/UltiLogin#46), so here it only
+         * says where the literal sits.
          */
         boolean configComment;
         /** For a {@link #configComment} literal: the field its annotation sits on, and how it was written. */
@@ -155,7 +168,13 @@ final class I18nSourceScanner {
          * {@code plugin.i18n(suggest)} as the hint. Found by {@link #scanCompiledSuggestValues}, never
          * by the parser.
          */
-        SUGGEST_HINT
+        SUGGEST_HINT,
+        /**
+         * {@code @ConfigEntry(comment = "{key}")} -- the framework resolves a comment that is one trimmed
+         * {@code {key}} token through the module's catalogue ({@code UltiToolsPlugin#i18n}) on every load
+         * and write of the file (UltiKits/UltiLogin#46).
+         */
+        CONFIG_COMMENT
     }
 
     /** One place a key reaches the framework's catalogue lookup. */
@@ -569,6 +588,11 @@ final class I18nSourceScanner {
                             return null;
                         }
                     }.scan(value, null);
+                    String token = commentToken(value);
+                    if (token != null) {
+                        keyLiterals.add(value);
+                        out.sites.add(new KeySite(SiteKind.CONFIG_COMMENT, line(a), token, value.toString(), false));
+                    }
                 } else if ("CmdParam".equals(type) && "suggest".equals(element)
                         && !(value instanceof LiteralTree && "".equals(((LiteralTree) value).getValue()))) {
                     out.suggestAttributes++;
@@ -593,6 +617,20 @@ final class I18nSourceScanner {
                 out.literals.add(literal);
             }
             return super.visitLiteral(node, p);
+        }
+
+        /**
+         * The catalogue key of a {@code comment} that is one string literal holding a single trimmed
+         * {@code {key}} token, read exactly as the framework reads it ({@code AbstractConfigEntity}:
+         * {@code comment().trim().matches("\\{[^{}]+\\}")}, the key being what lies between the braces);
+         * {@code null} for any other comment.
+         */
+        private String commentToken(ExpressionTree value) {
+            if (value.getKind() != Tree.Kind.STRING_LITERAL) {
+                return null;
+            }
+            String trimmed = ((String) ((LiteralTree) value).getValue()).trim();
+            return trimmed.matches("\\{[^{}]+\\}") ? trimmed.substring(1, trimmed.length() - 1) : null;
         }
 
         private void addSite(SiteKind kind, int line, ExpressionTree key, boolean passThrough) {
