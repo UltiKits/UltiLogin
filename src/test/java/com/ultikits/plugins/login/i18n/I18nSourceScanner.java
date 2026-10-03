@@ -119,8 +119,9 @@ final class I18nSourceScanner {
         boolean key;
         /**
          * True when the literal is part of the value of a {@code @ConfigEntry} annotation's
-         * {@code comment} element -- and of nothing else. Guard 2 skips these; the reason is written
-         * next to the skip in {@code UltiLoginCjkLiteralScopeTest#reportable}.
+         * {@code comment} element -- and of nothing else. Recorded for the guards of modules whose
+         * guard 2 skips these; UltiLogin's no longer does (UltiKits/UltiLogin#46), so here it only
+         * says where the literal sits.
          */
         boolean configComment;
         /** For a {@link #configComment} literal: the field its annotation sits on, and how it was written. */
@@ -167,7 +168,13 @@ final class I18nSourceScanner {
          * {@code plugin.i18n(suggest)} as the hint. Found by {@link #scanCompiledSuggestValues}, never
          * by the parser.
          */
-        SUGGEST_HINT
+        SUGGEST_HINT,
+        /**
+         * {@code @ConfigEntry(comment = "{key}")} -- the framework resolves a comment that is one trimmed
+         * {@code {key}} token through the module's catalogue ({@code UltiToolsPlugin#i18n}) on every load
+         * and write of the file (UltiKits/UltiLogin#46).
+         */
+        CONFIG_COMMENT
     }
 
     /** One place a key reaches the framework's catalogue lookup. */
@@ -581,6 +588,11 @@ final class I18nSourceScanner {
                             return null;
                         }
                     }.scan(value, null);
+                    String token = commentToken(value);
+                    if (token != null) {
+                        keyLiterals.add(value);
+                        out.sites.add(new KeySite(SiteKind.CONFIG_COMMENT, line(a), token, value.toString(), false));
+                    }
                 } else if ("CmdParam".equals(type) && "suggest".equals(element)
                         && !(value instanceof LiteralTree && "".equals(((LiteralTree) value).getValue()))) {
                     out.suggestAttributes++;
@@ -605,6 +617,20 @@ final class I18nSourceScanner {
                 out.literals.add(literal);
             }
             return super.visitLiteral(node, p);
+        }
+
+        /**
+         * The catalogue key of a {@code comment} that is one string literal holding a single trimmed
+         * {@code {key}} token, read exactly as the framework reads it ({@code AbstractConfigEntity}:
+         * {@code comment().trim().matches("\\{[^{}]+\\}")}, the key being what lies between the braces);
+         * {@code null} for any other comment.
+         */
+        private String commentToken(ExpressionTree value) {
+            if (value.getKind() != Tree.Kind.STRING_LITERAL) {
+                return null;
+            }
+            String trimmed = ((String) ((LiteralTree) value).getValue()).trim();
+            return trimmed.matches("\\{[^{}]+\\}") ? trimmed.substring(1, trimmed.length() - 1) : null;
         }
 
         private void addSite(SiteKind kind, int line, ExpressionTree key, boolean passThrough) {
