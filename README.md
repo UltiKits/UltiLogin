@@ -157,15 +157,18 @@ blind-effect: true          # 未登录时失明效果
 
 **By design (UltiKits/UltiLogin#45):** failed logins are counted per IP address under every
 `security.lockout-type`, so accounts behind one address (a household, a school, a proxy) share one count.
-`IP` locks the whole address, so one player's wrong passwords can lock the others out; `UUID` locks only
-the account whose wrong password reached the limit, which makes it the per-account alternative for what is
-locked (the count is still shared, so another account's failures on the same address can bring an account to
-the limit); `BOTH` locks both. Set `security.lockout-type: UUID` if accounts share addresses.
+`IP` locks the whole address, so one player's wrong passwords can lock the others out. `UUID` locks only the
+account whose wrong password reached the limit, so it narrows what is locked, but it does not make the count
+per account: a `UUID` lock does not reset the shared count, so until someone logs in successfully at that
+address, or the locked account tries again after its lock expires, any other account there that mistypes is
+locked on that attempt. `BOTH` locks both. Config comments follow the server's `language`; the sample above
+shows them in Chinese.
 
 **设计如此（UltiKits/UltiLogin#45）：** 无论 `security.lockout-type` 设为哪一种，失败次数都按 IP 地址计数，
-同一地址（家庭、学校、代理）背后的账号共用一个计数。`IP` 封禁整个地址，因此一名玩家输错密码可能把其他人一起锁在门外；
-`UUID` 只封禁输错密码达到上限的那个账号，是「按账号封禁」的替代设置（计数仍然共用，同一地址上其他账号的失败也可能使某个账号达到上限）；
-`BOTH` 两者都封。账号共用地址时请设置 `security.lockout-type: UUID`。
+同一地址（家庭、学校、代理）背后的账号共用一个计数。`IP` 封禁整个地址，因此一名玩家输错密码可能把其他人一起锁在门外。
+`UUID` 只封禁输错密码达到上限的那个账号，缩小了被封禁的范围，但并没有让计数变成按账号：`UUID` 封禁不会清零共用计数，
+在该地址有人成功登录、或被封账号在封禁到期后再次尝试之前，同一地址上其他账号输错一次就会被封禁。`BOTH` 两者都封。
+配置文件中的注释跟随服务器的 `language`；上面的示例以中文显示。
 
 ### 会话保持
 
