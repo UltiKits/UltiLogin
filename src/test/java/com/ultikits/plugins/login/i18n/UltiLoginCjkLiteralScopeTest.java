@@ -216,6 +216,67 @@ class UltiLoginCjkLiteralScopeTest {
     }
 
     @Nested
+    @DisplayName("what the guards detect (the framework's check-cjk-scope.sh contract)")
+    class DetectionContract {
+
+        @Test
+        @DisplayName("a CJK Unified Ideograph is detected (the range every earlier version had)")
+        void unifiedIdeograph() {
+            assertThat(I18nSourceScanner.containsCjk("a\u4e2db")).isTrue();
+            assertThat(I18nSourceScanner.containsCjk("plain ASCII text")).isFalse();
+        }
+
+        @Test
+        @DisplayName("Han Extension A (U+3400) is detected")
+        void hanExtensionA() {
+            assertThat(I18nSourceScanner.containsCjk("a\u3400b")).isTrue();
+        }
+
+        @Test
+        @DisplayName("a supplementary-plane ideograph (U+20000, a surrogate pair) is detected")
+        void supplementaryPlaneIdeograph() {
+            assertThat(I18nSourceScanner.containsCjk("a\uD840\uDC00b")).isTrue();
+        }
+
+        @Test
+        @DisplayName("a compatibility ideograph (U+F900) is detected")
+        void compatibilityIdeograph() {
+            assertThat(I18nSourceScanner.containsCjk("a\uF900b")).isTrue();
+        }
+
+        @Test
+        @DisplayName("CJK Symbols and Punctuation (U+3001 and the range's first, U+3000) are detected")
+        void cjkSymbolsAndPunctuation() {
+            assertThat(I18nSourceScanner.containsCjk("a\u3001b")).isTrue();
+            assertThat(I18nSourceScanner.containsCjk("a\u3000b")).isTrue();
+        }
+
+        @Test
+        @DisplayName("Halfwidth and Fullwidth Forms (U+FF1A, and the range's last, U+FFEF) are detected")
+        void fullWidthForms() {
+            assertThat(I18nSourceScanner.containsCjk("a\uFF1Ab")).isTrue();
+            assertThat(I18nSourceScanner.containsCjk("a\uFFEFb")).isTrue();
+        }
+
+        @Test
+        @DisplayName("control: kana is outside the contract, and so are the characters just past each range")
+        void kanaAndNeighboursAreNotDetected() {
+            assertThat(I18nSourceScanner.containsCjk("\u3042\u30AB")).as("hiragana, katakana").isFalse();
+            assertThat(I18nSourceScanner.containsCjk("\u3040\u30FF")).as("kana block edges").isFalse();
+            assertThat(I18nSourceScanner.containsCjk("\uFFF0")).as("just past the full-width forms").isFalse();
+            assertThat(I18nSourceScanner.containsCjk("\u00E9\u2014\u2026")).as("Latin and general punctuation").isFalse();
+        }
+
+        @Test
+        @DisplayName("a literal holding only a widened-range character is reported by guard 2")
+        void guardTwoReportsAWidenedCharacter() {
+            assertThat(check("String s = \"a\\u3001b\";")).hasSize(1);
+            assertThat(check("String s = \"a\\uFF1Ab\";")).hasSize(1);
+            assertThat(check("String s = \"a\\u3400b\";")).hasSize(1);
+        }
+    }
+
+    @Nested
     @DisplayName("reading the source")
     class Reading {
 
