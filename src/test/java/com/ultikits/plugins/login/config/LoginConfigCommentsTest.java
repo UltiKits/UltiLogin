@@ -171,15 +171,15 @@ class LoginConfigCommentsTest {
     }
 
     @Test
-    @DisplayName("the lockout-type comment says failed logins are counted per address, what IP locks, what UUID locks and that a UUID lock does not reset the count (#45)")
+    @DisplayName("the lockout-type comment says failed logins are counted per address, what each type counts and locks (#45, #48)")
     void lockoutTypeCommentStatesTheSharedCounter() {
         String en = CatalogueText.text("en", "login_config_comment_security_lockout_type");
-        assertThat(en).contains("IP / UUID / BOTH").contains("counted per IP address").contains("share the count")
-                .contains("IP locks the address").contains("UUID locks only the account")
-                .contains("does not reset the shared count").contains("mistypes is locked on that attempt");
+        assertThat(en).contains("IP / UUID / BOTH").contains("counted by the same key the type locks")
+                .contains("per IP address").contains("share the count")
+                .contains("UUID counts and locks per account").contains("BOTH keeps both counts");
         String zh = CatalogueText.text("zh", "login_config_comment_security_lockout_type");
         assertThat(zh).contains("IP / UUID / BOTH").contains("\u5171\u7528\u8ba1\u6570")
-                .contains("\u4e0d\u4f1a\u6e05\u96f6\u5171\u7528\u8ba1\u6570");
+                .contains("UUID \u6309\u8d26\u53f7\u8ba1\u6570\u5e76\u5c01\u7981");
     }
 
     @Test

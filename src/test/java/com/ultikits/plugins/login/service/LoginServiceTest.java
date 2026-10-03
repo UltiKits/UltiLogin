@@ -506,6 +506,89 @@ class LoginServiceTest {
         }
 
         /**
+         * UltiKits/UltiLogin#48 (supervisor decision, 2026-10-04): the failure count follows the lock target.
+         * Under {@code UUID} it is per account, so one account's lock never makes another account at the same
+         * address lock on its first wrong password; under {@code IP} it stays per address; {@code BOTH} keeps
+         * both counts and each lock follows its own count.
+         */
+        private Player otherPlayerAtTheSameAddress() {
+            return UltiLoginTestHelper.createMockPlayer("Other", UUID.randomUUID());
+        }
+
+        @Test
+        @DisplayName("UUID: one account's lock leaves another account at the same address with its full attempts (#48)")
+        void uuidCountIsPerAccount() {
+            when(config.getMaxLoginAttempts()).thenReturn(2);
+            when(config.getLockoutType()).thenReturn("UUID");
+            Player other = otherPlayerAtTheSameAddress();
+
+            service.login(player, "wrong1");
+            assertThat(service.login(player, "wrong2").getMessage()).isEqualTo("LOCKED 900");
+
+            assertThat(service.isLocked(other)).as("the other account is not locked by the first account's lock").isFalse();
+            assertThat(service.getRemainingAttempts(other)).isEqualTo(2);
+            assertThat(service.login(other, "wrong1").getMessage()).isEqualTo("REMAINING 1");
+            assertThat(service.isLocked(other)).isFalse();
+        }
+
+        @Test
+        @DisplayName("UUID: wrong passwords of two accounts at one address are counted separately (#48)")
+        void uuidAlternatingAccountsAreCountedSeparately() {
+            when(config.getMaxLoginAttempts()).thenReturn(2);
+            when(config.getLockoutType()).thenReturn("UUID");
+            Player other = otherPlayerAtTheSameAddress();
+
+            assertThat(service.login(player, "wrong1").getMessage()).isEqualTo("REMAINING 1");
+            assertThat(service.login(other, "wrong1").getMessage()).isEqualTo("REMAINING 1");
+            assertThat(service.login(player, "wrong2").getMessage()).isEqualTo("LOCKED 900");
+
+            assertThat(service.isLocked(player)).isTrue();
+            assertThat(service.isLocked(other)).isFalse();
+        }
+
+        @Test
+        @DisplayName("IP: the count and the lock stay per address, so one account's wrong passwords lock the other (#45)")
+        void ipCountIsPerAddress() {
+            when(config.getMaxLoginAttempts()).thenReturn(2);
+            when(config.getLockoutType()).thenReturn("IP");
+            Player other = otherPlayerAtTheSameAddress();
+
+            service.login(player, "wrong1");
+            assertThat(service.login(other, "wrong1").getMessage()).isEqualTo("LOCKED 900");
+
+            assertThat(service.isLocked(player)).isTrue();
+            assertThat(service.isLocked(other)).isTrue();
+        }
+
+        @Test
+        @DisplayName("BOTH: the address count locks the address, the account's own count locks the account (#48)")
+        void bothKeepsBothCounts() {
+            when(config.getMaxLoginAttempts()).thenReturn(2);
+            when(config.getLockoutType()).thenReturn("BOTH");
+            Player other = otherPlayerAtTheSameAddress();
+
+            service.login(player, "wrong1");
+            assertThat(service.login(other, "wrong1").getMessage()).isEqualTo("LOCKED 900");
+
+            assertThat(service.isLocked(player)).as("the address reached the limit").isTrue();
+            assertThat(service.isLocked(other)).isTrue();
+        }
+
+        @Test
+        @DisplayName("BOTH: remaining attempts follow the nearer lock (#48)")
+        void bothRemainingFollowsTheNearerLock() {
+            when(config.getMaxLoginAttempts()).thenReturn(3);
+            when(config.getLockoutType()).thenReturn("BOTH");
+            Player other = otherPlayerAtTheSameAddress();
+
+            service.login(player, "wrong1");
+            service.login(other, "wrong1");
+
+            assertThat(service.getRemainingAttempts(other)).as("address 2 of 3, account 1 of 3").isEqualTo(1);
+            assertThat(service.getRemainingAttempts(player)).isEqualTo(1);
+        }
+
+        /**
          * UltiKits/UltiLogin#37 (maintainer decision: refuse and name the value): a
          * {@code security.lockout-type} other than IP / UUID / BOTH falls back to the default, IP,
          * instead of switching the lockout off.
