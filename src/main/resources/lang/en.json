@@ -152,7 +152,7 @@
   "login_config_comment_password_max_length": "Maximum password length in command mode",
   "login_config_comment_security_max_login_attempts": "Maximum failed login attempts (0 = unlimited)",
   "login_config_comment_security_lockout_duration": "Lockout duration after too many failed logins, in seconds",
-  "login_config_comment_security_lockout_type": "Lockout type: IP / UUID / BOTH. Failed logins are counted per IP address, so accounts behind one address share the count. IP locks the address (every account behind it). UUID locks only the account that made the attempt that reached the limit, but that lock does not reset the shared count: until someone logs in successfully at that address, or the locked account tries again after its lock expires, any other account there that mistypes is locked on that attempt. BOTH locks both",
+  "login_config_comment_security_lockout_type": "Lockout type: IP / UUID / BOTH. Failed logins are counted by the same key the type locks: IP counts and locks per IP address (accounts behind one address share the count, and one player's wrong passwords can lock the others out); UUID counts and locks per account; BOTH keeps both counts and locks the address when its count reaches the limit and the account when its own count does",
   "login_config_comment_spawn_location_enabled": "Teleport players who are not logged in to a fixed location",
   "login_config_comment_spawn_location_world": "World of the spawn location",
   "login_config_comment_spawn_location_x": "Spawn location X",

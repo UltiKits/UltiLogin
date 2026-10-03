@@ -169,6 +169,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The failed-login count now follows what `security.lockout-type` locks. With `UUID` it is kept per account, so
+  one account's lock no longer leaves every other account at the same address one wrong password away from being
+  locked, and one account's wrong passwords no longer count against another's; `messages.attempts-remaining`
+  is per account too. With `IP` it stays per address (accounts behind one address share it, by design). With
+  `BOTH` both counts are kept: the address is locked when its count reaches `security.max-login-attempts` and
+  the account when its own count does, and the attempts shown are those left before the nearer lock
+  (UltiKits/UltiLogin#48, UltiKits/UltiLogin#45).
+- 失败登录次数现在按 `security.lockout-type` 所封禁的对象计数。使用 `UUID` 时按账号计数：一个账号被封禁后，同一地址上
+  的其他账号不再只差一次输错就被封禁，一个账号输错密码也不再算到另一个账号头上；`messages.attempts-remaining`
+  同样按账号。使用 `IP` 时仍按地址计数（同一地址背后的账号共用，设计如此）。使用 `BOTH` 时两种计数都保留：地址的计数达到
+  `security.max-login-attempts` 时封禁该地址，账号自己的计数达到上限时封禁该账号，显示的剩余次数为离较近一次封禁所剩的次数
+  （UltiKits/UltiLogin#48、UltiKits/UltiLogin#45）。
 - An account write whose stored row no longer exists is now reported as failed on every storage type. On a
   database shared by several servers, another server's `/logadmin unregister` between this module's read and
   its write used to leave the write silently lost. Each of the six writes (login, panel login, `/changepassword`,
@@ -186,17 +198,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   module's language files: a server set to `language: en` writes English comments on a fresh install
   (earlier versions wrote Chinese-only comments in every language). An existing file's comments on these
   keys switch to the server's language at the next start; values are untouched, and a comment you wrote by
-  hand above one of these keys is replaced. The comment above `security.lockout-type` now also says that
-  failed logins are counted per IP address, so accounts behind one address share the count, that `IP` locks
-  the whole address, that `UUID` locks only the account that made the attempt reaching the limit but does not
-  reset the shared count (any other account at that address that mistypes is then locked on that attempt, until
-  someone logs in successfully there or the locked account tries again after its lock expires), and that
-  `BOTH` locks both (UltiKits/UltiLogin#46, UltiKits/UltiLogin#45).
+  hand above one of these keys is replaced. The comment above `security.lockout-type` now also says
+  what each type counts and locks (see the failed-login count entry) (UltiKits/UltiLogin#46, UltiKits/UltiLogin#45).
 - `config/login.yml` 与 `config/email.yml` 中各配置项上方的注释（分别 42 条和 8 条）现在取自模块的语言文件：
   `language: en` 的服务器全新安装时写入英文注释（此前所有语言下都写入纯中文注释）。已有文件中这些项的注释会在下次启动
-  时切换为服务器语言；配置值不变，你手写在这些配置项上方的注释会被替换。`security.lockout-type` 上方的注释同时写明：
-  失败次数按 IP 地址计数，同一地址的账号共用计数；`IP` 封禁整个地址，`UUID` 只封禁达到上限的那个账号、但不会清零共用计数（该地址上其他账号此后输错一次就会被封禁，直到有人在该地址成功登录，
-  或被封账号在封禁到期后再次尝试），`BOTH` 两者都封（UltiKits/UltiLogin#46、UltiKits/UltiLogin#45）。
+  时切换为服务器语言；配置值不变，你手写在这些配置项上方的注释会被替换。`security.lockout-type` 上方的注释同时写明各类型计数和封禁的对象（见失败登录次数一条）（UltiKits/UltiLogin#46、UltiKits/UltiLogin#45）。
 - The console warning about a setting this version no longer reads names the file exactly as it is: a
   server installed under a directory whose name contains `{KEY}` or `{REASON}` used to get a path that does
   not exist, because the path was inserted before those placeholders were filled. Every placeholder of the

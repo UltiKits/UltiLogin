@@ -155,19 +155,18 @@ blind-effect: true          # 未登录时失明效果
 - 封禁时长可配置（默认 15 分钟）
 - 成功登录后清除失败记录
 
-**By design (UltiKits/UltiLogin#45):** failed logins are counted per IP address under every
-`security.lockout-type`, so accounts behind one address (a household, a school, a proxy) share one count.
-`IP` locks the whole address, so one player's wrong passwords can lock the others out. `UUID` locks only the
-account whose wrong password reached the limit, so it narrows what is locked, but it does not make the count
-per account: a `UUID` lock does not reset the shared count, so until someone logs in successfully at that
-address, or the locked account tries again after its lock expires, any other account there that mistypes is
-locked on that attempt. `BOTH` locks both. Config comments follow the server's `language`; the sample above
-shows them in Chinese.
+**By design (UltiKits/UltiLogin#45, #48):** the failure count follows what `security.lockout-type` locks.
+`IP` counts and locks per IP address, so accounts behind one address (a household, a school, a proxy) share
+one count and one player's wrong passwords can lock the others out. `UUID` counts and locks per account, so
+one account's lock or wrong passwords never count against another account at the same address; use it when
+accounts share addresses. `BOTH` keeps both counts: the address is locked when its count reaches the limit and
+the account when its own count does. Config comments follow the server's `language`; the sample above shows
+them in Chinese.
 
-**设计如此（UltiKits/UltiLogin#45）：** 无论 `security.lockout-type` 设为哪一种，失败次数都按 IP 地址计数，
-同一地址（家庭、学校、代理）背后的账号共用一个计数。`IP` 封禁整个地址，因此一名玩家输错密码可能把其他人一起锁在门外。
-`UUID` 只封禁输错密码达到上限的那个账号，缩小了被封禁的范围，但并没有让计数变成按账号：`UUID` 封禁不会清零共用计数，
-在该地址有人成功登录、或被封账号在封禁到期后再次尝试之前，同一地址上其他账号输错一次就会被封禁。`BOTH` 两者都封。
+**设计如此（UltiKits/UltiLogin#45、#48）：** 失败次数按 `security.lockout-type` 所封禁的对象计数。
+`IP` 按 IP 地址计数并封禁，因此同一地址（家庭、学校、代理）背后的账号共用一个计数，一名玩家输错密码可能把其他人一起锁住。
+`UUID` 按账号计数并封禁，一个账号的封禁或输错密码不会算到同一地址上的其他账号头上；账号共用地址时请使用它。
+`BOTH` 两种计数都保留：地址的计数达到上限时封禁该地址，账号自己的计数达到上限时封禁该账号。
 配置文件中的注释跟随服务器的 `language`；上面的示例以中文显示。
 
 ### 会话保持
