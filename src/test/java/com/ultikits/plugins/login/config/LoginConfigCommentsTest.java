@@ -124,17 +124,19 @@ class LoginConfigCommentsTest {
         return config;
     }
 
-    /** The comment line directly above the line that declares {@code path} (its last segment), without its leading {@code # }. */
+    /** The comment above {@code path}, read through YAML so that nested keys sharing a name are told apart. */
     private static String commentAbove(String text, String path) {
-        String leaf = path.substring(path.lastIndexOf('.') + 1);
-        String[] lines = text.split("\\R");
-        for (int i = 1; i < lines.length; i++) {
-            if (lines[i].trim().startsWith(leaf + ":") && lines[i - 1].trim().startsWith("#")) {
-                String above = lines[i - 1].trim();
-                return above.startsWith("# ") ? above.substring(2) : above.substring(1);
-            }
+        org.bukkit.configuration.file.YamlConfiguration yaml = new org.bukkit.configuration.file.YamlConfiguration();
+        try {
+            yaml.loadFromString(text);
+        } catch (org.bukkit.configuration.InvalidConfigurationException e) {
+            throw new AssertionError("unreadable YAML:\n" + text, e);
         }
-        throw new AssertionError("no commented line for key " + path + " in:\n" + text);
+        List<String> comments = yaml.getComments(path);
+        if (comments.size() != 1) {
+            throw new AssertionError("expected one comment line above " + path + " but found " + comments + " in:\n" + text);
+        }
+        return comments.get(0).trim();
     }
 
     private static void assertComments(String text, List<String[]> keys, String language) {
