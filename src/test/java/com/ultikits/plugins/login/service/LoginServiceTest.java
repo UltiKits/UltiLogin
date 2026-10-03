@@ -4477,6 +4477,26 @@ class LoginServiceTest {
         }
 
         @Test
+        @DisplayName("a failed password change, random reset and specific reset leave an online, logged-in player logged in")
+        void failedPasswordWritesDoNotLogThePlayerOut() throws Exception {
+            service.login(player, "password123");
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+                stubSchedulerToRunSynchronously(bukkitMock);
+
+                assertThat(service.changePassword(playerUuid, "password123", "newPass123")).isFalse();
+                assertThat(service.resetPassword(playerUuid)).isNull();
+                assertThat(service.resetPassword(playerUuid, "newPass123")).isFalse();
+            }
+
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("a write that did not happen must not revoke the player's login (a failed update must not log the player out)")
+                    .isTrue();
+        }
+
+        @Test
         @DisplayName("a panel login still completes and logs the failed write with the reason")
         void panelLogin() throws Exception {
             @SuppressWarnings("unchecked")
