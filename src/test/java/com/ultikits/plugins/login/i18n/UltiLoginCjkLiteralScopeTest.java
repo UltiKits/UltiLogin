@@ -44,10 +44,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * Chinese-only comment fails this guard.
  * <p>
  * This file is the same in every module except for its package line and class name, and this one
- * deliberate difference: the modules whose shipped configuration files still carry literal comments
- * (UltiChat and UltiWorlds) keep a skip for the {@code comment} element of {@code @ConfigEntry}; the
- * modules that adopted translatable comments (UltiRemoteBag, UltiLogin and the others of that
- * adoption) do not.
+ * deliberate difference: the modules outside the translatable-comment adoption (their shipped
+ * configuration files carry English or bilingual comments, or they declare no comment attributes) keep a
+ * skip for the {@code comment} element of {@code @ConfigEntry}; the modules that adopted translatable
+ * comments (UltiRemoteBag, UltiLogin and the others of that adoption) do not.
  */
 @DisplayName("Language guard 2: Chinese literals")
 class UltiLoginCjkLiteralScopeTest {
