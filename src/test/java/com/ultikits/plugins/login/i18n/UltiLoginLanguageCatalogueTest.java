@@ -717,6 +717,49 @@ class UltiLoginLanguageCatalogueTest {
     class Sites {
 
         @Test
+        @DisplayName("a @ConfigEntry comment written as one {key} token is a key site, trimmed the way the framework trims it")
+        void configCommentTokenIsAKeySite() {
+            SourceFile f = source("@ConfigEntry(path = \"a\", comment = \"{login_config_comment_a}\") private boolean a;\n"
+                    + "@ConfigEntry(path = \"b\", comment = \" {login_config_comment_b} \") private boolean b;");
+            assertThat(f.sites).extracting(s -> s.literalKey)
+                    .containsExactly("login_config_comment_a", "login_config_comment_b");
+            assertThat(f.sites).extracting(s -> s.kind.name()).containsOnly("CONFIG_COMMENT");
+            assertThat(f.sites).extracting(s -> s.line).containsExactly(2, 3);
+        }
+
+        @Test
+        @DisplayName("a literal comment, a token with more text, two tokens and an empty token are not key sites")
+        void otherCommentsAreNotKeySites() {
+            SourceFile f = source("@ConfigEntry(path = \"a\", comment = \"Enable the login\") private boolean a;\n"
+                    + "@ConfigEntry(path = \"b\", comment = \"{key} and more\") private boolean b;\n"
+                    + "@ConfigEntry(path = \"c\", comment = \"{one}{two}\") private boolean c;\n"
+                    + "@ConfigEntry(path = \"d\", comment = \"{}\") private boolean d;\n"
+                    + "@ConfigEntry(path = \"e\") private boolean e;");
+            assertThat(f.sites).isEmpty();
+        }
+
+        @Test
+        @DisplayName("a comment token whose key is missing from a catalogue fails, naming key, file and language")
+        void commentTokenMissingFromOneLanguage() throws IOException {
+            List<String> problems = missingLiteralKeys(
+                    Collections.singletonList(source("@ConfigEntry(path = \"a\", comment = \"{comment.key}\") private boolean a;")),
+                    Arrays.asList(yaml("en", "comment.key: \"x\"\n"), yaml("zh", "other: \"y\"\n")));
+            assertThat(problems).containsExactly(
+                    "key \"comment.key\" (src/main/java/Sample.java:2) is missing from lang/zh.yml");
+        }
+
+        @Test
+        @DisplayName("a catalogue key used only as a comment token is reachable; one nothing uses is not")
+        void commentTokenKeepsItsCatalogueKeyReachable() throws IOException {
+            List<SourceFile> files = Collections.singletonList(
+                    source("@ConfigEntry(path = \"a\", comment = \"{comment.key}\") private boolean a;"));
+            List<Catalogue> cats = Collections.singletonList(
+                    yaml("en", "comment.key: \"x\"\nunused.key: \"y\"\n"));
+            assertThat(unreachableCatalogueKeys(files, Collections.<DynamicSite>emptyList(), cats))
+                    .containsExactly("lang/en.yml declares \"unused.key\", which no code can produce");
+        }
+
+        @Test
         @DisplayName("a key present in en but absent from zh fails, naming key, file and language")
         void missingFromOneLanguage() throws IOException {
             List<String> problems = missingLiteralKeys(

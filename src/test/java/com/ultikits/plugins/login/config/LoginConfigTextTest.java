@@ -326,6 +326,90 @@ class LoginConfigTextTest {
         }
     }
 
+    /**
+     * Plan 17-73 S5: a language switch re-renders only the shipped-text settings of login.yml; a typo value and a
+     * hand-written comment elsewhere in the same file stay byte for byte. The two writes are measured one at a time:
+     * the test switches the language before the entity's own {@code reload()}, so that reload's comment-only rewrite
+     * stands in for the framework's refresh after the language rebuild (both are the same gated write of the
+     * framework's own comment lines); then the module's {@code onReload()} re-renders the texts that still hold
+     * built-in Chinese text, and its save writes only those settings (UltiKits/UltiTools-Reborn#611).
+     */
+    @Test
+    @DisplayName("a language switch re-renders only the shipped-text lines; a typo value and a hand-written comment stay byte for byte")
+    void languageSwitchRewritesOnlyTheShippedTextLines() throws Exception {
+        language[0] = "zh";
+        LoginConfig config = spy(load());
+        start(config);
+        String started = new String(bytes(), StandardCharsets.UTF_8);
+        String edited = started.replaceFirst("(?m)^(\\s*)login-timeout: 60$", "$1# Operator note: keep this\n$1login-timeout: 6O");
+        assertThat(edited).as("the typo and the comment applied to:\n" + started).isNotEqualTo(started);
+        int at = edited.indexOf("# Operator note: keep this\n");
+        String operatorLines = edited.substring(at, edited.indexOf('\n', edited.indexOf('\n', at) + 1));
+        Files.write(file().toPath(), edited.getBytes(StandardCharsets.UTF_8));
+
+        language[0] = "en";
+        config.reload();
+        String afterComments = new String(bytes(), StandardCharsets.UTF_8);
+        reload();
+        String after = new String(bytes(), StandardCharsets.UTF_8);
+
+        // The framework's comment refresh: comment lines only, never the operator's own comment.
+        assertThat(s5ChangedLines(edited, afterComments)).as("the framework's comments followed the switch").isNotEmpty();
+        String[] was = edited.split("\n", -1);
+        for (int line : s5ChangedLines(edited, afterComments)) {
+            assertThat(was[line].trim()).as("line " + (line + 1) + " changed by the framework's comment refresh:\n" + afterComments)
+                    .startsWith("#").doesNotContain("Operator note");
+        }
+        // The module's save: exactly the shipped-text settings, one line each.
+        String[] before = afterComments.split("\n", -1);
+        String[] now = after.split("\n", -1);
+        Set<String> rewritten = new TreeSet<>();
+        for (int line : s5ChangedLines(afterComments, after)) {
+            String setting = s5SettingOf(now[line]);
+            assertThat(setting).as("line " + (line + 1) + " changed by the module's save but is not a shipped-text setting: '"
+                    + before[line] + "' -> '" + now[line] + "'").isNotNull();
+            assertThat(s5SettingOf(before[line])).as("line " + (line + 1) + " holds the same setting before and after").isEqualTo(setting);
+            rewritten.add(setting);
+        }
+        Set<String> all = new TreeSet<>();
+        for (Setting s : SETTINGS) {
+            all.add(s.path);
+            assertThat(onDisk().getString(s.path)).as(s.path + " follows the switch").isEqualTo(s.text("en"));
+        }
+        assertThat(rewritten).as("the settings the module's save rewrote").isEqualTo(all);
+        assertThat(after).as("the operator's typo and comment").contains(operatorLines);
+        verify(config, times(1)).save();
+    }
+
+    /** The 0-based indexes of the lines that differ; the line count must be equal (nothing inserted or removed). */
+    private static List<Integer> s5ChangedLines(String was, String now) {
+        String[] a = was.split("\n", -1);
+        String[] b = now.split("\n", -1);
+        assertThat(b.length).as("line count unchanged; the file now:\n" + now).isEqualTo(a.length);
+        List<Integer> changed = new ArrayList<>();
+        for (int i = 0; i < a.length; i++) {
+            if (!a[i].equals(b[i])) {
+                changed.add(i);
+            }
+        }
+        return changed;
+    }
+
+    /** The shipped-text setting whose key a line of the file holds (by its leaf key and indentation), or null. */
+    private static String s5SettingOf(String line) {
+        for (Setting s : SETTINGS) {
+            String[] parts = s.path.split("\\.");
+            StringBuilder indent = new StringBuilder();
+            for (int i = 1; i < parts.length; i++) {
+                indent.append("  ");
+            }
+            if (line.startsWith(indent + parts[parts.length - 1] + ": ")) {
+                return s.path;
+            }
+        }
+        return null;
+    }
+
     @Test
     @DisplayName("no configuration change listener rewrites the text (the framework fires them before it reloads the language)")
     void changeListenersDoNotMaterialize() throws Exception {

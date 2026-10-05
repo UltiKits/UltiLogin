@@ -36,63 +36,67 @@ public class LoginConfig extends AbstractConfigEntity {
     // ==================== 基础设置 ====================
 
     @Range(min = 10, max = 600)
-    @ConfigEntry(path = "login-timeout", comment = "登录超时时间（秒），超时将被踢出")
+    @ConfigEntry(path = "login-timeout", comment = "{login_config_comment_login_timeout}")
     private int loginTimeout = 60;
 
-    @ConfigEntry(path = "session-enabled", comment = "启用会话功能（同一IP短期内无需重新登录）")
+    @ConfigEntry(path = "session-enabled", comment = "{login_config_comment_session_enabled}")
     private boolean sessionEnabled = true;
 
     @Range(min = 1, max = 1440)
-    @ConfigEntry(path = "session-timeout", comment = "会话过期时间（分钟）")
+    @ConfigEntry(path = "session-timeout", comment = "{login_config_comment_session_timeout}")
     private int sessionTimeout = 30;
 
     @Range(min = 0, max = 100)
-    @ConfigEntry(path = "max-register-per-ip", comment = "同一IP最大注册账户数（0为不限制）")
+    @ConfigEntry(path = "max-register-per-ip", comment = "{login_config_comment_max_register_per_ip}")
     private int maxRegisterPerIp = 3;
     
     // ==================== GUI 模式设置 ====================
 
-    @ConfigEntry(path = "gui-mode.enabled", comment = "启用GUI登录模式（数字键盘界面）")
+    @ConfigEntry(path = "gui-mode.enabled", comment = "{login_config_comment_gui_mode_enabled}")
     private boolean guiModeEnabled = false;
 
     @Range(min = 1, max = 9)
-    @ConfigEntry(path = "gui-mode.password-length", comment = "GUI模式密码位数（1-9数字，推荐4-6位）")
+    @ConfigEntry(path = "gui-mode.password-length", comment = "{login_config_comment_gui_mode_password_length}")
     private int guiPasswordLength = 4;
 
     @NotEmpty
-    @ConfigEntry(path = "gui-mode.title-login", comment = "GUI登录界面标题")
+    @ConfigEntry(path = "gui-mode.title-login", comment = "{login_config_comment_gui_mode_title_login}")
     private String guiLoginTitle = SHIPPED_GUI_LOGIN_TITLE;
 
     @NotEmpty
-    @ConfigEntry(path = "gui-mode.title-register", comment = "GUI注册界面标题")
+    @ConfigEntry(path = "gui-mode.title-register", comment = "{login_config_comment_gui_mode_title_register}")
     private String guiRegisterTitle = SHIPPED_GUI_REGISTER_TITLE;
 
     @NotEmpty
-    @ConfigEntry(path = "gui-mode.title-confirm", comment = "GUI确认密码界面标题")
+    @ConfigEntry(path = "gui-mode.title-confirm", comment = "{login_config_comment_gui_mode_title_confirm}")
     private String guiConfirmTitle = SHIPPED_GUI_CONFIRM_TITLE;
     
     // ==================== 命令模式密码设置 ====================
 
     @Range(min = 4, max = 32)
-    @ConfigEntry(path = "password.min-length", comment = "命令模式密码最小长度")
+    @ConfigEntry(path = "password.min-length", comment = "{login_config_comment_password_min_length}")
     private int minPasswordLength = 6;
 
     @Range(min = 6, max = 128)
-    @ConfigEntry(path = "password.max-length", comment = "命令模式密码最大长度")
+    @ConfigEntry(path = "password.max-length", comment = "{login_config_comment_password_max_length}")
     private int maxPasswordLength = 32;
     
     // ==================== 登录安全保护 ====================
 
     @Range(min = 0, max = 20)
-    @ConfigEntry(path = "security.max-login-attempts", comment = "最大登录失败次数（0为不限制）")
+    @ConfigEntry(path = "security.max-login-attempts", comment = "{login_config_comment_security_max_login_attempts}")
     private int maxLoginAttempts = 5;
 
     @Range(min = 60, max = 86400)
-    @ConfigEntry(path = "security.lockout-duration", comment = "登录失败封禁时长（秒）")
+    @ConfigEntry(path = "security.lockout-duration", comment = "{login_config_comment_security_lockout_duration}")
     private int lockoutDuration = 900;
 
+    // previousComments: the comment every earlier version wrote here. The zh catalogue text now explains how
+    // failures are counted, so it no longer equals that comment; registering it lets the framework recognise
+    // an upgraded server's comment as its own and rewrite it in the server's language (UltiKits/UltiLogin#51).
     @NotEmpty
-    @ConfigEntry(path = "security.lockout-type", comment = "封禁类型：IP / UUID / BOTH")
+    @ConfigEntry(path = "security.lockout-type", comment = "{login_config_comment_security_lockout_type}",
+            previousComments = "封禁类型：IP / UUID / BOTH")
     private String lockoutType = LOCKOUT_TYPE_DEFAULT;
 
     /** The declared default of {@code security.lockout-type}, and what an unusable value falls back to. */
@@ -129,30 +133,30 @@ public class LoginConfig extends AbstractConfigEntity {
     
     // ==================== 位置设置 ====================
 
-    @ConfigEntry(path = "spawn-location.enabled", comment = "未登录时传送到指定位置")
+    @ConfigEntry(path = "spawn-location.enabled", comment = "{login_config_comment_spawn_location_enabled}")
     private boolean spawnLocationEnabled = false;
 
     @NotEmpty
-    @ConfigEntry(path = "spawn-location.world", comment = "出生点世界")
+    @ConfigEntry(path = "spawn-location.world", comment = "{login_config_comment_spawn_location_world}")
     private String spawnWorld = "world";
 
-    @ConfigEntry(path = "spawn-location.x", comment = "出生点X")
+    @ConfigEntry(path = "spawn-location.x", comment = "{login_config_comment_spawn_location_x}")
     private double spawnX = 0;
 
     @Range(min = -64, max = 320)
-    @ConfigEntry(path = "spawn-location.y", comment = "出生点Y")
+    @ConfigEntry(path = "spawn-location.y", comment = "{login_config_comment_spawn_location_y}")
     private double spawnY = 64;
 
-    @ConfigEntry(path = "spawn-location.z", comment = "出生点Z")
+    @ConfigEntry(path = "spawn-location.z", comment = "{login_config_comment_spawn_location_z}")
     private double spawnZ = 0;
     
     // ==================== 其他设置 ====================
 
     @NotEmpty
-    @ConfigEntry(path = "allowed-commands", comment = "未登录时允许执行的命令")
+    @ConfigEntry(path = "allowed-commands", comment = "{login_config_comment_allowed_commands}")
     private List<String> allowedCommands = Arrays.asList("login", "l", "register", "reg", "panel", "regs", "recover");
 
-    @ConfigEntry(path = "blind-effect", comment = "未登录时给予失明效果")
+    @ConfigEntry(path = "blind-effect", comment = "{login_config_comment_blind_effect}")
     private boolean blindEffect = true;
 
     // ==================== UltiCloud 集成 ====================
@@ -163,89 +167,89 @@ public class LoginConfig extends AbstractConfigEntity {
     // ==================== 消息配置 ====================
 
     @NotEmpty
-    @ConfigEntry(path = "messages.register-prompt", comment = "注册提示（命令模式）")
+    @ConfigEntry(path = "messages.register-prompt", comment = "{login_config_comment_messages_register_prompt}")
     private String registerPrompt = SHIPPED_REGISTER_PROMPT;
 
     @NotEmpty
-    @ConfigEntry(path = "messages.register-prompt-gui", comment = "注册提示（GUI模式）")
+    @ConfigEntry(path = "messages.register-prompt-gui", comment = "{login_config_comment_messages_register_prompt_gui}")
     private String registerPromptGui = SHIPPED_REGISTER_PROMPT_GUI;
 
     @NotEmpty
-    @ConfigEntry(path = "messages.login-prompt", comment = "登录提示（命令模式）")
+    @ConfigEntry(path = "messages.login-prompt", comment = "{login_config_comment_messages_login_prompt}")
     private String loginPrompt = SHIPPED_LOGIN_PROMPT;
 
     @NotEmpty
-    @ConfigEntry(path = "messages.login-prompt-gui", comment = "登录提示（GUI模式）")
+    @ConfigEntry(path = "messages.login-prompt-gui", comment = "{login_config_comment_messages_login_prompt_gui}")
     private String loginPromptGui = SHIPPED_LOGIN_PROMPT_GUI;
 
     @NotEmpty
-    @ConfigEntry(path = "messages.register-success", comment = "注册成功")
+    @ConfigEntry(path = "messages.register-success", comment = "{login_config_comment_messages_register_success}")
     private String registerSuccess = SHIPPED_REGISTER_SUCCESS;
 
     @NotEmpty
-    @ConfigEntry(path = "messages.login-success", comment = "登录成功")
+    @ConfigEntry(path = "messages.login-success", comment = "{login_config_comment_messages_login_success}")
     private String loginSuccess = SHIPPED_LOGIN_SUCCESS;
 
     @NotEmpty
-    @ConfigEntry(path = "messages.already-logged", comment = "已经登录")
+    @ConfigEntry(path = "messages.already-logged", comment = "{login_config_comment_messages_already_logged}")
     private String alreadyLogged = SHIPPED_ALREADY_LOGGED;
 
     @NotEmpty
-    @ConfigEntry(path = "messages.not-registered", comment = "未注册")
+    @ConfigEntry(path = "messages.not-registered", comment = "{login_config_comment_messages_not_registered}")
     private String notRegistered = SHIPPED_NOT_REGISTERED;
 
     @NotEmpty
-    @ConfigEntry(path = "messages.already-registered", comment = "已注册")
+    @ConfigEntry(path = "messages.already-registered", comment = "{login_config_comment_messages_already_registered}")
     private String alreadyRegistered = SHIPPED_ALREADY_REGISTERED;
 
     @NotEmpty
-    @ConfigEntry(path = "messages.password-mismatch", comment = "密码不匹配")
+    @ConfigEntry(path = "messages.password-mismatch", comment = "{login_config_comment_messages_password_mismatch}")
     private String passwordMismatch = SHIPPED_PASSWORD_MISMATCH;
 
     @NotEmpty
-    @ConfigEntry(path = "messages.password-too-short", comment = "密码太短")
+    @ConfigEntry(path = "messages.password-too-short", comment = "{login_config_comment_messages_password_too_short}")
     private String passwordTooShort = SHIPPED_PASSWORD_TOO_SHORT;
 
     @NotEmpty
-    @ConfigEntry(path = "messages.password-too-long", comment = "密码太长")
+    @ConfigEntry(path = "messages.password-too-long", comment = "{login_config_comment_messages_password_too_long}")
     private String passwordTooLong = SHIPPED_PASSWORD_TOO_LONG;
 
     @NotEmpty
-    @ConfigEntry(path = "messages.timeout-kick", comment = "超时踢出")
+    @ConfigEntry(path = "messages.timeout-kick", comment = "{login_config_comment_messages_timeout_kick}")
     private String timeoutKick = SHIPPED_TIMEOUT_KICK;
 
     @NotEmpty
-    @ConfigEntry(path = "messages.account-locked", comment = "账户被锁定")
+    @ConfigEntry(path = "messages.account-locked", comment = "{login_config_comment_messages_account_locked}")
     private String accountLocked = SHIPPED_ACCOUNT_LOCKED;
 
     @NotEmpty
-    @ConfigEntry(path = "messages.attempts-remaining", comment = "剩余尝试次数")
+    @ConfigEntry(path = "messages.attempts-remaining", comment = "{login_config_comment_messages_attempts_remaining}")
     private String attemptsRemaining = SHIPPED_ATTEMPTS_REMAINING;
 
     @NotEmpty
-    @ConfigEntry(path = "messages.gui-password-invalid", comment = "GUI密码无效")
+    @ConfigEntry(path = "messages.gui-password-invalid", comment = "{login_config_comment_messages_gui_password_invalid}")
     private String guiPasswordInvalid = SHIPPED_GUI_PASSWORD_INVALID;
 
     // ==================== 管理员消息 ====================
 
     @NotEmpty
-    @ConfigEntry(path = "messages.admin.password-reset", comment = "管理员重置密码成功")
+    @ConfigEntry(path = "messages.admin.password-reset", comment = "{login_config_comment_messages_admin_password_reset}")
     private String adminPasswordReset = SHIPPED_ADMIN_PASSWORD_RESET;
 
     @NotEmpty
-    @ConfigEntry(path = "messages.admin.force-login", comment = "管理员强制登录")
+    @ConfigEntry(path = "messages.admin.force-login", comment = "{login_config_comment_messages_admin_force_login}")
     private String adminForceLogin = SHIPPED_ADMIN_FORCE_LOGIN;
 
     @NotEmpty
-    @ConfigEntry(path = "messages.admin.unregister", comment = "管理员删除账号")
+    @ConfigEntry(path = "messages.admin.unregister", comment = "{login_config_comment_messages_admin_unregister}")
     private String adminUnregister = SHIPPED_ADMIN_UNREGISTER;
 
     @NotEmpty
-    @ConfigEntry(path = "messages.admin.player-not-found", comment = "玩家不存在")
+    @ConfigEntry(path = "messages.admin.player-not-found", comment = "{login_config_comment_messages_admin_player_not_found}")
     private String adminPlayerNotFound = SHIPPED_ADMIN_PLAYER_NOT_FOUND;
 
     @NotEmpty
-    @ConfigEntry(path = "messages.admin.account-not-found", comment = "账号不存在")
+    @ConfigEntry(path = "messages.admin.account-not-found", comment = "{login_config_comment_messages_admin_account_not_found}")
     private String adminAccountNotFound = SHIPPED_ADMIN_ACCOUNT_NOT_FOUND;
     
     // ==================== Text defaults an earlier version shipped ====================

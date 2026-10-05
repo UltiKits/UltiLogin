@@ -99,6 +99,9 @@ class LoginServiceTest {
         // Set up Query DSL mock: dataOperator.query() returns a fluent mock Query
         // that returns itself for all chaining methods
         when(dataOperator.query()).thenReturn(mockQuery);
+        // Every account write goes through updateCounted (UltiKits/UltiLogin#47); a mock returns 0 (row gone)
+        // for it unless told otherwise, so the default is the one stored row it wrote.
+        when(dataOperator.updateCounted(any(AccountData.class))).thenReturn(1);
         when(mockQuery.where(anyString())).thenReturn(mockQuery);
         when(mockQuery.and(anyString())).thenReturn(mockQuery);
         when(mockQuery.eq(any())).thenReturn(mockQuery);
@@ -309,7 +312,7 @@ class LoginServiceTest {
 
             assertThat(result.isSuccess()).isTrue();
             assertThat(service.isLoggedIn(playerUuid)).isTrue();
-            verify(dataOperator).update(any(AccountData.class));
+            verify(dataOperator).updateCounted(any(AccountData.class));
         }
 
         @Test
@@ -448,7 +451,7 @@ class LoginServiceTest {
             assertThat(result.isSuccess()).isFalse();
             assertThat(result.getMessage()).startsWith("LOCKED ");
             assertThat(service.isLoggedIn(playerUuid)).isFalse();
-            verify(dataOperator, never()).update(any(AccountData.class));
+            verify(dataOperator, never()).updateCounted(any(AccountData.class));
         }
 
         @Test
@@ -467,7 +470,7 @@ class LoginServiceTest {
             assertThat(result.isSuccess()).isFalse();
             assertThat(result.getMessage()).startsWith("LOCKED ");
             assertThat(service.isLoggedIn(playerUuid)).isFalse();
-            verify(dataOperator, never()).update(any(AccountData.class));
+            verify(dataOperator, never()).updateCounted(any(AccountData.class));
         }
 
         /**
@@ -500,6 +503,89 @@ class LoginServiceTest {
             assertThat(service.isLocked(player)).isFalse();
             assertThat(service.login(player, "wrong4").getMessage()).isEqualTo("LOCKED 900");
             assertThat(service.isLocked(player)).isTrue();
+        }
+
+        /**
+         * UltiKits/UltiLogin#48 (supervisor decision, 2026-10-04): the failure count follows the lock target.
+         * Under {@code UUID} it is per account, so one account's lock never makes another account at the same
+         * address lock on its first wrong password; under {@code IP} it stays per address; {@code BOTH} keeps
+         * both counts and each lock follows its own count.
+         */
+        private Player otherPlayerAtTheSameAddress() {
+            return UltiLoginTestHelper.createMockPlayer("Other", UUID.randomUUID());
+        }
+
+        @Test
+        @DisplayName("UUID: one account's lock leaves another account at the same address with its full attempts (#48)")
+        void uuidCountIsPerAccount() {
+            when(config.getMaxLoginAttempts()).thenReturn(2);
+            when(config.getLockoutType()).thenReturn("UUID");
+            Player other = otherPlayerAtTheSameAddress();
+
+            service.login(player, "wrong1");
+            assertThat(service.login(player, "wrong2").getMessage()).isEqualTo("LOCKED 900");
+
+            assertThat(service.isLocked(other)).as("the other account is not locked by the first account's lock").isFalse();
+            assertThat(service.getRemainingAttempts(other)).isEqualTo(2);
+            assertThat(service.login(other, "wrong1").getMessage()).isEqualTo("REMAINING 1");
+            assertThat(service.isLocked(other)).isFalse();
+        }
+
+        @Test
+        @DisplayName("UUID: wrong passwords of two accounts at one address are counted separately (#48)")
+        void uuidAlternatingAccountsAreCountedSeparately() {
+            when(config.getMaxLoginAttempts()).thenReturn(2);
+            when(config.getLockoutType()).thenReturn("UUID");
+            Player other = otherPlayerAtTheSameAddress();
+
+            assertThat(service.login(player, "wrong1").getMessage()).isEqualTo("REMAINING 1");
+            assertThat(service.login(other, "wrong1").getMessage()).isEqualTo("REMAINING 1");
+            assertThat(service.login(player, "wrong2").getMessage()).isEqualTo("LOCKED 900");
+
+            assertThat(service.isLocked(player)).isTrue();
+            assertThat(service.isLocked(other)).isFalse();
+        }
+
+        @Test
+        @DisplayName("IP: the count and the lock stay per address, so one account's wrong passwords lock the other (#45)")
+        void ipCountIsPerAddress() {
+            when(config.getMaxLoginAttempts()).thenReturn(2);
+            when(config.getLockoutType()).thenReturn("IP");
+            Player other = otherPlayerAtTheSameAddress();
+
+            service.login(player, "wrong1");
+            assertThat(service.login(other, "wrong1").getMessage()).isEqualTo("LOCKED 900");
+
+            assertThat(service.isLocked(player)).isTrue();
+            assertThat(service.isLocked(other)).isTrue();
+        }
+
+        @Test
+        @DisplayName("BOTH: the address count locks the address, the account's own count locks the account (#48)")
+        void bothKeepsBothCounts() {
+            when(config.getMaxLoginAttempts()).thenReturn(2);
+            when(config.getLockoutType()).thenReturn("BOTH");
+            Player other = otherPlayerAtTheSameAddress();
+
+            service.login(player, "wrong1");
+            assertThat(service.login(other, "wrong1").getMessage()).isEqualTo("LOCKED 900");
+
+            assertThat(service.isLocked(player)).as("the address reached the limit").isTrue();
+            assertThat(service.isLocked(other)).isTrue();
+        }
+
+        @Test
+        @DisplayName("BOTH: remaining attempts follow the nearer lock (#48)")
+        void bothRemainingFollowsTheNearerLock() {
+            when(config.getMaxLoginAttempts()).thenReturn(3);
+            when(config.getLockoutType()).thenReturn("BOTH");
+            Player other = otherPlayerAtTheSameAddress();
+
+            service.login(player, "wrong1");
+            service.login(other, "wrong1");
+
+            assertThat(service.getRemainingAttempts(other)).as("address 2 of 3, account 1 of 3").isEqualTo(1);
+            assertThat(service.getRemainingAttempts(player)).isEqualTo(1);
         }
 
         /**
@@ -635,7 +721,7 @@ class LoginServiceTest {
             boolean result = service.changePassword(playerUuid, oldPassword, "newPass123");
 
             assertThat(result).isTrue();
-            verify(dataOperator).update(any(AccountData.class));
+            verify(dataOperator).updateCounted(any(AccountData.class));
         }
 
         @Test
@@ -702,7 +788,7 @@ class LoginServiceTest {
 
             assertThat(newPassword).isNotNull();
             assertThat(newPassword.length()).isGreaterThan(0);
-            verify(dataOperator).update(any(AccountData.class));
+            verify(dataOperator).updateCounted(any(AccountData.class));
         }
 
         @Test
@@ -715,7 +801,7 @@ class LoginServiceTest {
             boolean result = service.resetPassword(playerUuid, "newPassword123");
 
             assertThat(result).isTrue();
-            verify(dataOperator).update(any(AccountData.class));
+            verify(dataOperator).updateCounted(any(AccountData.class));
         }
 
         @Test
@@ -2486,7 +2572,7 @@ class LoginServiceTest {
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
             when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
-            doThrow(new IllegalAccessException("update failed")).when(dataOperator).update(any());
+            doThrow(unwritableEntity("update failed")).when(dataOperator).updateCounted(any());
 
             LoginService.LoginResult result = service.login(player, password);
 
@@ -2513,7 +2599,7 @@ class LoginServiceTest {
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", hash, salt);
             when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
-            doThrow(new IllegalAccessException("update failed")).when(dataOperator).update(any());
+            doThrow(unwritableEntity("update failed")).when(dataOperator).updateCounted(any());
 
             boolean result = service.changePassword(playerUuid, oldPassword, "newPass");
 
@@ -2534,7 +2620,7 @@ class LoginServiceTest {
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
             when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
-            doThrow(new IllegalAccessException("update failed")).when(dataOperator).update(any());
+            doThrow(unwritableEntity("update failed")).when(dataOperator).updateCounted(any());
 
             String result = service.resetPassword(playerUuid);
 
@@ -2548,7 +2634,7 @@ class LoginServiceTest {
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
             when(mockQuery.list())
                     .thenReturn(Collections.singletonList(account));
-            doThrow(new IllegalAccessException("update failed")).when(dataOperator).update(any());
+            doThrow(unwritableEntity("update failed")).when(dataOperator).updateCounted(any());
 
             boolean result = service.resetPassword(playerUuid, "newPass");
 
@@ -3668,7 +3754,7 @@ class LoginServiceTest {
 
             service.completePanelLogin(requestId, false);
 
-            verify(dataOperator).update(any(AccountData.class));
+            verify(dataOperator).updateCounted(any(AccountData.class));
         }
 
         @Test
@@ -3696,7 +3782,7 @@ class LoginServiceTest {
 
             AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
             when(mockQuery.list()).thenReturn(Collections.singletonList(account));
-            doThrow(new IllegalAccessException("update failed")).when(dataOperator).update(any());
+            doThrow(unwritableEntity("update failed")).when(dataOperator).updateCounted(any());
 
             // Should still return true (login succeeds, update failure is logged)
             boolean result = service.completePanelLogin(requestId, false);
@@ -3738,7 +3824,7 @@ class LoginServiceTest {
             assertThat(result).isFalse();
             assertThat(service.isLoggedIn(playerUuid)).isFalse();
             // update should NOT be called since there is no account to log in or update
-            verify(dataOperator, never()).update(any());
+            verify(dataOperator, never()).updateCounted(any());
         }
 
         @Test
@@ -4405,6 +4491,126 @@ class LoginServiceTest {
         Field field = target.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
         return field.get(target);
+    }
+
+    // ==================== writes whose stored account row no longer exists ====================
+
+    /**
+     * UltiKits/UltiLogin#47: on a database several servers share, another server's {@code /logadmin unregister}
+     * can remove the account between this module's read and its write. {@code DataOperator#updateCounted} then
+     * returns {@code 0}; every site takes the failure path a thrown write takes there: its own error line, now
+     * followed by a reason saying the stored row is gone, and its own return value.
+     */
+    @Nested
+    @DisplayName("an account write whose stored row no longer exists (UltiKits/UltiLogin#47)")
+    class StoredRowGone {
+
+        private AccountData account;
+
+        @BeforeEach
+        void rowIsGone() throws Exception {
+            when(dataOperator.updateCounted(any(AccountData.class))).thenReturn(0);
+            String salt = "testSalt";
+            account = UltiLoginTestHelper.createSampleAccount(
+                    playerUuid, "TestPlayer", hashPasswordForTest("password123", salt), salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+        }
+
+        /** The error line a site logs when its row is gone: its own line, a colon, then the shared reason. */
+        private String line(String failureKey) {
+            return zhLine(failureKey) + ": " + zhLine("log_account_row_gone");
+        }
+
+        @Test
+        @DisplayName("login still completes and logs the failed write with the reason")
+        void login() {
+            LoginService.LoginResult result = service.login(player, "password123");
+
+            assertThat(result.isSuccess()).isTrue();
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+            verify(dataOperator).updateCounted(any(AccountData.class));
+            verify(UltiLoginTestHelper.getMockLogger()).error(line("log_account_update_failed"));
+        }
+
+        @Test
+        @DisplayName("changePassword returns false and logs the failed write with the reason")
+        void changePassword() {
+            boolean result = service.changePassword(playerUuid, "password123", "newPass123");
+
+            assertThat(result).isFalse();
+            verify(UltiLoginTestHelper.getMockLogger()).error(line("log_account_update_failed"));
+        }
+
+        @Test
+        @DisplayName("a random-password reset returns null and logs the failed write with the reason")
+        void randomReset() {
+            String result = service.resetPassword(playerUuid);
+
+            assertThat(result).isNull();
+            verify(UltiLoginTestHelper.getMockLogger()).error(line("log_password_reset_failed"));
+        }
+
+        @Test
+        @DisplayName("a specific-password reset returns false and logs the failed write with the reason")
+        void specificReset() {
+            boolean result = service.resetPassword(playerUuid, "newPass123");
+
+            assertThat(result).isFalse();
+            verify(UltiLoginTestHelper.getMockLogger()).error(line("log_password_reset_failed"));
+        }
+
+        @Test
+        @DisplayName("a failed password change, random reset and specific reset leave an online, logged-in player logged in")
+        void failedPasswordWritesDoNotLogThePlayerOut() throws Exception {
+            service.login(player, "password123");
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                bukkitMock.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+                stubSchedulerToRunSynchronously(bukkitMock);
+
+                assertThat(service.changePassword(playerUuid, "password123", "newPass123")).isFalse();
+                assertThat(service.resetPassword(playerUuid)).isNull();
+                assertThat(service.resetPassword(playerUuid, "newPass123")).isFalse();
+            }
+
+            assertThat(service.isLoggedIn(playerUuid))
+                    .as("a write that did not happen must not revoke the player's login (a failed update must not log the player out)")
+                    .isTrue();
+        }
+
+        @Test
+        @DisplayName("a panel login still completes and logs the failed write with the reason")
+        void panelLogin() throws Exception {
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            @SuppressWarnings("unchecked")
+            Map<String, Long> pendingPanelTimestamps =
+                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
+            String requestId = "test-row-gone-request";
+            pendingPanelRequests.put(requestId, playerUuid);
+            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
+            Field serverField = Bukkit.class.getDeclaredField("server");
+            serverField.setAccessible(true);
+            Server server = (Server) serverField.get(null);
+            doReturn(player).when(server).getPlayer(playerUuid);
+
+            boolean result = service.completePanelLogin(requestId, false);
+
+            assertThat(result).isTrue();
+            verify(UltiLoginTestHelper.getMockLogger()).error(line("log_account_update_after_panel_failed"));
+        }
+    }
+
+    /**
+     * What {@code DataOperator#updateCounted} throws when the entity's fields cannot be read: the framework wraps the
+     * {@link IllegalAccessException} that {@code update(T)} declares in a {@code DataAccessException}.
+     */
+    private static com.ultikits.ultitools.exceptions.DataAccessException unwritableEntity(String reason) {
+        return new com.ultikits.ultitools.exceptions.DataAccessException(
+                com.ultikits.ultitools.exceptions.ErrorCode.DATA_ENTITY_INVALID,
+                "Failed to access entity fields", new IllegalAccessException(reason));
     }
 
     /** The Chinese catalogue's console line for {@code key}, or a marker naming the missing key. */

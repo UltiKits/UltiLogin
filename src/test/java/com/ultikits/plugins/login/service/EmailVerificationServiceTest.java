@@ -79,6 +79,8 @@ class EmailVerificationServiceTest {
 
         // Set up Query DSL mock
         when(dataOperator.query()).thenReturn(mockQuery);
+        // Account writes go through updateCounted (UltiKits/UltiLogin#47); one stored row written by default.
+        when(dataOperator.updateCounted(any(AccountData.class))).thenReturn(1);
         when(mockQuery.where(anyString())).thenReturn(mockQuery);
         when(mockQuery.and(anyString())).thenReturn(mockQuery);
         when(mockQuery.eq(any())).thenReturn(mockQuery);
@@ -443,7 +445,10 @@ class EmailVerificationServiceTest {
             AccountData account = UltiLoginTestHelper.createSampleAccount(
                     playerUuid, "TestPlayer", "hash", "salt");
             when(loginService.getAccount(playerUuid)).thenReturn(account);
-            doThrow(new IllegalAccessException("test")).when(dataOperator).update(any(AccountData.class));
+            doThrow(new com.ultikits.ultitools.exceptions.DataAccessException(
+                    com.ultikits.ultitools.exceptions.ErrorCode.DATA_ENTITY_INVALID,
+                    "Failed to access entity fields", new IllegalAccessException("test")))
+                    .when(dataOperator).updateCounted(any(AccountData.class));
 
             EmailVerificationService.VerifyResult result =
                     service.verifyEmailBind(player, "123456");
@@ -454,6 +459,27 @@ class EmailVerificationServiceTest {
             String expected = CatalogueText.entries("zh").getOrDefault("log_account_email_update_failed",
                     "<lang/zh has no log_account_email_update_failed>");
             verify(UltiLoginTestHelper.getMockLogger()).error(eq(expected), any(IllegalAccessException.class));
+        }
+
+        @Test
+        @DisplayName("Should still report the bind and log the failed write with the reason when the stored row is gone (UltiKits/UltiLogin#47)")
+        void storedRowGone() throws Exception {
+            addPendingBind(playerUuid, "user@example.com", "123456", System.currentTimeMillis());
+
+            AccountData account = UltiLoginTestHelper.createSampleAccount(
+                    playerUuid, "TestPlayer", "hash", "salt");
+            when(loginService.getAccount(playerUuid)).thenReturn(account);
+            when(dataOperator.updateCounted(any(AccountData.class))).thenReturn(0);
+
+            EmailVerificationService.VerifyResult result =
+                    service.verifyEmailBind(player, "123456");
+
+            // The same outcome a thrown write has at this site: success is reported, the failure is logged.
+            assertThat(result.isSuccess()).isTrue();
+            String expected = CatalogueText.entries("zh").getOrDefault("log_account_email_update_failed",
+                    "<lang/zh has no log_account_email_update_failed>") + ": "
+                    + CatalogueText.entries("zh").getOrDefault("log_account_row_gone", "<lang/zh has no log_account_row_gone>");
+            verify(UltiLoginTestHelper.getMockLogger()).error(expected);
         }
     }
 

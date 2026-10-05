@@ -127,13 +127,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `lang/en.yml` and `lang/zh.yml`. The framework reads only `lang/en.json` and `lang/zh.json`, and
   every entry in the two YAML files was a copy of an entry in the JSON file of the same language, so
-  editing them never changed anything. If you customised `lang/*.yml` on disk, move those edits to
-  `lang/*.json`.
+  editing them never changed anything. If you customised `lang/*.yml` on disk, carry those edits into a
+  custom language file, not into the official `lang/*.json`: copy the official file in the same `lang/` folder to a name that starts with its language code and a hyphen,
+  keeping the extension (for example `lang/en-myserver.json`), and set `language: en-myserver` in `plugins/UltiTools/config.yml`.
+  An edit made in an official file is undone when the file is restored, at every start and module reload,
+  and survives only in its `.bak` (UltiKits/UltiTools-Reborn#616).
 - The `email_bind_reward` and `panel_auth_success` language entries. No code ever read them, so
   removing them changes nothing players see.
 - 移除 `lang/en.yml` 与 `lang/zh.yml`。框架只读取 `lang/en.json` 与 `lang/zh.json`，两个 YAML 文件中的每一条都是同语言
-  JSON 文件中某一条的副本，因此修改它们从未产生任何效果。若你在磁盘上自定义过 `lang/*.yml`，请把这些修改移到
-  `lang/*.json`。
+  JSON 文件中某一条的副本，因此修改它们从未产生任何效果。若你在磁盘上自定义过 `lang/*.yml`，请把这些修改放进自定义语言文件，
+  而不是官方的 `lang/*.json`：在同一 `lang/` 目录中把官方文件复制为以其语言代码加连字符开头、扩展名不变的文件
+  （例如 `lang/zh-myserver.json`），并在 `plugins/UltiTools/config.yml` 中设置 `language: zh-myserver`。在官方文件中
+  做的修改会在每次启动和模块重载恢复该文件时被撤销，只保留在其 `.bak` 中（UltiKits/UltiTools-Reborn#616）。
 - 移除 `email_bind_reward` 与 `panel_auth_success` 两个语言条目。从未有代码读取它们，因此移除它们不会改变玩家看到的任何内容。
 
 - The module's own `UltiLogin 已禁用！` ("UltiLogin disabled!") console line on unload and its own
@@ -152,8 +157,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   no code read it, so editing it never changed what a player saw. The wrong-password reply that
   now exists (see `### Fixed`) takes its text from this module's language file instead — entry
   `wrong_password` in `lang/<language>.json`, beside the `config` folder — so it follows the
-  server's `language` setting and is customised there. Removing the setting does not remove the
-  ability to change the text; it moves it to the file that already held it in both languages.
+  server's `language` setting. To customise it, copy the official language file to one whose name starts
+  with its language code and a hyphen (for example `lang/en-myserver.json`), edit `wrong_password` there
+  and set `language: en-myserver` in `plugins/UltiTools/config.yml`; an edit made in the official file
+  itself is restored at the next start or module reload, the edited file kept as `.bak` (UltiKits/UltiTools-Reborn#616).
   A server upgraded from an earlier version keeps the key in its `login.yml`, because the framework
   never deletes a key from an operator's file; while it is there, the module logs one warning at
   startup and on every reload of this module (`/ul reload` or `/ul reload UltiLogin`), naming the
@@ -162,13 +169,52 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - 移除 `config/login.yml` 中的 `messages.wrong-password` 设置项。它在任何版本中都从未生效：没有任何代码读取它，
   修改它从未改变玩家看到的内容。现在新增的"密码错误"回复（见 `### Fixed`）改为从本模块的语言文件读取文本——
   `config` 文件夹旁 `lang/<语言>.json` 中的 `wrong_password` 条目——因此会跟随服务器的 `language` 设置，
-  也应在那里修改。移除该设置项并不意味着无法再修改这段文本，只是把它移到了早已以两种语言保存这段文本的文件中。
+  要自定义它，请把官方语言文件复制为以其语言代码加连字符开头的文件（例如 `lang/zh-myserver.json`），在副本中修改
+  `wrong_password`，并在 `plugins/UltiTools/config.yml` 中设置 `language: zh-myserver`；直接修改官方文件的改动会在
+  下次启动或模块重载时被恢复，修改过的文件保留为 `.bak`（UltiKits/UltiTools-Reborn#616）。
   从旧版本升级的服务器，其 `login.yml` 中仍会保留该键，因为框架从不删除运维文件中的键；只要该键还在，
   本模块会在启动时以及每次重载本模块时（`/ul reload` 或 `/ul reload UltiLogin`）记录一条警告，指出文件与键名，直接删除该键即可
   （UltiKits/UltiLogin#23）。
 
 ### Fixed
 
+- The failed-login count now follows what `security.lockout-type` locks. With `UUID` it is kept per account, so
+  one account's lock no longer leaves every other account at the same address one wrong password away from being
+  locked, and one account's wrong passwords no longer count against another's; `messages.attempts-remaining`
+  is per account too. With `IP` it stays per address (accounts behind one address share it, by design). With
+  `BOTH` both counts are kept: the address is locked when its count reaches `security.max-login-attempts` and
+  the account when its own count does, and the attempts shown are those left before the nearer lock
+  (UltiKits/UltiLogin#48, UltiKits/UltiLogin#45).
+- 失败登录次数现在按 `security.lockout-type` 所封禁的对象计数。使用 `UUID` 时按账号计数：一个账号被封禁后，同一地址上
+  的其他账号不再只差一次输错就被封禁，一个账号输错密码也不再算到另一个账号头上；`messages.attempts-remaining`
+  同样按账号。使用 `IP` 时仍按地址计数（同一地址背后的账号共用，设计如此）。使用 `BOTH` 时两种计数都保留：地址的计数达到
+  `security.max-login-attempts` 时封禁该地址，账号自己的计数达到上限时封禁该账号，显示的剩余次数为离较近一次封禁所剩的次数
+  （UltiKits/UltiLogin#48、UltiKits/UltiLogin#45）。
+- An account write whose stored row no longer exists is now reported as failed on every storage type. On a
+  database shared by several servers, another server's `/logadmin unregister` between this module's read and
+  its write used to leave the write silently lost. Each of the six writes (login, panel login, `/changepassword`,
+  an admin password reset, a recovery password reset, an email bind) now logs its own error line followed by
+  "The stored account row no longer exists, so nothing was written" and takes the result it already has for a
+  failed write: an admin or recovery reset hands out no new password and `/changepassword` does not change
+  anything, while a login, a panel login and an email bind carry on as they do for a failed write (a player
+  whose bind was lost is still told it succeeded and still receives the reward) (UltiKits/UltiLogin#47).
+- 账号记录已不存在时的写入，现在在所有存储类型上都按失败处理。多台服务器共用数据库时，另一台服务器的
+  `/logadmin unregister` 恰好发生在本模块读与写之间，过去这次写入会悄悄落空。六处写入（登录、面板登录、`/changepassword`、
+  管理员重置密码、找回密码重置、绑定邮箱）现在都会先输出该处原有的错误日志，再附上“已存储的账号记录已不存在，未写入任何内容”，
+  并沿用该处对失败写入原有的结果：管理员或找回重置不会给出新密码，`/changepassword` 不会改动任何内容；登录、面板登录和
+  绑定邮箱则和写入失败时一样继续（绑定丢失的玩家仍会被告知绑定成功并领取奖励）（UltiKits/UltiLogin#47）。
+- The comments above the keys of `config/login.yml` (42) and `config/email.yml` (8) now come from the
+  module's language files: a server set to `language: en` writes English comments on a fresh install
+  (earlier versions wrote Chinese-only comments in every language). The comments the framework wrote on
+  these keys, the Chinese ones earlier versions wrote included (the old comment above `security.lockout-type`
+  too, UltiKits/UltiLogin#51), switch to the server's language at the next start, and after you change
+  `language` and run a bare `/ul reload`; values are untouched, and a comment you wrote yourself is kept as you
+  wrote it (UltiKits/UltiTools-Reborn#611). The comment above `security.lockout-type` now also says
+  what each type counts and locks (see the failed-login count entry) (UltiKits/UltiLogin#46, UltiKits/UltiLogin#45).
+- `config/login.yml` 与 `config/email.yml` 中各配置项上方的注释（分别 42 条和 8 条）现在取自模块的语言文件：
+  `language: en` 的服务器全新安装时写入英文注释（此前所有语言下都写入纯中文注释）。框架在这些项上写下的注释（包括旧版本写下的
+  中文注释，`security.lockout-type` 上方的旧注释也在内，UltiKits/UltiLogin#51）会在下次启动时、以及你修改 `language` 并执行
+  不带参数的 `/ul reload` 后切换为服务器语言；配置值不变，你自己写的注释保持原样（UltiKits/UltiTools-Reborn#611）。`security.lockout-type` 上方的注释同时写明各类型计数和封禁的对象（见失败登录次数一条）（UltiKits/UltiLogin#46、UltiKits/UltiLogin#45）。
 - The console warning about a setting this version no longer reads names the file exactly as it is: a
   server installed under a directory whose name contains `{KEY}` or `{REASON}` used to get a path that does
   not exist, because the path was inserted before those placeholders were filled. Every placeholder of the

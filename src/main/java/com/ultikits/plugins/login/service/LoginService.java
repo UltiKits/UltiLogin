@@ -70,7 +70,18 @@ public class LoginService {
     private final Map<String, Long> sessions = new ConcurrentHashMap<>();
 
     // Failed login attempts tracking (IP -> count)
+    /**
+     * Failed logins counted per IP address. The count follows the lock target (UltiKits/UltiLogin#48): it is
+     * kept under {@code IP} and {@code BOTH}, the types that lock an address, and accounts behind one
+     * address share it.
+     */
     private final Map<String, Integer> failedAttempts = new ConcurrentHashMap<>();
+    /**
+     * Failed logins counted per account. Kept under {@code UUID} and {@code BOTH}, the types that lock an
+     * account, so one account's wrong passwords never count against another account at the same address
+     * under {@code UUID} (UltiKits/UltiLogin#48).
+     */
+    private final Map<UUID, Integer> failedAttemptsByUuid = new ConcurrentHashMap<>();
 
     // Locked IPs (IP -> unlock time)
     private final Map<String, Long> lockedIps = new ConcurrentHashMap<>();
@@ -186,6 +197,7 @@ public class LoginService {
         joinTimes.clear();
         originalLocations.clear();
         failedAttempts.clear();
+        failedAttemptsByUuid.clear();
         lockedIps.clear();
         lockedUuids.clear();
         pendingPanelRequests.clear();
@@ -253,7 +265,7 @@ public class LoginService {
                 // first wrong password after a UUID lock expired re-locked at once
                 // (UltiKits/UltiLogin#38).
                 lockedUuids.remove(uuid);
-                failedAttempts.remove(ip);
+                failedAttemptsByUuid.remove(uuid);
             }
         }
         
@@ -290,18 +302,26 @@ public class LoginService {
         }
         
         String ip = getPlayerIp(player);
-        int attempts = failedAttempts.getOrDefault(ip, 0) + 1;
-        failedAttempts.put(ip, attempts);
-        
-        if (attempts >= config.getMaxLoginAttempts()) {
-            long unlockTime = System.currentTimeMillis() + (config.getLockoutDuration() * 1000L);
-            String lockoutType = LoginConfig.lockoutTypeOrDefault(config.getLockoutType());
-            
-            if ("IP".equals(lockoutType) || "BOTH".equals(lockoutType)) {
+        UUID uuid = player.getUniqueId();
+        String lockoutType = LoginConfig.lockoutTypeOrDefault(config.getLockoutType());
+        boolean locksIp = "IP".equals(lockoutType) || "BOTH".equals(lockoutType);
+        boolean locksUuid = "UUID".equals(lockoutType) || "BOTH".equals(lockoutType);
+        long unlockTime = System.currentTimeMillis() + (config.getLockoutDuration() * 1000L);
+
+        // The count follows the lock target (UltiKits/UltiLogin#48): the address is counted and locked under
+        // IP, the account under UUID, and BOTH keeps both counts, each lock following its own.
+        if (locksIp) {
+            int attempts = failedAttempts.getOrDefault(ip, 0) + 1;
+            failedAttempts.put(ip, attempts);
+            if (attempts >= config.getMaxLoginAttempts()) {
                 lockedIps.put(ip, unlockTime);
             }
-            if ("UUID".equals(lockoutType) || "BOTH".equals(lockoutType)) {
-                lockedUuids.put(player.getUniqueId(), unlockTime);
+        }
+        if (locksUuid) {
+            int attempts = failedAttemptsByUuid.getOrDefault(uuid, 0) + 1;
+            failedAttemptsByUuid.put(uuid, attempts);
+            if (attempts >= config.getMaxLoginAttempts()) {
+                lockedUuids.put(uuid, unlockTime);
             }
         }
     }
@@ -313,8 +333,15 @@ public class LoginService {
         if (config.getMaxLoginAttempts() <= 0) {
             return -1; // Unlimited
         }
-        String ip = getPlayerIp(player);
-        int attempts = failedAttempts.getOrDefault(ip, 0);
+        String lockoutType = LoginConfig.lockoutTypeOrDefault(config.getLockoutType());
+        int attempts = 0;
+        if ("IP".equals(lockoutType) || "BOTH".equals(lockoutType)) {
+            attempts = Math.max(attempts, failedAttempts.getOrDefault(getPlayerIp(player), 0));
+        }
+        if ("UUID".equals(lockoutType) || "BOTH".equals(lockoutType)) {
+            attempts = Math.max(attempts, failedAttemptsByUuid.getOrDefault(player.getUniqueId(), 0));
+        }
+        // Under BOTH the nearer of the two locks decides how many attempts are left.
         return config.getMaxLoginAttempts() - attempts;
     }
     
@@ -322,8 +349,8 @@ public class LoginService {
      * Clear failed attempts for a player (on successful login).
      */
     private void clearFailedAttempts(Player player) {
-        String ip = getPlayerIp(player);
-        failedAttempts.remove(ip);
+        failedAttempts.remove(getPlayerIp(player));
+        failedAttemptsByUuid.remove(player.getUniqueId());
     }
     
     /**
@@ -455,11 +482,8 @@ public class LoginService {
         account.setLastLogin(System.currentTimeMillis());
         account.setLoginCount(account.getLoginCount() + 1);
         account.setFailedAttempts(0);
-        try {
-            dataOperator.update(account);
-        } catch (IllegalAccessException e) {
-            plugin.getLogger().error(i18n("log_account_update_failed"), e);
-        }
+        AccountWrites.update(dataOperator, plugin.getLogger(), account,
+                i18n("log_account_update_failed"), i18n("log_account_row_gone"));
         
         // Create session
         if (config.isSessionEnabled()) {
@@ -1032,10 +1056,8 @@ public class LoginService {
         
         account.setSalt(newSalt);
         account.setPasswordHash(newHash);
-        try {
-            dataOperator.update(account);
-        } catch (IllegalAccessException e) {
-            plugin.getLogger().error(i18n("log_password_reset_failed"), e);
+        if (!AccountWrites.update(dataOperator, plugin.getLogger(), account,
+                i18n("log_password_reset_failed"), i18n("log_account_row_gone"))) {
             return null;
         }
 
@@ -1102,10 +1124,8 @@ public class LoginService {
 
         account.setSalt(newSalt);
         account.setPasswordHash(newHash);
-        try {
-            dataOperator.update(account);
-        } catch (IllegalAccessException e) {
-            plugin.getLogger().error(i18n("log_password_reset_failed"), e);
+        if (!AccountWrites.update(dataOperator, plugin.getLogger(), account,
+                i18n("log_password_reset_failed"), i18n("log_account_row_gone"))) {
             return false;
         }
 
@@ -1210,10 +1230,8 @@ public class LoginService {
         
         account.setSalt(newSalt);
         account.setPasswordHash(newHash);
-        try {
-            dataOperator.update(account);
-        } catch (IllegalAccessException e) {
-            plugin.getLogger().error(i18n("log_account_update_failed"), e);
+        if (!AccountWrites.update(dataOperator, plugin.getLogger(), account,
+                i18n("log_account_update_failed"), i18n("log_account_row_gone"))) {
             return false;
         }
 
@@ -1774,11 +1792,8 @@ public class LoginService {
             account.setLastIp(getPlayerIp(player));
             account.setLastLogin(System.currentTimeMillis());
             account.setLoginCount(account.getLoginCount() + 1);
-            try {
-                dataOperator.update(account);
-            } catch (IllegalAccessException e) {
-                plugin.getLogger().error(i18n("log_account_update_after_panel_failed"), e);
-            }
+            AccountWrites.update(dataOperator, plugin.getLogger(), account,
+                    i18n("log_account_update_after_panel_failed"), i18n("log_account_row_gone"));
         }
 
         // Create session
