@@ -152,8 +152,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   no code read it, so editing it never changed what a player saw. The wrong-password reply that
   now exists (see `### Fixed`) takes its text from this module's language file instead — entry
   `wrong_password` in `lang/<language>.json`, beside the `config` folder — so it follows the
-  server's `language` setting and is customised there. Removing the setting does not remove the
-  ability to change the text; it moves it to the file that already held it in both languages.
+  server's `language` setting. To customise it, copy the official language file to one whose name starts
+  with its language code and a hyphen (for example `lang/en-myserver.json`), edit `wrong_password` there
+  and set `language: en-myserver` in `plugins/UltiTools/config.yml`; an edit made in the official file
+  itself is restored at the next start, the edited file kept as `.bak` (UltiKits/UltiTools-Reborn#616).
   A server upgraded from an earlier version keeps the key in its `login.yml`, because the framework
   never deletes a key from an operator's file; while it is there, the module logs one warning at
   startup and on every reload of this module (`/ul reload` or `/ul reload UltiLogin`), naming the
@@ -162,7 +164,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - 移除 `config/login.yml` 中的 `messages.wrong-password` 设置项。它在任何版本中都从未生效：没有任何代码读取它，
   修改它从未改变玩家看到的内容。现在新增的"密码错误"回复（见 `### Fixed`）改为从本模块的语言文件读取文本——
   `config` 文件夹旁 `lang/<语言>.json` 中的 `wrong_password` 条目——因此会跟随服务器的 `language` 设置，
-  也应在那里修改。移除该设置项并不意味着无法再修改这段文本，只是把它移到了早已以两种语言保存这段文本的文件中。
+  要自定义它，请把官方语言文件复制为以其语言代码加连字符开头的文件（例如 `lang/zh-myserver.json`），在副本中修改
+  `wrong_password`，并在 `plugins/UltiTools/config.yml` 中设置 `language: zh-myserver`；直接修改官方文件的改动会在
+  下次启动时被恢复，修改过的文件保留为 `.bak`（UltiKits/UltiTools-Reborn#616）。
   从旧版本升级的服务器，其 `login.yml` 中仍会保留该键，因为框架从不删除运维文件中的键；只要该键还在，
   本模块会在启动时以及每次重载本模块时（`/ul reload` 或 `/ul reload UltiLogin`）记录一条警告，指出文件与键名，直接删除该键即可
   （UltiKits/UltiLogin#23）。
@@ -199,13 +203,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (earlier versions wrote Chinese-only comments in every language). The comments the framework wrote on
   these keys, the Chinese ones earlier versions wrote included (the old comment above `security.lockout-type`
   too, UltiKits/UltiLogin#51), switch to the server's language at the next start, and after you change
-  `language` and run `/ul reload`; values are untouched, and a comment you wrote yourself is kept as you
+  `language` and run a bare `/ul reload`; values are untouched, and a comment you wrote yourself is kept as you
   wrote it (UltiKits/UltiTools-Reborn#611). The comment above `security.lockout-type` now also says
   what each type counts and locks (see the failed-login count entry) (UltiKits/UltiLogin#46, UltiKits/UltiLogin#45).
 - `config/login.yml` 与 `config/email.yml` 中各配置项上方的注释（分别 42 条和 8 条）现在取自模块的语言文件：
   `language: en` 的服务器全新安装时写入英文注释（此前所有语言下都写入纯中文注释）。框架在这些项上写下的注释（包括旧版本写下的
   中文注释，`security.lockout-type` 上方的旧注释也在内，UltiKits/UltiLogin#51）会在下次启动时、以及你修改 `language` 并执行
-  `/ul reload` 后切换为服务器语言；配置值不变，你自己写的注释保持原样（UltiKits/UltiTools-Reborn#611）。`security.lockout-type` 上方的注释同时写明各类型计数和封禁的对象（见失败登录次数一条）（UltiKits/UltiLogin#46、UltiKits/UltiLogin#45）。
+  不带参数的 `/ul reload` 后切换为服务器语言；配置值不变，你自己写的注释保持原样（UltiKits/UltiTools-Reborn#611）。`security.lockout-type` 上方的注释同时写明各类型计数和封禁的对象（见失败登录次数一条）（UltiKits/UltiLogin#46、UltiKits/UltiLogin#45）。
 - The console warning about a setting this version no longer reads names the file exactly as it is: a
   server installed under a directory whose name contains `{KEY}` or `{REASON}` used to get a path that does
   not exist, because the path was inserted before those placeholders were filled. Every placeholder of the

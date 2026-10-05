@@ -137,7 +137,7 @@
   "log_auth_poll_error": "Auth poll error: {ERROR}",
   "log_account_update_after_panel_failed": "Failed to update account after panel login",
   "removed_key_warning": "{FILE} still contains '{KEY}', which this version of UltiLogin no longer reads. {REASON} Delete the key from the file to silence this warning.",
-  "removed_key_reason_wrong_password": "Its value was never shown to players. The reply to a wrong password now comes from the 'wrong_password' entry of this module's language file (lang/<language>.json, in the same module folder as config/login.yml), so it follows the server's language setting; edit it there (UltiKits/UltiLogin#23).",
+  "removed_key_reason_wrong_password": "Its value was never shown to players. The reply to a wrong password now comes from the 'wrong_password' entry of this module's language file (lang/<language>.json, in the same module folder as config/login.yml), so it follows the server's language setting; to customise it, copy that file to one whose name starts with its language code and a hyphen (for example lang/en-myserver.json), edit 'wrong_password' there and set language: en-myserver in plugins/UltiTools/config.yml; an edit made in the official file itself is restored at the next start (UltiKits/UltiLogin#23).",
 
   "login_config_comment_login_timeout": "Login timeout in seconds; players who have not logged in by then are kicked",
   "login_config_comment_session_enabled": "Enable sessions (the same IP does not need to log in again for a short time)",
