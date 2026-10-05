@@ -127,13 +127,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `lang/en.yml` and `lang/zh.yml`. The framework reads only `lang/en.json` and `lang/zh.json`, and
   every entry in the two YAML files was a copy of an entry in the JSON file of the same language, so
-  editing them never changed anything. If you customised `lang/*.yml` on disk, move those edits to
-  `lang/*.json`.
+  editing them never changed anything. If you customised `lang/*.yml` on disk, carry those edits into a
+  custom language file, not into the official `lang/*.json`: copy the official file in the same `lang/` folder to a name that starts with its language code and a hyphen,
+  keeping the extension (for example `lang/en-myserver.json`), and set `language: en-myserver` in `plugins/UltiTools/config.yml`.
+  An edit made in an official file is undone when the file is restored, at every start and module reload,
+  and survives only in its `.bak` (UltiKits/UltiTools-Reborn#616).
 - The `email_bind_reward` and `panel_auth_success` language entries. No code ever read them, so
   removing them changes nothing players see.
 - 移除 `lang/en.yml` 与 `lang/zh.yml`。框架只读取 `lang/en.json` 与 `lang/zh.json`，两个 YAML 文件中的每一条都是同语言
-  JSON 文件中某一条的副本，因此修改它们从未产生任何效果。若你在磁盘上自定义过 `lang/*.yml`，请把这些修改移到
-  `lang/*.json`。
+  JSON 文件中某一条的副本，因此修改它们从未产生任何效果。若你在磁盘上自定义过 `lang/*.yml`，请把这些修改放进自定义语言文件，
+  而不是官方的 `lang/*.json`：在同一 `lang/` 目录中把官方文件复制为以其语言代码加连字符开头、扩展名不变的文件
+  （例如 `lang/zh-myserver.json`），并在 `plugins/UltiTools/config.yml` 中设置 `language: zh-myserver`。在官方文件中
+  做的修改会在每次启动和模块重载恢复该文件时被撤销，只保留在其 `.bak` 中（UltiKits/UltiTools-Reborn#616）。
 - 移除 `email_bind_reward` 与 `panel_auth_success` 两个语言条目。从未有代码读取它们，因此移除它们不会改变玩家看到的任何内容。
 
 - The module's own `UltiLogin 已禁用！` ("UltiLogin disabled!") console line on unload and its own
@@ -155,7 +160,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   server's `language` setting. To customise it, copy the official language file to one whose name starts
   with its language code and a hyphen (for example `lang/en-myserver.json`), edit `wrong_password` there
   and set `language: en-myserver` in `plugins/UltiTools/config.yml`; an edit made in the official file
-  itself is restored at the next start, the edited file kept as `.bak` (UltiKits/UltiTools-Reborn#616).
+  itself is restored at the next start or module reload, the edited file kept as `.bak` (UltiKits/UltiTools-Reborn#616).
   A server upgraded from an earlier version keeps the key in its `login.yml`, because the framework
   never deletes a key from an operator's file; while it is there, the module logs one warning at
   startup and on every reload of this module (`/ul reload` or `/ul reload UltiLogin`), naming the
@@ -166,7 +171,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `config` 文件夹旁 `lang/<语言>.json` 中的 `wrong_password` 条目——因此会跟随服务器的 `language` 设置，
   要自定义它，请把官方语言文件复制为以其语言代码加连字符开头的文件（例如 `lang/zh-myserver.json`），在副本中修改
   `wrong_password`，并在 `plugins/UltiTools/config.yml` 中设置 `language: zh-myserver`；直接修改官方文件的改动会在
-  下次启动时被恢复，修改过的文件保留为 `.bak`（UltiKits/UltiTools-Reborn#616）。
+  下次启动或模块重载时被恢复，修改过的文件保留为 `.bak`（UltiKits/UltiTools-Reborn#616）。
   从旧版本升级的服务器，其 `login.yml` 中仍会保留该键，因为框架从不删除运维文件中的键；只要该键还在，
   本模块会在启动时以及每次重载本模块时（`/ul reload` 或 `/ul reload UltiLogin`）记录一条警告，指出文件与键名，直接删除该键即可
   （UltiKits/UltiLogin#23）。
