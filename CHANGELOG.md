@@ -196,13 +196,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   绑定邮箱则和写入失败时一样继续（绑定丢失的玩家仍会被告知绑定成功并领取奖励）（UltiKits/UltiLogin#47）。
 - The comments above the keys of `config/login.yml` (42) and `config/email.yml` (8) now come from the
   module's language files: a server set to `language: en` writes English comments on a fresh install
-  (earlier versions wrote Chinese-only comments in every language). An existing file's comments on these
-  keys switch to the server's language at the next start; values are untouched, and a comment you wrote by
-  hand above one of these keys is replaced. The comment above `security.lockout-type` now also says
+  (earlier versions wrote Chinese-only comments in every language). The comments the framework wrote on
+  these keys, the Chinese ones earlier versions wrote included (the old comment above `security.lockout-type`
+  too, UltiKits/UltiLogin#51), switch to the server's language at the next start, and after you change
+  `language` and run `/ul reload`; values are untouched, and a comment you wrote yourself is kept as you
+  wrote it (UltiKits/UltiTools-Reborn#611). The comment above `security.lockout-type` now also says
   what each type counts and locks (see the failed-login count entry) (UltiKits/UltiLogin#46, UltiKits/UltiLogin#45).
 - `config/login.yml` 与 `config/email.yml` 中各配置项上方的注释（分别 42 条和 8 条）现在取自模块的语言文件：
-  `language: en` 的服务器全新安装时写入英文注释（此前所有语言下都写入纯中文注释）。已有文件中这些项的注释会在下次启动
-  时切换为服务器语言；配置值不变，你手写在这些配置项上方的注释会被替换。`security.lockout-type` 上方的注释同时写明各类型计数和封禁的对象（见失败登录次数一条）（UltiKits/UltiLogin#46、UltiKits/UltiLogin#45）。
+  `language: en` 的服务器全新安装时写入英文注释（此前所有语言下都写入纯中文注释）。框架在这些项上写下的注释（包括旧版本写下的
+  中文注释，`security.lockout-type` 上方的旧注释也在内，UltiKits/UltiLogin#51）会在下次启动时、以及你修改 `language` 并执行
+  `/ul reload` 后切换为服务器语言；配置值不变，你自己写的注释保持原样（UltiKits/UltiTools-Reborn#611）。`security.lockout-type` 上方的注释同时写明各类型计数和封禁的对象（见失败登录次数一条）（UltiKits/UltiLogin#46、UltiKits/UltiLogin#45）。
 - The console warning about a setting this version no longer reads names the file exactly as it is: a
   server installed under a directory whose name contains `{KEY}` or `{REASON}` used to get a path that does
   not exist, because the path was inserted before those placeholders were filled. Every placeholder of the

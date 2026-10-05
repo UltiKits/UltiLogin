@@ -91,8 +91,12 @@ public class LoginConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "security.lockout-duration", comment = "{login_config_comment_security_lockout_duration}")
     private int lockoutDuration = 900;
 
+    // previousComments: the comment every earlier version wrote here. The zh catalogue text now explains how
+    // failures are counted, so it no longer equals that comment; registering it lets the framework recognise
+    // an upgraded server's comment as its own and rewrite it in the server's language (UltiKits/UltiLogin#51).
     @NotEmpty
-    @ConfigEntry(path = "security.lockout-type", comment = "{login_config_comment_security_lockout_type}")
+    @ConfigEntry(path = "security.lockout-type", comment = "{login_config_comment_security_lockout_type}",
+            previousComments = "封禁类型：IP / UUID / BOTH")
     private String lockoutType = LOCKOUT_TYPE_DEFAULT;
 
     /** The declared default of {@code security.lockout-type}, and what an unusable value falls back to. */
