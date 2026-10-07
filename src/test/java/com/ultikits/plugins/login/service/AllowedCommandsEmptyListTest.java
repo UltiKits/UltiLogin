@@ -118,6 +118,11 @@ class AllowedCommandsEmptyListTest {
                 .contains("using the declared default [login, l, register, reg, panel, regs, recover] in memory")
                 .contains("(the file is not changed)");
 
+        assertThat(warnings).as("no 'not written' or 'never saved' line beside the framework's WARNING")
+                .noneMatch(w -> w != null && (w.contains("not written") || w.contains("never saved")));
+        assertThat(loaded.config.isModifiedSinceSnapshot())
+                .as("nothing is left unsaved, so the stop report has nothing to name").isFalse();
+
         assertThat(Files.readAllLines(loginYml.toPath(), StandardCharsets.UTF_8))
                 .as("operator-written configuration is never overwritten: the empty list is still on disk")
                 .contains("allowed-commands: []")
@@ -136,6 +141,9 @@ class AllowedCommandsEmptyListTest {
         List<String> mine = warningsNamingTheKey();
         assertThat(mine).hasSize(1);
         assertThat(mine.get(0)).contains("found null").contains("the declared default [login, l, register, reg, panel, regs, recover]");
+        assertThat(warnings).as("no 'not written' or 'never saved' line beside the framework's WARNING")
+                .noneMatch(w -> w != null && (w.contains("not written") || w.contains("never saved")));
+        assertThat(loaded.config.isModifiedSinceSnapshot()).isFalse();
         assertThat(Files.readAllLines(loginYml.toPath(), StandardCharsets.UTF_8)).contains("allowed-commands: ~");
     }
 
