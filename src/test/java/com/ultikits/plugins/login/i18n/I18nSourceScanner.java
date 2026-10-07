@@ -76,12 +76,12 @@ import java.util.stream.Stream;
 final class I18nSourceScanner {
 
     /**
-     * What both guards detect, character for character the contract of the framework's
-     * {@code .github/scripts/check-cjk-scope.sh}: the Han script (CJK Unified Ideographs, Extension A and
-     * the supplementary-plane extensions, the compatibility ideographs and the radicals), CJK Symbols and
-     * Punctuation (U+3000 through U+303F) and Halfwidth and Fullwidth Forms (U+FF00 through U+FFEF).
-     * Kana (U+3040 through U+30FF) is deliberately outside it. Widened from U+4E00 through U+9FFF in 6.3.0
-     * by the maintainer's decision of 2026-09-29 (UltiRemoteBag#44).
+     * Both guards and the framework's {@code check-cjk-scope.sh} detect the same character properties: the Han
+     * script, CJK Symbols and Punctuation (U+3000-U+303F) and Halfwidth and Fullwidth Forms (U+FF00-U+FFEF); kana
+     * (U+3040-U+30FF) is out. The Unicode version each one knows follows its toolchain -- the JDK here, PCRE2 on the
+     * CI runner -- so a character added in a newer Unicode version can be matched by one and not yet by the other.
+     * Widened from U+4E00 through U+9FFF in 6.3.0 by the maintainer's decision of 2026-09-29 (UltiRemoteBag#44);
+     * the Han script includes its extensions, the compatibility ideographs and the radicals.
      */
     static final int SYMBOLS_FIRST = 0x3000;
     static final int SYMBOLS_LAST = 0x303F;
