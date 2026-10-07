@@ -94,6 +94,9 @@ allowed-commands:           # 未登录时允许的命令
   - l
   - register
   - reg
+  - panel
+  - regs
+  - recover
 blind-effect: true          # 未登录时失明效果
 ```
 
