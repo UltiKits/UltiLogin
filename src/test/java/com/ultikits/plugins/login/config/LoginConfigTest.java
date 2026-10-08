@@ -58,10 +58,10 @@ class LoginConfigTest {
         }
 
         @Test
-        @DisplayName("Should have max 3 registrations per IP")
+        @DisplayName("Should ship the per-IP registration limit disabled (0)")
         void maxRegisterPerIp() {
             LoginConfig config = createRealConfig();
-            assertThat(config.getMaxRegisterPerIp()).isEqualTo(3);
+            assertThat(config.getMaxRegisterPerIp()).isZero();
         }
 
         @Test
