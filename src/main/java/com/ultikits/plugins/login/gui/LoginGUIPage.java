@@ -118,7 +118,8 @@ public class LoginGUIPage extends Gui {
         // admin unregistering this player while this GUI was open used to leave isLoggedIn false
         // forever, so this hook kept reopening a login GUI for an account that no longer exists,
         // fighting the register GUI the revocation prompt opened over it every 10 ticks.
-        if (loginService.isRegistered(uuid) && !loginService.isLoggedIn(uuid)) {
+        if (loginService.isRegistered(uuid) && !loginService.isLoggedIn(uuid)
+                && !loginService.hasNoGamePassword(uuid)) {
             // An admin password reset (or self-service change) landing during this delay leaves
             // isRegistered/isLoggedIn unchanged, so the state check above cannot by itself detect
             // that a credential change has already opened a fresh credential GUI in the meantime.
@@ -135,7 +136,8 @@ public class LoginGUIPage extends Gui {
                             && !loginService.isCredentialGuiTransitioning(uuid)
                             && !loginService.isCredentialGuiOpen(uuid)
                             && loginService.isRegistered(uuid)
-                            && !loginService.isLoggedIn(uuid)) {
+                            && !loginService.isLoggedIn(uuid)
+                            && !loginService.hasNoGamePassword(uuid)) {
                         new LoginGUIPage(player, plugin, loginService).open();
                     }
                 },

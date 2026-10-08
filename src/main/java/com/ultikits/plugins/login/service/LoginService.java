@@ -695,16 +695,28 @@ public class LoginService {
      * @param playerUuid the player whose pending panel request should be cancelled
      */
     private void cancelPendingPanelRequest(UUID playerUuid) {
+        dropPendingPanelRequests(playerUuid);
+        cancelActivePollingTask(playerUuid);
+        syncPanelPause(playerUuid);
+    }
+
+    /**
+     * Forget every pending {@code /panel} request of a player, with all its bookkeeping (timestamp,
+     * creating transport, reported-cancelled mark), without touching the poll or the countdown pause.
+     * A completion that arrives afterwards finds no pending request and logs nobody in.
+     *
+     * @param playerUuid the player whose pending requests are forgotten
+     */
+    private void dropPendingPanelRequests(UUID playerUuid) {
         pendingPanelRequests.entrySet().removeIf(entry -> {
             if (entry.getValue().equals(playerUuid)) {
                 pendingPanelTimestamps.remove(entry.getKey());
+                panelRequestTransports.remove(entry.getKey());
                 reportedCancelledPanelRequests.remove(entry.getKey());
                 return true;
             }
             return false;
         });
-        cancelActivePollingTask(playerUuid);
-        syncPanelPause(playerUuid);
     }
 
     /**
@@ -1013,9 +1025,17 @@ public class LoginService {
 
         // Send prompt based on mode
         if (isRegistered(uuid)) {
-            String message = config.isGuiModeEnabled() 
-                ? config.getLoginPromptGui() 
-                : config.getLoginPrompt();
+            String message;
+            if (config.isGuiModeEnabled() && hasNoGamePassword(uuid)) {
+                // GUI mode never shows the number pad to an account created on the web: no digits
+                // can match its empty password, and the pad would keep the player from typing
+                // /panel (maintainer decision 2026-10-09).
+                message = i18n("login_no_game_password");
+            } else {
+                message = config.isGuiModeEnabled()
+                    ? config.getLoginPromptGui()
+                    : config.getLoginPrompt();
+            }
             player.sendMessage(ChatColor.translateAlternateColorCodes('&', message));
         } else {
             String message = config.isGuiModeEnabled() 
@@ -1033,6 +1053,9 @@ public class LoginService {
         loggedInPlayers.remove(uuid);
         joinTimes.remove(uuid);
         originalLocations.remove(uuid);
+        // A link belongs to the connection that asked for it: a completion still in flight when the
+        // player left must not log in whoever joins next under the same name (gate-1 review F1).
+        dropPendingPanelRequests(uuid);
         cancelActivePollingTask(uuid);
         clearPanelPause(uuid);
     }
