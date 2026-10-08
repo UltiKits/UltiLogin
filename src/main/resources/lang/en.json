@@ -75,6 +75,13 @@
   "panel_auth_success_owner": "&aYou have been logged in via UltiCloud! &7(Server Owner)",
   "panel_auth_success_player": "&aYou have been logged in via UltiCloud! &7(Player)",
   "panel_error": "&cFailed to generate panel link. Please try again later.",
+  "panel_outcome_cancelled": "&eYou cancelled the web panel sign-in. The link stays valid until it expires, so you can still finish it in the browser.",
+  "panel_outcome_expired": "&cYour web panel link has expired. Run /panel again for a new one.",
+  "panel_outcome_refused": "&cThe web panel refused this sign-in.",
+  "panel_outcome_refused_identity_bound_elsewhere": "&cThe web panel refused this sign-in: this game identity is already linked to another UltiCloud account.",
+  "panel_outcome_refused_game_login_required": "&cThe web panel refused this sign-in: log in in game with /login first, then run /panel again.",
+  "panel_outcome_refused_link_not_permitted": "&cThe web panel refused this sign-in: this server cannot link a new account from the web.",
+  "panel_outcome_refused_too_many_attempts": "&cThe web panel refused this sign-in: too many wrong passwords. Run /panel again for a new link.",
 
   "email_not_enabled": "&cEmail service is not enabled! Please contact an administrator.",
   "email_bind_prompt": "&eA verification code has been sent to &f{EMAIL}&e. Use &f/regs <code> &eto complete binding.",

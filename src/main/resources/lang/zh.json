@@ -75,6 +75,13 @@
   "panel_auth_success_owner": "&a已通过UltiCloud登录！&7（服务器管理员）",
   "panel_auth_success_player": "&a已通过UltiCloud登录！&7（玩家）",
   "panel_error": "&c生成面板链接失败，请稍后再试。",
+  "panel_outcome_cancelled": "&e你已在网页上取消面板登录。链接在过期前仍然有效，你仍可在浏览器中完成登录。",
+  "panel_outcome_expired": "&c你的网页面板链接已过期，请重新执行 /panel 获取新链接。",
+  "panel_outcome_refused": "&c网页面板拒绝了此次登录。",
+  "panel_outcome_refused_identity_bound_elsewhere": "&c网页面板拒绝了此次登录：该游戏身份已绑定到另一个 UltiCloud 账号。",
+  "panel_outcome_refused_game_login_required": "&c网页面板拒绝了此次登录：请先在游戏内使用 /login 登录，再执行 /panel。",
+  "panel_outcome_refused_link_not_permitted": "&c网页面板拒绝了此次登录：此服务器无法从网页绑定新账号。",
+  "panel_outcome_refused_too_many_attempts": "&c网页面板拒绝了此次登录：密码错误次数过多，请重新执行 /panel 获取新链接。",
 
   "email_not_enabled": "&c邮件服务未启用！请联系管理员配置。",
   "email_bind_prompt": "&e已向 &f{EMAIL} &e发送验证码，请使用 &f/regs <验证码> &e完成绑定。",
