@@ -764,6 +764,79 @@ class LoginServicePanelTest {
         }
     }
 
+    // ==================== gate-1 fix round (plan 18-20): quit, invalidation, GUI mode ====================
+
+    @Nested
+    @DisplayName("quit, invalidation and GUI mode (gate-1 review of UltiKits/UltiLogin#54)")
+    class QuitInvalidationAndGuiMode {
+
+        @Test
+        @DisplayName("F1: a quit drops the player's pending links, so a completion still in flight logs nobody in")
+        void quitDropsPendingLinks() {
+            openLink();
+
+            service.onPlayerQuit(player);
+            // The poll call that was already in flight when the player left now returns 'completed'.
+            pollOnce(completed());
+
+            assertThat(service.hasPendingPanelRequest(playerUuid)).as("pending links after the quit").isFalse();
+            assertThat(service.isLoggedIn(playerUuid)).as("logged in by a link of a player who left").isFalse();
+            assertMessage("panel_auth_success_player", 0);
+        }
+
+        @Test
+        @DisplayName("control: without a quit the same in-flight completion logs the player in")
+        void completionWithoutQuitLogsIn() {
+            openLink();
+
+            pollOnce(completed());
+
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+            assertMessage("panel_auth_success_player", 1);
+        }
+
+        @Test
+        @DisplayName("F4: invalidating a player's credentials also forgets which transport created their pending link")
+        @SuppressWarnings("unchecked")
+        void invalidationForgetsTheTransport() throws Exception {
+            connectServer();
+            openLink();
+            java.lang.reflect.Field field = LoginService.class.getDeclaredField("panelRequestTransports");
+            field.setAccessible(true);
+            Map<String, ?> transports = (Map<String, ?>) field.get(service);
+            assertThat(transports).as("control: the link's transport is recorded").hasSize(1);
+
+            service.invalidateSession(playerUuid, false);
+
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+            assertThat(transports).as("transport entries left behind by the invalidation").isEmpty();
+        }
+
+        @Test
+        @DisplayName("F3: in GUI mode an account without a game password is told to use /panel, not prompted for the number pad")
+        void guiModeWebAccountIsPointedAtPanel() {
+            when(config.isGuiModeEnabled()).thenReturn(true);
+            registerWith("", "");
+
+            service.onPlayerJoin(player);
+
+            verify(player, never()).sendMessage(ChatColor.translateAlternateColorCodes('&', config.getLoginPromptGui()));
+            assertMessage("login_no_game_password", 1);
+        }
+
+        @Test
+        @DisplayName("control: in GUI mode an account with a game password still gets the number-pad prompt")
+        void guiModeAccountWithPasswordGetsPadPrompt() {
+            when(config.isGuiModeEnabled()).thenReturn(true);
+            registerWith("hash", "salt");
+
+            service.onPlayerJoin(player);
+
+            verify(player).sendMessage(ChatColor.translateAlternateColorCodes('&', config.getLoginPromptGui()));
+            assertMessage("login_no_game_password", 0);
+        }
+    }
+
     // ==================== Test 5: catalogue parity ====================
 
     private static final List<String> NEW_KEYS = Arrays.asList(
