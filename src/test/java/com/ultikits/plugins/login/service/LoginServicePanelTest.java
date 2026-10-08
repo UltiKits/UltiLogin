@@ -12,10 +12,16 @@ import com.ultikits.ultitools.interfaces.Query;
 import com.ultikits.ultitools.utils.CommonUtils;
 import com.ultikits.ultitools.utils.SimpleHttpClient;
 
+import com.ultikits.plugins.login.listener.LoginProtectionListener;
+
 import org.bukkit.ChatColor;
+import org.bukkit.Location;
 import org.bukkit.Server;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
+import org.bukkit.event.player.AsyncPlayerChatEvent;
+import org.bukkit.event.player.PlayerCommandPreprocessEvent;
+import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitScheduler;
 import org.bukkit.scheduler.BukkitTask;
@@ -33,6 +39,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
@@ -96,6 +103,9 @@ class LoginServicePanelTest {
     /** The task handed back for each captured poll, in the same order. */
     private final List<BukkitTask> pollTasks = new ArrayList<>();
 
+    /** The service's clock, in milliseconds; tests move it with {@link #advance(int)}. */
+    private final long[] now = {1_000_000_000L};
+
     @BeforeEach
     void setUp() throws Exception {
         server = UltiLoginTestHelper.bootstrapLiveServer();
@@ -115,9 +125,11 @@ class LoginServicePanelTest {
         when(mockQuery.limit(anyInt())).thenReturn(mockQuery);
 
         service = new LoginService(UltiLoginTestHelper.getMockPlugin(), config);
+        service.setClock(() -> now[0]);
 
         playerUuid = UUID.randomUUID();
         player = UltiLoginTestHelper.createMockPlayer("TestPlayer", playerUuid);
+        when(player.getLocation()).thenReturn(new Location(null, 0, 64, 0));
         doReturn(player).when(server).getPlayer(playerUuid);
         setRegistered(true);
 
@@ -198,6 +210,10 @@ class LoginServicePanelTest {
         pollScript.add(response);
         assertThat(pollRunnables).as("a poll task was scheduled for the link").isNotEmpty();
         pollRunnables.get(pollRunnables.size() - 1).run();
+    }
+
+    private void advance(int seconds) {
+        now[0] += seconds * 1000L;
     }
 
     private BukkitTask lastPollTask() {
@@ -385,6 +401,154 @@ class LoginServicePanelTest {
         }
     }
 
+    // ==================== Tests 6-10: the login timeout while a link is pending ====================
+
+    /** With login-timeout 60 s: joined 55 s before the link, so 5 s remain when the countdown pauses. */
+    @Nested
+    @DisplayName("login timeout while a link is pending")
+    class TimeoutPause {
+
+        private void joinThenOpenLinkAt55() {
+            service.onPlayerJoin(player);
+            advance(55);
+            openLink();
+        }
+
+        private void assertNotKicked() {
+            verify(player, never()).kickPlayer(anyString());
+        }
+
+        private void assertKickedOnce() {
+            verify(player, times(1)).kickPlayer(anyString());
+        }
+
+        @Test
+        @DisplayName("a pending link holds the countdown: not kicked at 70 s or 300 s; a player without one is kicked at 70 s")
+        void pendingLinkIsNeverKicked() {
+            UUID otherUuid = UUID.randomUUID();
+            Player other = UltiLoginTestHelper.createMockPlayer("Other", otherUuid);
+            when(other.getLocation()).thenReturn(new Location(null, 0, 64, 0));
+            doReturn(other).when(server).getPlayer(otherUuid);
+            service.onPlayerJoin(other);
+
+            joinThenOpenLinkAt55();
+            advance(15);
+            service.checkTimeouts();
+
+            verify(other, times(1)).kickPlayer(anyString());
+            assertNotKicked();
+
+            advance(230);
+            service.checkTimeouts();
+
+            assertNotKicked();
+            assertMessage("panel_timeout_paused", 1);
+        }
+
+        @Test
+        @DisplayName("cancelled on the web 120 s into the pause: kicked after the 5 s that remained, not at once and not after a fresh 60 s")
+        void cancelResumesWithRemainingTime() {
+            joinThenOpenLinkAt55();
+            advance(120);
+            pollOnce(status("cancelled"));
+
+            service.checkTimeouts();
+            advance(4);
+            service.checkTimeouts();
+            assertNotKicked();
+
+            advance(2);
+            service.checkTimeouts();
+
+            assertKickedOnce();
+            verify(UltiLoginTestHelper.getMockPlugin(), times(1)).i18n("panel_timeout_resumed");
+            verify(lastPollTask(), never()).cancel();
+        }
+
+        @Test
+        @DisplayName("the link expiring (5-minute cleanup) resumes with the remaining time and says so once")
+        void expiryResumesWithRemainingTime() {
+            joinThenOpenLinkAt55();
+            advance(301);
+            service.checkTimeouts();
+
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+            assertNotKicked();
+
+            advance(4);
+            service.checkTimeouts();
+            assertNotKicked();
+
+            advance(2);
+            service.checkTimeouts();
+
+            assertKickedOnce();
+            assertMessage("panel_timeout_resumed", 1);
+            assertMessage("panel_outcome_expired", 1);
+        }
+
+        @Test
+        @DisplayName("two links in sequence: paused while either holds, resumed only when neither does")
+        void pausedWhileAnyLinkHolds() {
+            joinThenOpenLinkAt55();          // link A, created at 55 s
+            advance(10);
+            openLink();                      // link B, created at 65 s; supersedes A's poll, A stays pending
+            advance(100);
+            pollOnce(refused("too_many_attempts"));   // B ends; A still holds
+
+            service.checkTimeouts();
+            advance(150);                    // 315 s after joining
+            service.checkTimeouts();
+            assertNotKicked();
+            verify(UltiLoginTestHelper.getMockPlugin(), never()).i18n("panel_timeout_resumed");
+
+            advance(41);                     // 356 s: A, created at 55 s, is past five minutes and expires
+            service.checkTimeouts();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+            assertNotKicked();
+
+            advance(6);
+            service.checkTimeouts();
+
+            assertKickedOnce();
+            verify(UltiLoginTestHelper.getMockPlugin(), times(1)).i18n("panel_timeout_resumed");
+        }
+
+        @Test
+        @DisplayName("a logged-in player's link pauses nothing and announces nothing")
+        void loggedInPlayerIsNotPaused() {
+            service.completeLogin(player);
+
+            openLink();
+
+            verify(UltiLoginTestHelper.getMockPlugin(), never()).i18n("panel_timeout_paused");
+        }
+
+        @Test
+        @DisplayName("every other unauthenticated restriction stays while the link is pending")
+        void restrictionsStayWhileLinkIsPending() {
+            joinThenOpenLinkAt55();
+            LoginProtectionListener listener = new LoginProtectionListener(UltiLoginTestHelper.getMockPlugin(), service);
+
+            org.bukkit.World world = mock(org.bukkit.World.class);
+            Location from = new Location(world, 0, 64, 0);
+            PlayerMoveEvent move = new PlayerMoveEvent(player, from, new Location(world, 3, 64, 0));
+            listener.onPlayerMove(move);
+            assertThat(move.getTo()).as("movement is held").isEqualTo(from);
+
+            AsyncPlayerChatEvent chat = new AsyncPlayerChatEvent(true, player, "hello", new HashSet<>());
+            listener.onPlayerChat(chat);
+            assertThat(chat.isCancelled()).as("chat is refused").isTrue();
+
+            doReturn(server).when(player).getServer();
+            PlayerCommandPreprocessEvent command = new PlayerCommandPreprocessEvent(player, "/spawn");
+            listener.onPlayerCommand(command);
+            assertThat(command.isCancelled()).as("a command outside allowed-commands is refused").isTrue();
+
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+        }
+    }
+
     // ==================== Test 5: catalogue parity ====================
 
     private static final List<String> NEW_KEYS = Arrays.asList(
@@ -394,7 +558,9 @@ class LoginServicePanelTest {
             "panel_outcome_refused_identity_bound_elsewhere",
             "panel_outcome_refused_game_login_required",
             "panel_outcome_refused_link_not_permitted",
-            "panel_outcome_refused_too_many_attempts");
+            "panel_outcome_refused_too_many_attempts",
+            "panel_timeout_paused",
+            "panel_timeout_resumed");
 
     private static final Pattern PLACEHOLDER = Pattern.compile("\\{[A-Za-z_]+}");
 

@@ -160,6 +160,9 @@ public class LoginService {
     // only makes sure the player is told once per request (Phase 18 magic-link contract, section 13).
     private final java.util.Set<String> reportedCancelledPanelRequests = ConcurrentHashMap.newKeySet();
 
+    // The clock the login timeout and the /panel link lifetime read (tests replace it).
+    private volatile java.util.function.LongSupplier clock = System::currentTimeMillis;
+
     /**
      * Constructor with dependency injection.
      */
@@ -189,6 +192,15 @@ public class LoginService {
      */
     void setPanelLinkTransport(PanelLinkTransport transport) {
         this.panelLinkTransport = transport;
+    }
+
+    /**
+     * Replace the clock the login timeout and the {@code /panel} link lifetime read (tests).
+     *
+     * @param clock milliseconds since the epoch
+     */
+    void setClock(java.util.function.LongSupplier clock) {
+        this.clock = clock;
     }
 
     /**
