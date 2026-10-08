@@ -58,6 +58,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
@@ -835,6 +836,30 @@ class LoginServicePanelTest {
             verify(player).sendMessage(ChatColor.translateAlternateColorCodes('&', config.getLoginPromptGui()));
             assertMessage("login_no_game_password", 0);
         }
+    }
+
+    @Test
+    @DisplayName("Codex run 1 P2: a web registration whose database write fails resumes the countdown with the time that remained")
+    void failedWebRegistrationResumesTheCountdown() {
+        connectServer();
+        setRegistered(false);
+        service.onPlayerJoin(player);
+        advance(55);
+        openLink();
+        doThrow(new RuntimeException("database unavailable")).when(dataOperator).insert(any(AccountData.class));
+
+        pollOnce(completedWith("web_registration"));
+        service.checkTimeouts();
+        advance(4);
+        service.checkTimeouts();
+        verify(player, never()).kickPlayer(anyString());
+
+        advance(2);
+        service.checkTimeouts();
+
+        assertThat(service.isLoggedIn(playerUuid)).isFalse();
+        verify(player, times(1)).kickPlayer(anyString());
+        assertMessage("panel_timeout_resumed", 1);
     }
 
     // ==================== Test 5: catalogue parity ====================
