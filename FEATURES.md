@@ -27,8 +27,8 @@ for UAT execution and issue reconciliation — the public description of these f
   from the
   `event` row documenting when each one opens.
 - **Tier**, exactly three: `player`, `admin`, `internal`. Judged from what the feature is for, not
-  from whether it carries a permission string — of this module's seven `@CmdExecutor` classes,
-  only three declare a permission node at all (`ChangePasswordCommand`: `ultilogin.changepassword`,
+  from whether it carries a permission string — of this module's eight `@CmdExecutor` classes,
+  only four declare a permission node at all (`ChangePasswordCommand`: `ultilogin.changepassword`,
   `EmailBindCommand`: `ultilogin.email`, `RecoverCommand`: `ultilogin.recover`, `LoginAdminCommand`:
   `ultilogin.admin`) and Bukkit grants every one of them to OP by default with no explicit
   `plugin.yml` permission declaration, so the string alone cannot distinguish "for every player"
@@ -43,7 +43,7 @@ for UAT execution and issue reconciliation — the public description of these f
   actual restriction, not `n/a`.
 - **Permission:** the literal node string, `none`, or `n/a`, each optionally suffixed with the
   literal text `(requireOp=true)` (preceded by one space) when the row's class-level
-  `@CmdExecutor` carries that flag — none of this module's seven `@CmdExecutor` classes sets
+  `@CmdExecutor` carries that flag — none of this module's eight `@CmdExecutor` classes sets
   `requireOp = true`, so no row below carries the suffix. `n/a` is for every Kind that is not
   `command`.
 - **Source:** `ClassName#member` — the class and member that actually reads or applies the
@@ -92,7 +92,8 @@ rather than an error:
    module's source — but the anchored form is still the one used, so the same command is
    trustworthy unmodified against every repository in the fan-out.
 
-**Positive control:** the line-start form returns `@CmdExecutor` = 7, `@CmdMapping` = 17,
+**Positive control:** the line-start form returns `@CmdExecutor` = 8, `@CmdMapping` = 19 (7 and 17
+before `/setpassword` added `SetPasswordCommand` and its two mappings),
 `@EventListener` = 2 (classes), `@EventHandler` = 27 (handler methods: 23 in
 `LoginProtectionListener`, 4 in `LoginProtectionPaperListener`; 1 class / 15 methods before
 UltiKits/UltiLogin#24, 25 before UltiKits/UltiLogin#41), `@Scheduled` = 2,
@@ -104,7 +105,7 @@ directly, not by trusting the count alone. `LoginAdminCommand`'s six `@CmdMappin
 line 111, `unregister <player>` at line 145, `info <player>` at line 169, and the bare `""` at
 line 200) are this module's standing positive control — the class with the most sub-commands
 behind one executor, the shape most likely to silently drop a row under a naive approach. This
-document's command-row count (20) diverges from the `@CmdMapping` count (17) for two explained
+document's command-row count (22) diverges from the `@CmdMapping` count (19) for two explained
 reasons, stated in the `## Email Binding` and `## Password Recovery`/`## Panel` sections below.
 
 ## Login
@@ -118,7 +119,7 @@ so both invocation styles are one row here, not two.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
-| ultilogin.login.authenticate | Authenticate a registered, currently-unauthenticated player against their stored password hash; locks the account/IP after too many wrong attempts (see `## Player Protection`'s security-lockout config rows). A wrong password is answered with `messages.account-locked` only when that attempt actually recorded a lock (the one that reaches `security.max-login-attempts` under `security.lockout-type` `IP`, `UUID` or `BOTH`); otherwise with the attempts remaining while that count is above zero, and with the language catalogue's `wrong_password` text when it is not — which is every wrong password under `security.max-login-attempts: 0` (UltiKits/UltiLogin#23). An unrecognised `lockout-type` locks by IP, the default, so its limit is answered with `messages.account-locked` like `IP` (UltiKits/UltiLogin#37) | command | `/login <password>` (alias `/l`) | none | player | player | brief | LoginCommand#login |
+| ultilogin.login.authenticate | Authenticate a registered, currently-unauthenticated player against their stored password hash; locks the account/IP after too many wrong attempts (see `## Player Protection`'s security-lockout config rows). A wrong password is answered with `messages.account-locked` only when that attempt actually recorded a lock (the one that reaches `security.max-login-attempts` under `security.lockout-type` `IP`, `UUID` or `BOTH`); otherwise with the attempts remaining while that count is above zero, and with the language catalogue's `wrong_password` text when it is not — which is every wrong password under `security.max-login-attempts: 0` (UltiKits/UltiLogin#23). An unrecognised `lockout-type` locks by IP, the default, so its limit is answered with `messages.account-locked` like `IP` (UltiKits/UltiLogin#37). An account created on the web through `/panel` has an empty password hash: `/login` refuses it before any hash comparison with `login_no_game_password`, whatever password is typed, and does not count it as a wrong password (`ultilogin.panel.web-registration`, `ultilogin.setpassword.set`) | command | `/login <password>` (alias `/l`) | none | player | player | brief | LoginCommand#login |
 | ultilogin.login.help | Print `/login` usage from the language file's `help_login`, so it follows `language` (UltiKits/UltiLogin#20) | command | bare `/login` or literal `/login help` | none | player | player | none | LoginCommand#handleHelp |
 
 ## Register
@@ -203,10 +204,31 @@ invocation is the real feature (unlike `## Login`/`## Register`/etc.), so `/pane
 literal word) reaches `#handleHelp` only through the framework's short-circuit, with no
 `@CmdMapping` site of its own — the same shape as `## Password Recovery`'s own extra row.
 
+The two `scheduled` rows below have no `@Scheduled` site behind them: the outcome poll is a timer `/panel` starts for
+each delivered link, and the pause is a condition inside the existing `@Scheduled` timeout check
+(`ultilogin.task.timeout-check`), so neither is counted in the reconciliation table's `@Scheduled` line (2). The
+`persistence` row writes the same `login_accounts` row `/register` writes and adds no `@Table`.
+
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|
 | ultilogin.panel.help | Print `/panel` usage from the language file's `help_panel`, so it follows `language` (UltiKits/UltiLogin#20) | command | literal `/panel help` | none | player | player | none | PanelCommand#handleHelp |
-| ultilogin.panel.open | Gated behind `ulticloud.enabled`; on success sends an async-generated, clickable UltiCloud magic-link URL and starts polling for authentication completion. Every stage is fenced against a credential change (admin reset/unregister, self password change) racing the async HTTP call or the poll itself, keyed on a per-player invalidation generation and, once published, the exact request id — layered fixes from the review of UltiLogin#18 | command | `/panel` | none | player | player | detailed | PanelCommand#openPanel |
+| ultilogin.panel.open | Gated behind `ulticloud.enabled`; sends a clickable UltiCloud magic-link URL for the player's own game identity on this server. The link is requested asynchronously with the server's own UltiCloud credential through the framework's `UltiCloudRequests` helper (POST `/auth/magic-link`), carrying two facts the web uses to decide what the link may do: whether the player is logged in in game (`inGameLogin`) and whether the name has an UltiLogin account (`registeredInUltiLogin`). Only when the server is not signed in to UltiCloud does it fall back to the request without a credential, which the web treats as able to sign in only to an account the identity is already linked to. A refused credential (HTTP 401/403) shows `panel_credential_refused` and logs `log_panel_credential_refused`, never retried without the credential; a failed request shows `panel_link_error` or `panel_error`. The link alone never logs the player in: the web page asks for the linked account's password, a remembered device, a confirmation by a signed-in account, or a new account, and the player is logged in in game only when the poll reports `completed` (`ultilogin.panel.outcome`). Every stage is fenced against a credential change (admin reset/unregister, self password change) racing the async HTTP call or the poll itself, keyed on a per-player invalidation generation and, once published, the exact request id — layered fixes from the review of UltiLogin#18 | command | `/panel` | none | player | player | detailed | PanelCommand#openPanel, LoginService#requestPanelLink |
+| ultilogin.panel.outcome | Every 3 seconds, for up to 5 minutes per delivered link, poll the web for that link's outcome (credentialed links by request id through `UltiCloudRequests` GET `/auth/magic-link/poll`; a link made without the credential by player UUID) and report it in game: `completed` logs the player in (`panel_auth_success_owner` / `_player` by whether the completing account owns this server; `panel_not_registered_in_game` and no login when the name has no UltiLogin account and the proof is not a web registration); `cancelled` sends `panel_outcome_cancelled` once and keeps polling, because the link stays completable; `refused` sends `panel_outcome_refused_<reason>` (`identity_bound_elsewhere`, `game_login_required`, `link_not_permitted`, `too_many_attempts`, or the generic `panel_outcome_refused`) and stops; `expired`, or the plugin's own 5-minute cleanup of the link being polled, sends `panel_outcome_expired` and stops; any other status keeps polling silently | scheduled | runs automatically every 60 ticks (3s) after `/panel` delivers a link | n/a | n/a | internal | brief | LoginService#startAuthPolling, LoginService#cleanupExpiredPanelRequests |
+| ultilogin.panel.timeout-pause | While a player who has not logged in holds a pending `/panel` link that the web has not reported cancelled, `ultilogin.task.timeout-check` does not kick them (`panel_timeout_paused`, sent once when the link is delivered); when the link is cancelled, refused or expires, the countdown resumes with exactly the seconds that were left when it paused (`panel_timeout_resumed`), never an immediate kick and never a fresh full timeout. All other restrictions on an unauthenticated player stay. A link lives at most 5 minutes, so one link holds the countdown at most that long | scheduled | a not-logged-in player's delivered `/panel` link | n/a | n/a | internal | brief | LoginService#syncPanelPause, LoginService#checkTimeouts |
+| ultilogin.panel.web-registration | A `completed` outcome with proof `web_registration` on a credentialed link, for a name with no UltiLogin account, creates the account `/register` would create but with an empty password hash and salt, logs the player in and sends `panel_web_registration_hint` once. It obeys `max-register-per-ip` when the operator sets one: over the limit nothing is created, the player sees `ip_limit_reached` and is not logged in (the web page has already reported the registration). A name that has an account by then keeps it untouched and is logged in as a linked account. `/login` against the empty hash fails closed (`ultilogin.login.authenticate`) | persistence | complete a `/panel` link with "Create new account" in the browser | n/a | n/a | player | detailed | LoginService#completePanelLogin |
+
+## Set Password
+
+`SetPasswordCommand` — class-level `@CmdExecutor(alias = {"setpassword", "setpw"}, description =
+"command_setpassword_description")` (a language key, so it follows `language`), `@CmdTarget(PLAYER)`, no permission node (like
+`/register`). Two `@CmdMapping` sites: `<newPassword> <confirm>` and the bare `""` (dispatches to `#help`, which calls
+`#handleHelp`); `/setpassword help` reaches the same `#handleHelp` through the framework's short-circuit, as in `## Login`.
+It is not in `allowed-commands`, so a player who has not logged in is answered by `ultilogin.protection.command-block`.
+
+| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
+|---|---|---|---|---|---|---|---|---|
+| ultilogin.setpassword.help | Print `/setpassword` usage from the language file's `help_setpassword`, with the same mode-dependent second line as `ultilogin.register.help` | command | bare `/setpassword` or literal `/setpassword help` | none | player | player | none | SetPasswordCommand#handleHelp |
+| ultilogin.setpassword.set | Set the first game password of an account created on the web (`ultilogin.panel.web-registration`), which has none: accepted only while the player is logged in and the stored hash is empty, after the `/register` password policy and a confirmation match (`change_password_mismatch`); then `setpassword_success` and `/login` works with it. An account that already has a password gets `setpassword_already_set` (pointing at `/changepassword`, which needs the old one) and nothing changes; a failed write gets `setpassword_failed`. The player's session is not ended | command | `/setpassword <new> <confirm>` (alias `/setpw`) | none | player | player | brief | SetPasswordCommand#setPassword, LoginService#setInitialPassword |
 
 ## Player Protection
 
