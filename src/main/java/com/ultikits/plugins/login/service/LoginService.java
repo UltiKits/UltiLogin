@@ -2075,17 +2075,29 @@ public class LoginService {
         // path that never calls invalidateSession). Refuse to grant the login rather than trust
         // that the account still exists just because a pending request for it does.
         boolean webRegistered = false;
-        if (!isRegistered(playerUuid)) {
-            if (!"web_registration".equals(proof)) {
-                syncPanelPause(playerUuid);
-                sendPanelMessage(player, i18n("panel_not_registered_in_game"));
-                return false;
+        boolean accountReady = false;
+        try {
+            if (!isRegistered(playerUuid)) {
+                if (!"web_registration".equals(proof)) {
+                    syncPanelPause(playerUuid);
+                    sendPanelMessage(player, i18n("panel_not_registered_in_game"));
+                    return false;
+                }
+                if (!createWebRegisteredAccount(player)) {
+                    syncPanelPause(playerUuid);
+                    return false;
+                }
+                webRegistered = true;
             }
-            if (!createWebRegisteredAccount(player)) {
+            accountReady = true;
+        } finally {
+            // The request is already gone and its poll stopped, so nothing else would end the pause:
+            // a database call that throws here (one failed lookup or insert) must still resume the
+            // countdown with the time that remained. A refusal above has resumed it already, and a
+            // second call changes nothing.
+            if (!accountReady) {
                 syncPanelPause(playerUuid);
-                return false;
             }
-            webRegistered = true;
         }
 
         // Complete the login
