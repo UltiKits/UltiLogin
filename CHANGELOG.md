@@ -9,6 +9,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `allowed-commands: []` (or `~`) in `config/login.yml` no longer refuses every command to a player who has not
+  logged in. The setting is declared `@NotEmpty`, and from UltiTools 6.3.0 the framework treats an empty value of such a
+  list as unusable: the module runs on the shipped list (`login, l, register, reg, panel, regs, recover`) and logs one
+  WARNING naming `allowed-commands`, the value as written and that default. The file is left exactly as you wrote it.
+  Before, `[]` was loaded as an empty list, so `/login` and `/register` were refused too; `~` ran the default list but
+  the file was rewritten. To allow fewer commands, list them; to allow more, add them (UltiKits/UltiLogin#52).
+- `config/login.yml` 中的 `allowed-commands: []`（或 `~`）不再让未登录玩家的所有命令都被拒绝。该设置声明了 `@NotEmpty`，
+  自 UltiTools 6.3.0 起框架把此类列表的空值视为不可用：模块改用出厂列表（`login, l, register, reg, panel, regs,
+  recover`），并记录一条 WARNING，写明 `allowed-commands`、你写下的值与该默认值；文件保持你写的原样。此前 `[]` 按空列表
+  加载，连 `/login` 与 `/register` 也会被拒绝；`~` 会使用默认列表，但文件会被改写。想放行更少的命令，请逐条列出；
+  想放行更多，请追加（UltiKits/UltiLogin#52）。
+
 - Message and title settings in `config/login.yml` — the three GUI titles (`gui-mode.title-login`,
   `gui-mode.title-register`, `gui-mode.title-confirm`) and the twenty-one messages (`messages.register-prompt`,
   `register-prompt-gui`, `login-prompt`, `login-prompt-gui`, `register-success`, `login-success`, `already-logged`,
