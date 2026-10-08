@@ -92,7 +92,9 @@ What the player sees in game:
 
 **`/setpassword <new> <confirm>`.** An account created on the web has no game password, and `/login` refuses it
 whatever is typed ("This account was created on the web and has no game password yet. …"); a refused try is not
-counted as a wrong password. While logged in, the player sets one with `/setpassword`, which follows the same password
+counted as a wrong password. With `gui-mode.enabled: true` such an account is not shown the number pad at all: it
+gets the same message on joining and whenever it is prompted again, so the player can type `/panel` (which is in the
+shipped `allowed-commands`). While logged in, the player sets one with `/setpassword`, which follows the same password
 rules as `/register`. Afterwards `/login` works. An account that already has a password uses `/changepassword`.
 
 **If the panel is unavailable** and such a player has no game password yet: with `session-enabled: true` they are
@@ -123,7 +125,9 @@ UltiKits 账号：在原账号的设置中解除关联，登录另一个账号�
 密码；网页取消（链接在到期前仍可完成）；网页拒绝及原因；链接过期；倒计时恢复（按暂停时剩余的时间，绝不重新计满）；服务器的
 UltiCloud 凭据被拒绝（同时写入控制台）。
 
-**`/setpassword <新密码> <确认>`。** 网页创建的账号没有游戏密码，无论输入什么 `/login` 都会拒绝，且不计为密码错误。玩家登录后用
+**`/setpassword <新密码> <确认>`。** 网页创建的账号没有游戏密码，无论输入什么 `/login` 都会拒绝，且不计为密码错误。在
+`gui-mode.enabled: true` 下，这样的账号完全不会弹出数字键盘：进入服务器和每次再次提示时都会收到同一条提示，玩家因此可以输入
+`/panel`（它在出厂的 `allowed-commands` 中）。玩家登录后用
 `/setpassword` 设置游戏密码，规则与 `/register` 相同，之后即可用 `/login` 登录。已有密码的账号请使用 `/changepassword`。
 
 **面板不可用时**，若这样的玩家还没有游戏密码：在 `session-enabled: true` 下，于 `session-timeout` 内从同一 IP 重进会自动登录；
@@ -142,12 +146,21 @@ UltiCloud 凭据被拒绝（同时写入控制台）。
   password) and the web completion simply logs them in.
 - **A per-IP registration limit also applies to web registrations** (see below): over the limit the web page reports
   the registration, but the game refuses the account and does not log the player in.
+- **A session auto-login counts as "logged in in game" for `/panel`.** With `session-enabled: true` (the default), a
+  player who rejoins from the same IP within `session-timeout` is logged in without a password, and may then link the
+  name to an UltiKits account on the web. On an offline-mode server where players share a public IP, someone else
+  joining under a name that is not linked yet, from that IP, within that window, could link it to their own account.
+  On such a server turn sessions off (`session-enabled: false`) or link your name early.
 
 - **待处理的链接最多按其有效期暂停登录倒计时。** 未登录的玩家可以再次执行 `/panel` 让倒计时继续暂停，每个链接五分钟；暂停期间仍
   不能移动、聊天或执行未放行的命令。
 - **网页注册尚未完成时在游戏内注册，会保留游戏内账号。** 若玩家在网页注册完成前执行了 `/register`，游戏内注册的账号（及其游戏密码）
   保持不变，网页完成后只会让其登录。
 - **同一 IP 注册数限制同样适用于网页注册**（见下文）：超出限制时网页显示注册成功，但游戏拒绝创建账号且不会让玩家登录。
+- **会话自动登录在 `/panel` 中视为"已在游戏内登录"。** 在 `session-enabled: true`（默认）下，于 `session-timeout` 内从同一 IP
+  重进的玩家无需密码即被登录，随后可在网页上把该名字关联到 UltiKits 账号。在玩家共用公网 IP 的离线模式服务器上，他人若在这段
+  时间内从该 IP 以尚未关联的名字进入，就可能把它关联到自己的账号。此类服务器请关闭会话（`session-enabled: false`），或尽早关联
+  自己的名字。
 
 ## 配置文件
 

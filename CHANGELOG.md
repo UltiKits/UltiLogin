@@ -21,17 +21,23 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   password, logs them in and tells them once to set one with `/setpassword`. `/login` refuses such an account, whatever
   is typed, until a game password is set, and the refused try is not counted as a wrong password. If the player
   registers in game first, that account is kept untouched. A `max-register-per-ip` limit, when set, applies to it too.
+  With `gui-mode.enabled: true` such an account is never shown the number pad, which no digits could satisfy: on
+  joining and at every re-prompt the player is told to log in with `/panel` and then set a game password.
 - 网页注册视同 UltiLogin 注册。名字在本服务器上没有 UltiLogin 账号的玩家在 `/panel` 页面上新建 UltiKits 账号后，游戏会为其创建
   一个没有游戏密码的 UltiLogin 账号、让其登录，并提示一次用 `/setpassword` 设置游戏密码。在设置游戏密码之前，无论输入什么
   `/login` 都会拒绝该账号，且不计为密码错误。若玩家先在游戏内注册，则保留该账号不变。设置了 `max-register-per-ip` 时同样适用。
+  在 `gui-mode.enabled: true` 下，这样的账号不会弹出任何数字都无法通过的数字键盘：进入服务器及每次再次提示时，玩家都会被告知
+  用 `/panel` 登录，然后设置游戏密码。
 
 - Every web outcome of a `/panel` link is shown in game: cancelled on the page, refused by the web (with the reason),
   expired, signed in, or the server's UltiCloud credential refused (also logged to the console). While a player who
   has not logged in holds a pending link, the login countdown is paused; it resumes with the time that was left when
-  the link is cancelled, refused or expires, never with a fresh full timeout. The other restrictions stay.
+  the link is cancelled, refused or expires, never with a fresh full timeout. The other restrictions stay. A player who
+  leaves the server loses their pending links, so a sign-in completed on the web after they left logs nobody in.
 - `/panel` 链接在网页上的每种结果都会在游戏内显示：网页取消、网页拒绝（附原因）、链接过期、登录成功，或服务器的 UltiCloud 凭据被
   拒绝（同时写入控制台）。未登录的玩家持有待处理链接期间，登录倒计时暂停；链接被取消、拒绝或过期后，按暂停时剩余的时间继续，
-  绝不重新计满。其他限制保持不变。
+  绝不重新计满。其他限制保持不变。玩家离开服务器后其待处理链接作废，
+  此后在网页上完成的登录不会让任何人登录。
 
 ### Changed
 
