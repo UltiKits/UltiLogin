@@ -9,6 +9,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `max-register-per-ip` in `config/login.yml` now ships as `0` (no per-IP registration limit) instead of `3`. Many
+  players can share one public IP address (carrier-grade NAT, common in mainland China and on mobile and campus
+  networks), so a limit can stop legitimate players from registering; the comment above the key now says so. Only a
+  file without the key gets the new default: a value already in your file, including `3`, is kept, and only the comment
+  earlier versions wrote above it is replaced. When you set a limit, it also applies to an account created on the web
+  through `/panel`: the web page reports the registration, but the game refuses the account and the player sees the
+  IP-limit message.
+- `config/login.yml` 中的 `max-register-per-ip` 出厂值由 `3` 改为 `0`（不限制同一 IP 的注册数）。许多玩家可能共用同一个公网
+  IP（运营商级 NAT，在中国大陆以及移动网络、校园网中很常见），限制可能导致正常玩家无法注册；该键上方的注释现已写明这一点。
+  只有缺少该键的文件才写入新默认值：文件中已有的值（包括 `3`）保持不变，只替换旧版本写在其上方的注释。设置限制后，它同样
+  适用于通过 `/panel` 在网页上创建的账号：网页会显示注册成功，但游戏内拒绝创建账号，玩家会看到 IP 上限提示。
+
 - `allowed-commands: []` (or `~`) in `config/login.yml` no longer refuses every command to a player who has not
   logged in. The setting is declared `@NotEmpty`, and from UltiTools 6.3.0 the framework treats an empty value of such a
   list as unusable: the module runs on the shipped list (`login, l, register, reg, panel, regs, recover`) and logs one

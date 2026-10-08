@@ -162,7 +162,7 @@
   "login_config_comment_login_timeout": "Login timeout in seconds; players who have not logged in by then are kicked",
   "login_config_comment_session_enabled": "Enable sessions (the same IP does not need to log in again for a short time)",
   "login_config_comment_session_timeout": "Session expiry in minutes",
-  "login_config_comment_max_register_per_ip": "Maximum accounts that can be registered from one IP (0 = unlimited)",
+  "login_config_comment_max_register_per_ip": "Maximum accounts that can be registered from one IP (0 = unlimited, the default). Many players can share one public IP (carrier-grade NAT, common in mainland China and on mobile and campus networks), so a limit above 0 can stop legitimate players from registering. When set, it also applies to accounts created on the web through /panel",
   "login_config_comment_gui_mode_enabled": "Enable the GUI login mode (number-pad interface)",
   "login_config_comment_gui_mode_password_length": "Password length in GUI mode (1-9 digits, 4-6 recommended)",
   "login_config_comment_gui_mode_title_login": "Title of the GUI login screen",

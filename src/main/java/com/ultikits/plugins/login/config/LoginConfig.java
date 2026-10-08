@@ -46,9 +46,15 @@ public class LoginConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "session-timeout", comment = "{login_config_comment_session_timeout}")
     private int sessionTimeout = 30;
 
+    // Shipped disabled (0): many players can share one public IP address (carrier-grade NAT, notably in
+    // mainland China), so a limit can stop legitimate players from registering (maintainer decision
+    // 2026-10-09). The default reaches only a file without this key; an existing value is never rewritten.
+    // previousComments: the comment earlier versions wrote here, so an upgraded file gets the warning.
     @Range(min = 0, max = 100)
-    @ConfigEntry(path = "max-register-per-ip", comment = "{login_config_comment_max_register_per_ip}")
-    private int maxRegisterPerIp = 3;
+    @ConfigEntry(path = "max-register-per-ip", comment = "{login_config_comment_max_register_per_ip}",
+            previousComments = {"Maximum accounts that can be registered from one IP (0 = unlimited)",
+                    "同一IP最大注册账户数（0为不限制）"})
+    private int maxRegisterPerIp = 0;
     
     // ==================== GUI 模式设置 ====================
 

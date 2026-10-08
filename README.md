@@ -59,7 +59,7 @@ UltiLogin 是 UltiTools 插件系统的登录验证模块，为 Minecraft 服务
 login-timeout: 60           # 登录超时时间（秒）
 session-enabled: true       # 启用会话功能
 session-timeout: 30         # 会话过期时间（分钟）
-max-register-per-ip: 3      # 同一IP最大注册数（0为不限制）
+max-register-per-ip: 0      # 同一IP最大注册数（0为不限制，默认关闭；见下方说明）
 
 # ==================== GUI 模式设置 ====================
 gui-mode:
@@ -99,6 +99,25 @@ allowed-commands:           # 未登录时允许的命令
   - recover
 blind-effect: true          # 未登录时失明效果
 ```
+
+### Per-IP registration limit / 同一 IP 注册数限制
+
+`max-register-per-ip` ships as `0`, which means no limit. Many players can share one public IP address
+(carrier-grade NAT, common in mainland China and on mobile and campus networks), so a limit above `0` can stop
+legitimate players from registering. Turn it on only if you know your players do not share addresses. Upgrading
+does not change a value already in your `login.yml`: a server that has `max-register-per-ip: 3` keeps `3`; only a
+file without the key gets `0`.
+
+When the limit is on, it also applies to an account created on the web through `/panel`. The web page then reports
+the registration, but the game refuses to create the account: the player sees "This IP has reached the maximum
+registration limit!" and is not logged in.
+
+`max-register-per-ip` 默认为 `0`，即不限制。许多玩家可能共用同一个公网 IP（运营商级 NAT，在中国大陆以及移动网络、校园网中很常见），
+设为大于 `0` 的值可能导致正常玩家无法注册；只有确认玩家不共用地址时才建议开启。升级不会改动你 `login.yml` 中已有的值：
+已写为 `max-register-per-ip: 3` 的服务器保持 `3`，只有缺少该键的文件才写入 `0`。
+
+开启限制后，它同样适用于通过 `/panel` 在网页上创建的账号：网页会显示注册成功，但游戏内会拒绝创建账号，
+玩家看到“该IP已达到最大注册数量！”且不会被登录。
 
 ## 权限节点
 
