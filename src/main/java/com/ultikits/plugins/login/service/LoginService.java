@@ -156,6 +156,9 @@ public class LoginService {
 
     private final Gson gson = new Gson();
 
+    // The /panel HTTP seam (see PanelLinkTransport).
+    private volatile PanelLinkTransport panelLinkTransport;
+
     /**
      * Constructor with dependency injection.
      */
@@ -175,6 +178,16 @@ public class LoginService {
      */
     public String i18n(String key) {
         return plugin.i18n(key);
+    }
+
+    /**
+     * Replace the transport {@code /panel} uses to reach the Worker (tests, and the credentialed
+     * transport that replaces the anonymous one).
+     *
+     * @param transport the transport to use from now on
+     */
+    void setPanelLinkTransport(PanelLinkTransport transport) {
+        this.panelLinkTransport = transport;
     }
 
     /**
