@@ -328,6 +328,21 @@ class HelperPanelLinkTransportTest {
             http.verify(() -> SimpleHttpClient.get(anyString()), never());
         }
 
+        @ParameterizedTest(name = "HTTP {0}")
+        @ValueSource(ints = {429, 500, 503})
+        @DisplayName("429 or 5xx from create is a plain failure and is not retried anonymously")
+        void rateLimitOrServerErrorIsNotRetried(int statusCode) {
+            createScript.add(result(UltiCloudRequests.Outcome.OK, statusCode,
+                    "{\"code\":\"" + statusCode + "\",\"msg\":\"busy\"}"));
+
+            runPanelCommand();
+
+            verify(player).sendMessage(text("panel_error"));
+            assertThat(service.hasPendingPanelRequest(playerUuid)).as("the request was cancelled").isFalse();
+            assertThat(pollRunnables).as("no poll was started").isEmpty();
+            http.verify(() -> SimpleHttpClient.post(anyString(), anyMap(), anyString()), never());
+        }
+
         @ParameterizedTest(name = "{0}")
         @EnumSource(value = UltiCloudRequests.Outcome.class, names = {"IO_ERROR", "PATH_NOT_ALLOWED"})
         @DisplayName("IO_ERROR or PATH_NOT_ALLOWED on create says 'link error', cancels the request, never retries anonymously")

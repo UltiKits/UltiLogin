@@ -39,6 +39,17 @@ interface PanelLinkTransport {
     SimpleHttpClient.Response poll(String requestId, UUID playerUuid);
 
     /**
+     * Whether a link this transport created carries the server owner's UltiCloud credential, so the
+     * Worker honoured the facts {@code /panel} reported and a {@code proof} in its poll is trusted
+     * (Phase 18 magic-link contract, sections 2 and 14). The anonymous transport never is.
+     *
+     * @return {@code true} only for the transport that goes through the framework's credential
+     */
+    default boolean credentialed() {
+        return false;
+    }
+
+    /**
      * The UltiCloud API address ({@code api-url} in the framework's environment) cannot be read, so no
      * request was sent.
      */
@@ -47,6 +58,50 @@ interface PanelLinkTransport {
 
         NotConfiguredException(Throwable cause) {
             super("API URL not configured", cause);
+        }
+    }
+
+    /**
+     * The server is not logged in to UltiCloud, so the credentialed transport made no request. This is
+     * the only signal on which {@code /panel} falls back to the anonymous request (contract section 13).
+     */
+    final class NotConnectedException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        NotConnectedException() {
+            super("Server not logged in to UltiCloud");
+        }
+    }
+
+    /**
+     * The Worker answered the credentialed create with 401 or 403: the server's credential is invalid
+     * or does not own this server. Never retried anonymously, so a broken credential surfaces instead
+     * of hiding behind the old-plugin track (contract sections 2 and 13).
+     */
+    final class CredentialRefusedException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        private final int status;
+
+        CredentialRefusedException(int status) {
+            super("Server credential refused (HTTP " + status + ")");
+            this.status = status;
+        }
+
+        int getStatus() {
+            return status;
+        }
+    }
+
+    /**
+     * The credentialed transport could not complete the exchange (the helper reported an I/O error or
+     * refused the path). Shown as a failure and never retried anonymously (contract section 13).
+     */
+    final class LinkFailedException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        LinkFailedException(String reason) {
+            super("Panel link request failed: " + reason);
         }
     }
 

@@ -84,6 +84,8 @@
   "panel_outcome_refused_too_many_attempts": "&c网页面板拒绝了此次登录：密码错误次数过多，请重新执行 /panel 获取新链接。",
   "panel_timeout_paused": "&7网页面板链接有效期间，登录倒计时已暂停。登录前你仍然无法移动或聊天。",
   "panel_timeout_resumed": "&e登录倒计时已恢复，请在倒计时结束前登录。",
+  "panel_credential_refused": "&cUltiCloud 拒绝了本服务器的凭据，未生成面板链接。请服主在控制台运行 'ulticloud login' 重新登录。",
+  "panel_link_error": "&c无法连接 UltiCloud 生成面板链接，请稍后再试。",
 
   "email_not_enabled": "&c邮件服务未启用！请联系管理员配置。",
   "email_bind_prompt": "&e已向 &f{EMAIL} &e发送验证码，请使用 &f/regs <验证码> &e完成绑定。",
@@ -143,6 +145,7 @@
   "log_password_reset_failed": "重置密码失败",
   "log_panel_link_failed": "请求面板链接失败：{ERROR}",
   "log_auth_polling_no_api": "无法开始登录轮询：未配置 API 地址",
+  "log_panel_credential_refused": "/panel 创建链接时 UltiCloud 拒绝了本服务器的凭据（HTTP {STATUS}）；未生成链接，也未改用无凭据请求。请在控制台运行 'ulticloud login' 重新登录本服务器。",
   "log_auth_poll_error": "登录轮询出错：{ERROR}",
   "log_account_update_after_panel_failed": "面板登录后更新账号失败",
   "removed_key_warning": "{FILE} 仍包含 '{KEY}'，此版本的 UltiLogin 已不再读取它。{REASON} 从文件中删除该键即可消除此警告。",

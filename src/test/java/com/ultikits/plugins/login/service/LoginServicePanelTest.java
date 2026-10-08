@@ -11,6 +11,7 @@ import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.Query;
 import com.ultikits.ultitools.utils.CommonUtils;
 import com.ultikits.ultitools.utils.SimpleHttpClient;
+import com.ultikits.ultitools.utils.UltiCloudRequests;
 
 import com.ultikits.plugins.login.listener.LoginProtectionListener;
 
@@ -93,6 +94,7 @@ class LoginServicePanelTest {
     private MockedStatic<UltiTools> ultiTools;
     private MockedStatic<CommonUtils> commonUtils;
     private MockedStatic<SimpleHttpClient> http;
+    private MockedStatic<UltiCloudRequests> cloud;
 
     /** Bodies the create requests carried, in order. */
     private final List<JsonObject> createdBodies = new ArrayList<>();
@@ -162,10 +164,19 @@ class LoginServicePanelTest {
             String next = pollScript.poll();
             return new SimpleHttpClient.Response(200, next != null ? next : status("pending"));
         });
+        // The server is not logged in to UltiCloud unless a test says otherwise, so /panel falls back
+        // to the anonymous request above (HelperPanelLinkTransportTest covers the credentialed one).
+        cloud = mockStatic(UltiCloudRequests.class);
+        UltiCloudRequests.Result notConnected = mock(UltiCloudRequests.Result.class);
+        when(notConnected.getOutcome()).thenReturn(UltiCloudRequests.Outcome.NOT_CONNECTED);
+        when(notConnected.getStatusCode()).thenReturn(-1);
+        cloud.when(() -> UltiCloudRequests.post(anyString(), anyString())).thenReturn(notConnected);
+        cloud.when(() -> UltiCloudRequests.get(anyString(), anyMap())).thenReturn(notConnected);
     }
 
     @AfterEach
     void tearDown() throws Exception {
+        cloud.close();
         http.close();
         commonUtils.close();
         ultiTools.close();

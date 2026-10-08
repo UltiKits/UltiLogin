@@ -98,11 +98,29 @@ public class PanelCommand extends BaseCommandExecutor {
                     loginService.startAuthPolling(player.getUniqueId().toString(), player,
                             result.getRequestId());
                 } else {
-                    player.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                        plugin.i18n("panel_error")));
+                    player.sendMessage(ChatColor.translateAlternateColorCodes('&', failureMessage(result)));
                 }
             });
         });
+    }
+
+    /**
+     * The text for a link that was not delivered: a refused server credential and a failed UltiCloud
+     * request each have their own message (Phase 18 magic-link contract, section 13); everything else,
+     * including a result discarded as stale, is the generic failure.
+     */
+    private String failureMessage(LoginService.PanelLinkResult result) {
+        if (!result.isSuccess() && result.getFailure() != null) {
+            switch (result.getFailure()) {
+                case CREDENTIAL_REFUSED:
+                    return plugin.i18n("panel_credential_refused");
+                case LINK_ERROR:
+                    return plugin.i18n("panel_link_error");
+                default:
+                    break;
+            }
+        }
+        return plugin.i18n("panel_error");
     }
 
     @Override

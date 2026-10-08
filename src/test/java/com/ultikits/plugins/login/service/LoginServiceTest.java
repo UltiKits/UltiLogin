@@ -124,6 +124,10 @@ class LoginServiceTest {
         when(mockQuery.delete()).thenReturn(0);
 
         service = new LoginService(UltiLoginTestHelper.getMockPlugin(), config);
+        // The /panel tests in this class pin the anonymous request (SimpleHttpClient, statically
+        // mocked per test). The credentialed transport through the framework helper, and the choice
+        // between the two, are covered by HelperPanelLinkTransportTest.
+        service.setPanelLinkTransport(new PanelLinkTransport.Anonymous());
 
         playerUuid = UUID.randomUUID();
         player = UltiLoginTestHelper.createMockPlayer("TestPlayer", playerUuid);

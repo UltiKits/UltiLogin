@@ -151,9 +151,17 @@ public class LoginService {
     // every 10 ticks indefinitely.
     private final Map<UUID, BukkitTask> pendingCredentialGuiReopenTasks = new ConcurrentHashMap<>();
 
-    // The /panel HTTP seam (see PanelLinkTransport). The anonymous transport is the request /panel
-    // has always made.
-    private volatile PanelLinkTransport panelLinkTransport = new PanelLinkTransport.Anonymous();
+    // The /panel HTTP seam (see PanelLinkTransport). /panel creates its link with the server's own
+    // UltiCloud credential through the framework helper; only when the server is not logged in to
+    // UltiCloud does it fall back to the anonymous request it has always made (Phase 18 magic-link
+    // contract, section 13).
+    private volatile PanelLinkTransport panelLinkTransport = new HelperPanelLinkTransport();
+    private final PanelLinkTransport anonymousPanelLinkTransport = new PanelLinkTransport.Anonymous();
+
+    // The transport that created each pending request (requestId -> transport). A link is polled with
+    // the transport that created it: a credentialed link through the helper's requestId poll, an
+    // anonymous one through the legacy playerUuid poll -- never switched in the middle.
+    private final Map<String, PanelLinkTransport> panelRequestTransports = new ConcurrentHashMap<>();
 
     // Pending panel requests whose link the web has reported cancelled (requestId). A cancelled link
     // stays completable until it expires, so the request stays pending and its poll goes on; this set
@@ -238,6 +246,7 @@ public class LoginService {
         lockedUuids.clear();
         pendingPanelRequests.clear();
         pendingPanelTimestamps.clear();
+        panelRequestTransports.clear();
         reportedCancelledPanelRequests.clear();
         panelPausedAt.clear();
         panelPauseAnnounced.clear();
@@ -1536,7 +1545,19 @@ public class LoginService {
             body.addProperty("inGameLogin", isLoggedIn(playerUuidRaw));
             body.addProperty("registeredInUltiLogin", isRegistered(playerUuidRaw));
 
-            SimpleHttpClient.Response response = panelLinkTransport.create(body);
+            // Credentialed first; the anonymous request only when the server is not logged in to
+            // UltiCloud. A refused credential or a failed helper call is never retried anonymously.
+            PanelLinkTransport transport = panelLinkTransport;
+            SimpleHttpClient.Response response;
+            try {
+                response = transport.create(body);
+            } catch (PanelLinkTransport.NotConnectedException e) {
+                transport = anonymousPanelLinkTransport;
+                response = transport.create(body);
+            }
+            // Every branch below that does not publish the link removes this entry again
+            // (cleanupPanelRequest).
+            panelRequestTransports.put(requestId, transport);
 
             if (response.isOk()) {
                 JsonObject responseBody = JsonParser.parseString(response.getBody()).getAsJsonObject();
@@ -1582,6 +1603,17 @@ public class LoginService {
         } catch (PanelLinkTransport.NotConfiguredException e) {
             cleanupPanelRequest(requestId);
             return new PanelLinkResult(false, null, "API URL not configured");
+        } catch (PanelLinkTransport.CredentialRefusedException e) {
+            cleanupPanelRequest(requestId);
+            plugin.getLogger().warn(i18n("log_panel_credential_refused")
+                    .replace("{STATUS}", String.valueOf(e.getStatus())));
+            return new PanelLinkResult(false, null, "Server credential refused", null,
+                    PanelLinkResult.Failure.CREDENTIAL_REFUSED);
+        } catch (PanelLinkTransport.LinkFailedException e) {
+            cleanupPanelRequest(requestId);
+            plugin.getLogger().warn(i18n("log_panel_link_failed").replace("{ERROR}", String.valueOf(e.getMessage())));
+            return new PanelLinkResult(false, null, "Request failed: " + e.getMessage(), null,
+                    PanelLinkResult.Failure.LINK_ERROR);
         } catch (Exception e) {
             cleanupPanelRequest(requestId);
             plugin.getLogger().warn(i18n("log_panel_link_failed").replace("{ERROR}", String.valueOf(e.getMessage())));
@@ -1676,7 +1708,8 @@ public class LoginService {
             }
 
             try {
-                SimpleHttpClient.Response response = panelLinkTransport.poll(requestId, uuid);
+                SimpleHttpClient.Response response = panelRequestTransports
+                        .getOrDefault(requestId, panelLinkTransport).poll(requestId, uuid);
                 if (!response.isOk()) {
                     return;
                 }
@@ -1983,6 +2016,7 @@ public class LoginService {
      */
     private UUID removePanelRequest(String requestId) {
         pendingPanelTimestamps.remove(requestId);
+        panelRequestTransports.remove(requestId);
         reportedCancelledPanelRequests.remove(requestId);
         return pendingPanelRequests.remove(requestId);
     }
@@ -2092,6 +2126,21 @@ public class LoginService {
         private final String url;
         private final String error;
         private final String requestId;
+        private final Failure failure;
+
+        /**
+         * Why a link was not published, so {@code /panel} can tell the player the right thing.
+         */
+        public enum Failure {
+            /** The link was published. */
+            NONE,
+            /** Any failure without a message of its own. */
+            GENERIC,
+            /** The Worker refused the server's UltiCloud credential (401 or 403); not retried anonymously. */
+            CREDENTIAL_REFUSED,
+            /** The framework helper could not complete the request; not retried anonymously. */
+            LINK_ERROR
+        }
 
         public PanelLinkResult(boolean success, String url, String error) {
             this(success, url, error, null);
@@ -2107,10 +2156,18 @@ public class LoginService {
          *                  result, since there is nothing to poll for.
          */
         public PanelLinkResult(boolean success, String url, String error, String requestId) {
+            this(success, url, error, requestId, success ? Failure.NONE : Failure.GENERIC);
+        }
+
+        /**
+         * @param failure why the link was not published ({@link Failure#NONE} for a published link)
+         */
+        public PanelLinkResult(boolean success, String url, String error, String requestId, Failure failure) {
             this.success = success;
             this.url = url;
             this.error = error;
             this.requestId = requestId;
+            this.failure = failure;
         }
 
         public boolean isSuccess() {
@@ -2127,6 +2184,10 @@ public class LoginService {
 
         public String getRequestId() {
             return requestId;
+        }
+
+        public Failure getFailure() {
+            return failure;
         }
     }
 
