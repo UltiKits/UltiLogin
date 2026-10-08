@@ -123,6 +123,7 @@
   "command_regs_description": "Bind an email address",
   "command_recover_description": "Recover your password",
   "command_panel_description": "Open the UltiCloud web panel",
+  "command_setpassword_description": "Set a game password for an account created on the web",
   "gui_login_confirm_button": "Confirm Login",
   "gui_login_confirm_lore": "Click to confirm login",
   "gui_clear_lore": "Click to clear the entered password",

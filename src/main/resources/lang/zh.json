@@ -123,6 +123,7 @@
   "command_regs_description": "绑定邮箱",
   "command_recover_description": "找回密码",
   "command_panel_description": "打开 UltiCloud 网页面板",
+  "command_setpassword_description": "为网页创建的账号设置游戏密码",
   "gui_login_confirm_button": "确认登录",
   "gui_login_confirm_lore": "点击确认登录",
   "gui_clear_lore": "点击清空已输入的密码",

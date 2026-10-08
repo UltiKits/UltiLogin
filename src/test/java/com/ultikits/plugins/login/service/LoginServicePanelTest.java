@@ -33,6 +33,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 
 import java.util.ArrayDeque;
@@ -560,6 +561,209 @@ class LoginServicePanelTest {
         }
     }
 
+    // ==================== Plan 18-17 Tests 6-10: web registration and the empty game password ====================
+
+    /** The server is logged in to UltiCloud: create and poll go through the (mocked) framework helper. */
+    private void connectServer() {
+        cloud.when(() -> UltiCloudRequests.post(anyString(), anyString()))
+                .thenAnswer(invocation -> cloudResult(200, CREATE_OK));
+        cloud.when(() -> UltiCloudRequests.get(anyString(), anyMap())).thenAnswer(invocation -> {
+            String next = pollScript.poll();
+            return cloudResult(200, next != null ? next : status("pending"));
+        });
+    }
+
+    private static UltiCloudRequests.Result cloudResult(int statusCode, String body) {
+        UltiCloudRequests.Result result = mock(UltiCloudRequests.Result.class);
+        when(result.getOutcome()).thenReturn(UltiCloudRequests.Outcome.OK);
+        when(result.getStatusCode()).thenReturn(statusCode);
+        when(result.getBody()).thenReturn(body);
+        return result;
+    }
+
+    private static String completedWith(String proof) {
+        return "{\"code\":\"200\",\"msg\":\"Success\",\"data\":{\"status\":\"completed\","
+                + "\"proof\":\"" + proof + "\",\"is_server_owner\":false}}";
+    }
+
+    private AccountData registerWith(String passwordHash, String salt) {
+        AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", passwordHash, salt);
+        when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+        return account;
+    }
+
+    @Nested
+    @DisplayName("web registration (proof 3)")
+    class WebRegistration {
+
+        @Test
+        @DisplayName("Test 6: completed + web_registration for an unregistered player creates one row with an empty hash, logs in, hints once")
+        void createsAccountWithEmptyHash() {
+            connectServer();
+            setRegistered(false);
+            openLink();
+
+            pollOnce(completedWith("web_registration"));
+
+            ArgumentCaptor<AccountData> inserted = ArgumentCaptor.forClass(AccountData.class);
+            verify(dataOperator, times(1)).insert(inserted.capture());
+            AccountData row = inserted.getValue();
+            assertThat(row.getPlayerUuid()).isEqualTo(playerUuid.toString());
+            assertThat(row.getPlayerName()).isEqualTo("TestPlayer");
+            assertThat(row.getPasswordHash()).as("no game password yet").isEmpty();
+            assertThat(row.getRegisterIp()).isEqualTo("127.0.0.1");
+            assertThat(service.isLoggedIn(playerUuid)).as("the web registration logged the player in").isTrue();
+            assertMessage("panel_auth_success_player", 1);
+            assertMessage("panel_web_registration_hint", 1);
+        }
+
+        @Test
+        @DisplayName("Test 7: the same outcome for a player who registered in game meanwhile leaves the row untouched and logs in, no hint")
+        void existingAccountIsNeverOverwritten() {
+            connectServer();
+            setRegistered(false);
+            openLink();
+            AccountData existing = registerWith("hash", "salt");
+
+            pollOnce(completedWith("web_registration"));
+
+            verify(dataOperator, never()).insert(any(AccountData.class));
+            assertThat(existing.getPasswordHash()).as("the game password is untouched").isEqualTo("hash");
+            assertThat(existing.getSalt()).isEqualTo("salt");
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+            assertMessage("panel_web_registration_hint", 0);
+        }
+
+        @Test
+        @DisplayName("a web_registration proof on an anonymous (uncredentialed) link creates nothing and logs nobody in")
+        void proofOnAnonymousLinkIsIgnored() {
+            setRegistered(false);
+            openLink();
+
+            pollOnce(completedWith("web_registration"));
+
+            verify(dataOperator, never()).insert(any(AccountData.class));
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            assertMessage("panel_not_registered_in_game", 1);
+        }
+
+        @Test
+        @DisplayName("completed + bound_account for a player with no game account is refused with 'not registered in game'")
+        void boundAccountWithoutGameAccountIsRefused() {
+            connectServer();
+            setRegistered(false);
+            openLink();
+
+            pollOnce(completedWith("bound_account"));
+
+            verify(dataOperator, never()).insert(any(AccountData.class));
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            assertMessage("panel_not_registered_in_game", 1);
+            assertMessage("panel_auth_success_player", 0);
+        }
+
+        @Test
+        @DisplayName("web registration respects max-register-per-ip: over the limit nothing is created and nobody logged in")
+        void webRegistrationRespectsIpLimit() {
+            connectServer();
+            setRegistered(false);
+            openLink();
+            when(config.getMaxRegisterPerIp()).thenReturn(1);
+            AccountData other = UltiLoginTestHelper.createSampleAccount(UUID.randomUUID(), "Other", "h", "s");
+            when(mockQuery.list()).thenAnswer(invocation -> Collections.emptyList());
+            // isRegistered(player) reads player_uuid; the IP count reads register_ip.
+            when(mockQuery.where("register_ip")).thenAnswer(invocation -> {
+                Query<AccountData> byIp = mock(Query.class);
+                when(byIp.eq(any())).thenReturn(byIp);
+                when(byIp.list()).thenReturn(Collections.singletonList(other));
+                return byIp;
+            });
+
+            pollOnce(completedWith("web_registration"));
+
+            verify(dataOperator, never()).insert(any(AccountData.class));
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            verify(player).sendMessage(ChatColor.RED + CatalogueText.text("zh", "ip_limit_reached"));
+        }
+    }
+
+    @Nested
+    @DisplayName("an account without a game password")
+    class EmptyGamePassword {
+
+        @Test
+        @DisplayName("Test 8: /login against an empty hash fails closed and says the account was made on the web")
+        void loginFailsClosed() {
+            registerWith("", "");
+
+            LoginService.LoginResult result = service.login(player, "anything");
+
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            assertThat(service.getRemainingAttempts(player)).as("not counted as a wrong password").isEqualTo(5);
+            verify(UltiLoginTestHelper.getMockPlugin()).i18n("login_no_game_password");
+            assertThat(result.getMessage()).isEqualTo(CatalogueText.text("zh", "login_no_game_password"));
+        }
+
+        @Test
+        @DisplayName("Test 8: a null hash fails closed the same way")
+        void loginFailsClosedOnNullHash() {
+            registerWith(null, null);
+
+            LoginService.LoginResult result = service.login(player, "anything");
+
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(service.getRemainingAttempts(player)).as("not counted as a wrong password").isEqualTo(5);
+            verify(UltiLoginTestHelper.getMockPlugin()).i18n("login_no_game_password");
+            assertThat(result.getMessage()).isEqualTo(CatalogueText.text("zh", "login_no_game_password"));
+        }
+
+        @Test
+        @DisplayName("Test 10: /register still refuses a name that has a web-created account")
+        void registerRefusesWebAccount() {
+            registerWith("", "");
+
+            assertThat(service.register(player, "secret123")).isFalse();
+            verify(dataOperator, never()).insert(any(AccountData.class));
+        }
+
+        @Test
+        @DisplayName("Test 9: setInitialPassword sets a password on an empty hash, after which /login works")
+        void setInitialPasswordThenLogin() {
+            AccountData account = registerWith("", "");
+            assertThat(service.hasNoGamePassword(playerUuid)).isTrue();
+
+            assertThat(service.setInitialPassword(playerUuid, "secret123")).isTrue();
+
+            assertThat(account.getPasswordHash()).isNotEmpty();
+            assertThat(account.getSalt()).isNotEmpty();
+            assertThat(service.hasNoGamePassword(playerUuid)).isFalse();
+            assertThat(service.login(player, "secret123").isSuccess()).as("the new password works").isTrue();
+        }
+
+        @Test
+        @DisplayName("Test 9: setInitialPassword refuses an account that already has a password and leaves it unchanged")
+        void setInitialPasswordRefusesExistingPassword() {
+            AccountData account = registerWith("hash", "salt");
+            assertThat(service.hasNoGamePassword(playerUuid)).isFalse();
+
+            assertThat(service.setInitialPassword(playerUuid, "secret123")).isFalse();
+
+            assertThat(account.getPasswordHash()).isEqualTo("hash");
+            assertThat(account.getSalt()).isEqualTo("salt");
+            verify(dataOperator, never()).updateCounted(any(AccountData.class));
+        }
+
+        @Test
+        @DisplayName("Test 9: setInitialPassword refuses a player without an account")
+        void setInitialPasswordRefusesNoAccount() {
+            setRegistered(false);
+
+            assertThat(service.hasNoGamePassword(playerUuid)).isFalse();
+            assertThat(service.setInitialPassword(playerUuid, "secret123")).isFalse();
+        }
+    }
+
     // ==================== Test 5: catalogue parity ====================
 
     private static final List<String> NEW_KEYS = Arrays.asList(
@@ -571,7 +775,19 @@ class LoginServicePanelTest {
             "panel_outcome_refused_link_not_permitted",
             "panel_outcome_refused_too_many_attempts",
             "panel_timeout_paused",
-            "panel_timeout_resumed");
+            "panel_timeout_resumed",
+            // plan 18-17
+            "panel_credential_refused",
+            "panel_link_error",
+            "log_panel_credential_refused",
+            "panel_web_registration_hint",
+            "panel_not_registered_in_game",
+            "login_no_game_password",
+            "command_setpassword_description",
+            "help_setpassword",
+            "setpassword_success",
+            "setpassword_already_set",
+            "setpassword_failed");
 
     private static final Pattern PLACEHOLDER = Pattern.compile("\\{[A-Za-z_]+}");
 

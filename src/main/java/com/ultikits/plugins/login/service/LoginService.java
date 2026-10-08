@@ -1304,6 +1304,20 @@ public class LoginService {
     }
 
     /**
+     * Whether the player's account has no game password (inert seam for the RED commit).
+     */
+    public boolean hasNoGamePassword(UUID playerUuid) {
+        return false;
+    }
+
+    /**
+     * Set the first game password of an account without one (inert seam for the RED commit).
+     */
+    public boolean setInitialPassword(UUID playerUuid, String newPassword) {
+        return false;
+    }
+
+    /**
      * Count registrations by IP.
      */
     private int countRegistrationsByIp(String ip) {
