@@ -82,6 +82,8 @@
   "panel_outcome_refused_game_login_required": "&c网页面板拒绝了此次登录：请先在游戏内使用 /login 登录，再执行 /panel。",
   "panel_outcome_refused_link_not_permitted": "&c网页面板拒绝了此次登录：此服务器无法从网页绑定新账号。",
   "panel_outcome_refused_too_many_attempts": "&c网页面板拒绝了此次登录：密码错误次数过多，请重新执行 /panel 获取新链接。",
+  "panel_timeout_paused": "&7网页面板链接有效期间，登录倒计时已暂停。登录前你仍然无法移动或聊天。",
+  "panel_timeout_resumed": "&e登录倒计时已恢复，请在倒计时结束前登录。",
 
   "email_not_enabled": "&c邮件服务未启用！请联系管理员配置。",
   "email_bind_prompt": "&e已向 &f{EMAIL} &e发送验证码，请使用 &f/regs <验证码> &e完成绑定。",

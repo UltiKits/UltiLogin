@@ -82,6 +82,8 @@
   "panel_outcome_refused_game_login_required": "&cThe web panel refused this sign-in: log in in game with /login first, then run /panel again.",
   "panel_outcome_refused_link_not_permitted": "&cThe web panel refused this sign-in: this server cannot link a new account from the web.",
   "panel_outcome_refused_too_many_attempts": "&cThe web panel refused this sign-in: too many wrong passwords. Run /panel again for a new link.",
+  "panel_timeout_paused": "&7Your login countdown is paused while the web panel link is open. You still cannot move or chat until you are logged in.",
+  "panel_timeout_resumed": "&eYour login countdown has resumed. Log in before it runs out.",
 
   "email_not_enabled": "&cEmail service is not enabled! Please contact an administrator.",
   "email_bind_prompt": "&eA verification code has been sent to &f{EMAIL}&e. Use &f/regs <code> &eto complete binding.",

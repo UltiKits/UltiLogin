@@ -163,6 +163,16 @@ public class LoginService {
     // The clock the login timeout and the /panel link lifetime read (tests replace it).
     private volatile java.util.function.LongSupplier clock = System::currentTimeMillis;
 
+    // Login-timeout pause while a /panel link is pending (Phase 18 magic-link contract, section 13).
+    // A player's countdown is paused while at least one of their pending requests has not been
+    // reported cancelled; panelPausedAt records when the pause began, and on resume the join time
+    // moves forward by the paused span, so the countdown continues with exactly the time that was
+    // left. All transitions go through syncPanelPause under panelPauseLock.
+    private final Map<UUID, Long> panelPausedAt = new ConcurrentHashMap<>();
+    // Players who were told their countdown is paused; only they are told it resumed.
+    private final java.util.Set<UUID> panelPauseAnnounced = ConcurrentHashMap.newKeySet();
+    private final Object panelPauseLock = new Object();
+
     /**
      * Constructor with dependency injection.
      */
@@ -229,6 +239,8 @@ public class LoginService {
         pendingPanelRequests.clear();
         pendingPanelTimestamps.clear();
         reportedCancelledPanelRequests.clear();
+        panelPausedAt.clear();
+        panelPauseAnnounced.clear();
         invalidationGenerations.clear();
         credentialGuiTransitions.clear();
         openCredentialGuiPlayers.clear();
@@ -661,6 +673,7 @@ public class LoginService {
             return false;
         });
         cancelActivePollingTask(playerUuid);
+        syncPanelPause(playerUuid);
     }
 
     /**
@@ -726,7 +739,7 @@ public class LoginService {
         Player player = Bukkit.getPlayer(playerUuid);
         if (player != null && player.isOnline()) {
             loggedInPlayers.put(playerUuid, false);
-            joinTimes.put(playerUuid, System.currentTimeMillis());
+            joinTimes.put(playerUuid, clock.getAsLong());
             if (presentPrompt) {
                 applyNoSessionProtections(player);
                 presentCredentialPrompt(player);
@@ -951,7 +964,7 @@ public class LoginService {
     public void onPlayerJoin(Player player) {
         UUID uuid = player.getUniqueId();
         loggedInPlayers.put(uuid, false);
-        joinTimes.put(uuid, System.currentTimeMillis());
+        joinTimes.put(uuid, clock.getAsLong());
         
         // Store original location
         originalLocations.put(uuid, player.getLocation().clone());
@@ -990,6 +1003,7 @@ public class LoginService {
         joinTimes.remove(uuid);
         originalLocations.remove(uuid);
         cancelActivePollingTask(uuid);
+        clearPanelPause(uuid);
     }
     
     /**
@@ -1012,6 +1026,7 @@ public class LoginService {
         UUID uuid = player.getUniqueId();
         loggedInPlayers.put(uuid, true);
         joinTimes.remove(uuid);
+        clearPanelPause(uuid);
 
         closeCredentialGuiIfOpen(player);
 
@@ -1204,10 +1219,15 @@ public class LoginService {
      */
     @Scheduled(period = 20, async = false)
     public void checkTimeouts() {
-        long now = System.currentTimeMillis();
+        long now = clock.getAsLong();
         long timeout = config.getLoginTimeout() * 1000L;
 
         for (Map.Entry<UUID, Long> entry : joinTimes.entrySet()) {
+            // A pending /panel link holds the countdown (contract section 13); every other
+            // unauthenticated restriction stays in LoginProtectionListener.
+            if (panelPausedAt.containsKey(entry.getKey())) {
+                continue;
+            }
             if (now - entry.getValue() > timeout) {
                 Player player = Bukkit.getPlayer(entry.getKey());
                 if (player != null && player.isOnline()) {
@@ -1485,7 +1505,10 @@ public class LoginService {
             // Track the pending request -- this insert and the generation check above must stay
             // atomic with each other (see javadoc above); nothing else belongs inside this lock.
             pendingPanelRequests.put(requestId, playerUuidRaw);
-            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
+            pendingPanelTimestamps.put(requestId, clock.getAsLong());
+            // The countdown pauses from the moment the request exists; the player is told once the
+            // link is actually delivered (startAuthPolling), so a failed request resumes silently.
+            syncPanelPause(playerUuidRaw);
         }
 
         String code = generateVerificationCode();
@@ -1675,6 +1698,7 @@ public class LoginService {
         }, 60L, 60L); // 60 ticks = 3 seconds
 
         pollingTasks.put(requestId, task);
+        announcePanelPause(player);
     }
 
     /**
@@ -1749,10 +1773,13 @@ public class LoginService {
      * poll goes on, because a cancelled link stays completable until it expires.
      */
     private void handlePanelPollCancelled(Player player, String requestId) {
-        if (!pendingPanelRequests.containsKey(requestId) || !reportedCancelledPanelRequests.add(requestId)) {
+        UUID owner = pendingPanelRequests.get(requestId);
+        if (owner == null || !reportedCancelledPanelRequests.add(requestId)) {
             return;
         }
         sendPanelMessage(player, i18n("panel_outcome_cancelled"));
+        // A cancelled link no longer holds the countdown, although its poll goes on.
+        syncPanelPause(owner);
     }
 
     /**
@@ -1883,10 +1910,13 @@ public class LoginService {
             return false;
         }
 
-        cleanupPanelRequest(requestId);
+        // Removed without resuming the countdown yet: a successful login below clears the pause
+        // (completeLogin), and only a refusal resumes it.
+        removePanelRequest(requestId);
 
         Player player = Bukkit.getPlayer(playerUuid);
         if (player == null || !player.isOnline()) {
+            syncPanelPause(playerUuid);
             return false;
         }
 
@@ -1897,6 +1927,7 @@ public class LoginService {
         // path that never calls invalidateSession). Refuse to grant the login rather than trust
         // that the account still exists just because a pending request for it does.
         if (!isRegistered(playerUuid)) {
+            syncPanelPause(playerUuid);
             return false;
         }
 
@@ -1939,25 +1970,118 @@ public class LoginService {
      * Clean up a panel request.
      */
     private void cleanupPanelRequest(String requestId) {
-        pendingPanelRequests.remove(requestId);
+        UUID owner = removePanelRequest(requestId);
+        if (owner != null) {
+            syncPanelPause(owner);
+        }
+    }
+
+    /**
+     * Forget a panel request without touching the login-timeout pause.
+     *
+     * @return the player the request belonged to, or {@code null} if it was not pending
+     */
+    private UUID removePanelRequest(String requestId) {
         pendingPanelTimestamps.remove(requestId);
         reportedCancelledPanelRequests.remove(requestId);
+        return pendingPanelRequests.remove(requestId);
+    }
+
+    /**
+     * Whether any of the player's pending requests holds the login countdown: pending, and not
+     * reported cancelled by the web (contract section 13).
+     */
+    private boolean holdsLoginTimeout(UUID playerUuid) {
+        for (Map.Entry<String, UUID> entry : pendingPanelRequests.entrySet()) {
+            if (entry.getValue().equals(playerUuid) && !reportedCancelledPanelRequests.contains(entry.getKey())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Bring the player's login-timeout pause in line with their pending requests.
+     * <p>
+     * Pauses when a request holds the countdown and the player is still counting down (has not
+     * logged in); resumes when none holds any more, moving the join time forward by the paused span
+     * so the countdown continues with exactly the time that remained -- never an immediate kick,
+     * never a fresh full timeout. Says "resumed" only to a player who was told it paused.
+     */
+    private void syncPanelPause(UUID playerUuid) {
+        boolean resumedAnnounced = false;
+        synchronized (panelPauseLock) {
+            boolean holds = holdsLoginTimeout(playerUuid);
+            Long pausedAt = panelPausedAt.get(playerUuid);
+            if (holds && pausedAt == null) {
+                if (joinTimes.containsKey(playerUuid)) {
+                    panelPausedAt.put(playerUuid, clock.getAsLong());
+                }
+            } else if (!holds && pausedAt != null) {
+                panelPausedAt.remove(playerUuid);
+                long pausedFor = clock.getAsLong() - pausedAt;
+                joinTimes.computeIfPresent(playerUuid, (uuid, joinedAt) -> joinedAt + pausedFor);
+                resumedAnnounced = panelPauseAnnounced.remove(playerUuid);
+            }
+        }
+        if (resumedAnnounced) {
+            Player player = Bukkit.getPlayer(playerUuid);
+            if (player != null) {
+                sendPanelMessage(player, i18n("panel_timeout_resumed"));
+            }
+        }
+    }
+
+    /** Tell a paused player, once per pause, that the countdown waits for the web link. */
+    private void announcePanelPause(Player player) {
+        boolean announce;
+        synchronized (panelPauseLock) {
+            UUID uuid = player.getUniqueId();
+            announce = panelPausedAt.containsKey(uuid) && panelPauseAnnounced.add(uuid);
+        }
+        if (announce) {
+            sendPanelMessage(player, i18n("panel_timeout_paused"));
+        }
+    }
+
+    /** End a player's pause without resuming anything: they logged in or left. */
+    private void clearPanelPause(UUID playerUuid) {
+        synchronized (panelPauseLock) {
+            panelPausedAt.remove(playerUuid);
+            panelPauseAnnounced.remove(playerUuid);
+        }
     }
 
     /**
      * Clean up expired panel requests (older than 5 minutes).
      */
     public void cleanupExpiredPanelRequests() {
-        long now = System.currentTimeMillis();
+        long now = clock.getAsLong();
         long expiry = 5 * 60 * 1000L; // 5 minutes
-        pendingPanelTimestamps.entrySet().removeIf(entry -> {
+        java.util.List<String> expired = new java.util.ArrayList<>();
+        for (Map.Entry<String, Long> entry : pendingPanelTimestamps.entrySet()) {
             if (now - entry.getValue() > expiry) {
-                pendingPanelRequests.remove(entry.getKey());
-                reportedCancelledPanelRequests.remove(entry.getKey());
-                return true;
+                expired.add(entry.getKey());
             }
-            return false;
-        });
+        }
+        for (String requestId : expired) {
+            UUID owner = pendingPanelRequests.get(requestId);
+            // Tell the player when this was the link being polled for them (or nothing is being
+            // polled any more): an older link a newer /panel superseded expires silently.
+            String polled = owner == null ? null : currentPollingRequestId.get(owner);
+            boolean tell = owner != null && (polled == null || polled.equals(requestId));
+            if (owner != null) {
+                stopOwnPoll(owner, requestId);
+            }
+            removePanelRequest(requestId);
+            if (owner != null) {
+                Player player = Bukkit.getPlayer(owner);
+                if (tell && player != null) {
+                    sendPanelMessage(player, i18n("panel_outcome_expired"));
+                }
+                syncPanelPause(owner);
+            }
+        }
     }
 
     /**
