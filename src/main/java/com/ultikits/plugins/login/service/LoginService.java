@@ -463,6 +463,19 @@ public class LoginService {
         String hash = hashPassword(password, salt);
         
         // Create account
+        dataOperator.insert(newAccountRow(player, hash, salt, ip));
+        
+        // Auto login after register
+        completeLogin(player);
+        
+        return true;
+    }
+    
+    /**
+     * The account row {@code /register} creates, and the one a web registration creates with an
+     * empty password hash and salt.
+     */
+    private AccountData newAccountRow(Player player, String hash, String salt, String ip) {
         AccountData account = new AccountData();
         account.setPlayerUuid(player.getUniqueId().toString());
         account.setPlayerName(player.getName());
@@ -471,15 +484,17 @@ public class LoginService {
         account.setRegisterIp(ip);
         account.setLastIp(ip);
         account.setLastLogin(System.currentTimeMillis());
-        
-        dataOperator.insert(account);
-        
-        // Auto login after register
-        completeLogin(player);
-        
-        return true;
+        return account;
     }
-    
+
+    /**
+     * Whether a stored password hash means "no game password": the account was created by a web
+     * registration (Phase 18 magic-link contract, section 13) and {@code /setpassword} has not run yet.
+     */
+    private static boolean isEmptyHash(String passwordHash) {
+        return passwordHash == null || passwordHash.isEmpty();
+    }
+
     /**
      * Login a player.
      * 
@@ -498,6 +513,13 @@ public class LoginService {
         AccountData account = getAccount(player.getUniqueId());
         if (account == null) {
             return new LoginResult(false, config.getNotRegistered());
+        }
+
+        // An account created on the web has no game password. Refuse before any hash comparison, so
+        // no password can ever match it (fails closed), and do not count it as a wrong password: the
+        // player is told to use /panel and then /setpassword (contract section 13).
+        if (isEmptyHash(account.getPasswordHash())) {
+            return new LoginResult(false, i18n("login_no_game_password"));
         }
         
         // Verify password
@@ -1304,17 +1326,39 @@ public class LoginService {
     }
 
     /**
-     * Whether the player's account has no game password (inert seam for the RED commit).
+     * Whether the player has an account and it has no game password -- it was created by a web
+     * registration through {@code /panel} (Phase 18 magic-link contract, section 13).
+     *
+     * @param playerUuid the player
+     * @return {@code true} only for an existing account with an empty password hash
      */
     public boolean hasNoGamePassword(UUID playerUuid) {
-        return false;
+        AccountData account = getAccount(playerUuid);
+        return account != null && isEmptyHash(account.getPasswordHash());
     }
 
     /**
-     * Set the first game password of an account without one (inert seam for the RED commit).
+     * Set the first game password of an account created on the web ({@code /setpassword}).
+     * <p>
+     * Refuses an account that already has a password -- that is {@code /changepassword}'s job, which
+     * asks for the old one -- so this can never replace a password without knowing it. The caller
+     * checks that the player is logged in. Unlike a password change, this does not end the player's
+     * session: nothing that authenticated them changes.
+     *
+     * @param playerUuid  the player
+     * @param newPassword the new password, already checked against the password policy
+     * @return {@code true} when the password was stored
      */
     public boolean setInitialPassword(UUID playerUuid, String newPassword) {
-        return false;
+        AccountData account = getAccount(playerUuid);
+        if (account == null || !isEmptyHash(account.getPasswordHash())) {
+            return false;
+        }
+        String newSalt = generateSalt();
+        account.setSalt(newSalt);
+        account.setPasswordHash(hashPassword(newPassword, newSalt));
+        return AccountWrites.update(dataOperator, plugin.getLogger(), account,
+                i18n("log_account_update_failed"), i18n("log_account_row_gone"));
     }
 
     /**
@@ -1722,8 +1766,8 @@ public class LoginService {
             }
 
             try {
-                SimpleHttpClient.Response response = panelRequestTransports
-                        .getOrDefault(requestId, panelLinkTransport).poll(requestId, uuid);
+                PanelLinkTransport transport = panelRequestTransports.getOrDefault(requestId, panelLinkTransport);
+                SimpleHttpClient.Response response = transport.poll(requestId, uuid);
                 if (!response.isOk()) {
                     return;
                 }
@@ -1735,7 +1779,8 @@ public class LoginService {
                     return;
                 }
 
-                dispatchPanelPollStatus(player, uuid, requestId, stringOrNull(data, "status"), data);
+                dispatchPanelPollStatus(player, uuid, requestId, stringOrNull(data, "status"), data,
+                        transport.credentialed());
             } catch (PanelLinkTransport.NotConfiguredException e) {
                 plugin.getLogger().warn(i18n("log_auth_polling_no_api"));
                 stopOwnPoll(uuid, requestId);
@@ -1763,8 +1808,11 @@ public class LoginService {
      * @param requestId the request this poll confirms
      * @param status    the reported status, or {@code null} when the response carried none
      * @param data      the response's {@code data} object
+     * @param credentialed whether the link was created with the server's credential; only then is the
+     *                     {@code proof} of a completion read (contract sections 7 and 14)
      */
-    private void dispatchPanelPollStatus(Player player, UUID uuid, String requestId, String status, JsonObject data) {
+    private void dispatchPanelPollStatus(Player player, UUID uuid, String requestId, String status, JsonObject data,
+                                         boolean credentialed) {
         if (status == null) {
             return;
         }
@@ -1777,10 +1825,13 @@ public class LoginService {
                 final boolean isServerOwner = data.has("is_server_owner")
                     && !data.get("is_server_owner").isJsonNull()
                     && data.get("is_server_owner").getAsBoolean();
+                // The legacy (anonymous) poll never carries a proof; a link made without the server's
+                // credential cannot have satisfied proof 3, so a proof there is not trusted.
+                final String proof = credentialed ? stringOrNull(data, "proof") : null;
                 // Complete login on main thread, resolving by the exact request id this poll was
                 // started for -- see handlePanelPollCompleted's javadoc for why.
                 Bukkit.getScheduler().runTask(bukkitPlugin,
-                        () -> handlePanelPollCompleted(player, requestId, isServerOwner));
+                        () -> handlePanelPollCompleted(player, requestId, isServerOwner, proof));
                 return;
             }
             case "cancelled":
@@ -1926,12 +1977,13 @@ public class LoginService {
      * @param player the online player the poll was running for
      * @param requestId the exact pending request id this poll was started for
      * @param isServerOwner whether the confirmed panel session reported server-owner status
+     * @param proof the completion's proof on a credentialed link, else {@code null}
      */
-    private void handlePanelPollCompleted(Player player, String requestId, boolean isServerOwner) {
+    private void handlePanelPollCompleted(Player player, String requestId, boolean isServerOwner, String proof) {
         if (!player.isOnline()) {
             return;
         }
-        completePanelLogin(requestId, isServerOwner);
+        completePanelLogin(requestId, isServerOwner, proof);
     }
 
     /**
@@ -1952,6 +2004,32 @@ public class LoginService {
      * @return true if the player was successfully logged in
      */
     public boolean completePanelLogin(String requestId, boolean isServerOwner) {
+        return completePanelLogin(requestId, isServerOwner, null);
+    }
+
+    /**
+     * Handle a panel login completion, with the proof the Worker reported for a credentialed link
+     * (Phase 18 magic-link contract, sections 7 and 13).
+     * <p>
+     * Proof {@code web_registration} (proof 3: a brand-new name registered on the web) creates the
+     * UltiLogin account with an empty password hash when the player has none, then logs them in and
+     * hints once at {@code /setpassword}. It never overwrites an account: if one exists by the time
+     * this runs -- the player registered in game while the web page was open, a niche interleaving --
+     * the account is left exactly as it is and the player is logged in as for {@code bound_account}.
+     * The existence check and the insert both run here on the main thread, as {@code /register} does,
+     * so they cannot interleave with it. The operator's {@code max-register-per-ip} limit applies to a
+     * web registration as it does to {@code /register}.
+     * <p>
+     * Every other proof keeps the registered-only refusal: without an account the player is told they
+     * are not registered in game and nobody is logged in.
+     *
+     * @param requestId the request ID
+     * @param isServerOwner whether the user is a server owner
+     * @param proof the reported proof ({@code in_game_login}, {@code bound_account},
+     *              {@code web_registration}), or {@code null} when none is trusted
+     * @return true if the player was successfully logged in
+     */
+    public boolean completePanelLogin(String requestId, boolean isServerOwner, String proof) {
         UUID playerUuid = pendingPanelRequests.get(requestId);
         if (playerUuid == null) {
             return false;
@@ -1973,9 +2051,18 @@ public class LoginService {
         // invalidateSession's cancellation reached it (or, in the future, through some other
         // path that never calls invalidateSession). Refuse to grant the login rather than trust
         // that the account still exists just because a pending request for it does.
+        boolean webRegistered = false;
         if (!isRegistered(playerUuid)) {
-            syncPanelPause(playerUuid);
-            return false;
+            if (!"web_registration".equals(proof)) {
+                syncPanelPause(playerUuid);
+                sendPanelMessage(player, i18n("panel_not_registered_in_game"));
+                return false;
+            }
+            if (!createWebRegisteredAccount(player)) {
+                syncPanelPause(playerUuid);
+                return false;
+            }
+            webRegistered = true;
         }
 
         // Complete the login
@@ -1986,6 +2073,9 @@ public class LoginService {
             ? i18n("panel_auth_success_owner")
             : i18n("panel_auth_success_player");
         player.sendMessage(ChatColor.translateAlternateColorCodes('&', message));
+        if (webRegistered) {
+            sendPanelMessage(player, i18n("panel_web_registration_hint"));
+        }
 
         // Update account last login
         AccountData account = getAccount(playerUuid);
@@ -2003,6 +2093,22 @@ public class LoginService {
             sessions.put(ip + ":" + playerUuid, System.currentTimeMillis());
         }
 
+        return true;
+    }
+
+    /**
+     * Create the account of a player who registered on the web: the row {@code /register} creates,
+     * with an empty password hash and salt. Only called when the player has no account.
+     *
+     * @return {@code false} when the operator's per-address registration limit is reached
+     */
+    private boolean createWebRegisteredAccount(Player player) {
+        String ip = getPlayerIp(player);
+        if (config.getMaxRegisterPerIp() > 0 && countRegistrationsByIp(ip) >= config.getMaxRegisterPerIp()) {
+            player.sendMessage(ChatColor.RED + i18n("ip_limit_reached"));
+            return false;
+        }
+        dataOperator.insert(newAccountRow(player, "", "", ip));
         return true;
     }
 
