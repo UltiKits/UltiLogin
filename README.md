@@ -1,5 +1,8 @@
 # UltiLogin
 
+[![UltiTools-API](https://img.shields.io/badge/UltiTools--API-6.3.0%2B-blue)](https://github.com/UltiKits/UltiTools-Reborn)
+[![Paper](https://img.shields.io/badge/Paper-1.21%2B-green)](https://papermc.io/)
+[![Java](https://img.shields.io/badge/Java-21%2B-orange)](https://adoptium.net/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 UltiLogin 是 UltiTools 插件系统的登录验证模块，为 Minecraft 服务器提供安全的玩家认证系统。
@@ -199,7 +202,12 @@ them in Chinese.
 
 ## 依赖
 
-- **UltiTools-API** >= 6.2.1
+- **UltiTools-API** 6.3.0 or later / 6.3.0 或更高版本 (required / 必需), on **Paper 1.21+** with **Java 21+**.
+  This module declares `api-version: 630`, so an older framework refuses to load it with a warning that the
+  UltiTools version is outdated. 本模块声明 `api-version: 630`，更早的框架会拒绝加载它，并警告 UltiTools 版本过旧。
+- Install: put `UltiLogin-<version>.jar` into `plugins/UltiTools/plugins/` and restart the server (`/ul reload` only
+  reloads configuration; it does not load a new module jar). 安装：将 JAR 放入 `plugins/UltiTools/plugins/` 并重启服务器
+  （`/ul reload` 只重载配置，不会加载新的模块 JAR）。
 
 ## 版本历史
 
