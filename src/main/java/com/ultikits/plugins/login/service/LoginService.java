@@ -5,7 +5,6 @@ import com.ultikits.plugins.login.entity.AccountData;
 import com.ultikits.plugins.login.gui.LoginGUIPage;
 import com.ultikits.plugins.login.gui.RegisterGUIPage;
 import com.ultikits.plugins.login.listener.LoginProtectionListener;
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.PreDestroy;
 import com.ultikits.ultitools.annotations.Scheduled;
@@ -31,13 +30,11 @@ import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
-import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.ultikits.ultitools.utils.CommonUtils;
@@ -154,7 +151,35 @@ public class LoginService {
     // every 10 ticks indefinitely.
     private final Map<UUID, BukkitTask> pendingCredentialGuiReopenTasks = new ConcurrentHashMap<>();
 
-    private final Gson gson = new Gson();
+    // The /panel HTTP seam (see PanelLinkTransport). /panel creates its link with the server's own
+    // UltiCloud credential through the framework helper; only when the server is not logged in to
+    // UltiCloud does it fall back to the anonymous request it has always made (Phase 18 magic-link
+    // contract, section 13).
+    private volatile PanelLinkTransport panelLinkTransport = new HelperPanelLinkTransport();
+    private final PanelLinkTransport anonymousPanelLinkTransport = new PanelLinkTransport.Anonymous();
+
+    // The transport that created each pending request (requestId -> transport). A link is polled with
+    // the transport that created it: a credentialed link through the helper's requestId poll, an
+    // anonymous one through the legacy playerUuid poll -- never switched in the middle.
+    private final Map<String, PanelLinkTransport> panelRequestTransports = new ConcurrentHashMap<>();
+
+    // Pending panel requests whose link the web has reported cancelled (requestId). A cancelled link
+    // stays completable until it expires, so the request stays pending and its poll goes on; this set
+    // only makes sure the player is told once per request (Phase 18 magic-link contract, section 13).
+    private final java.util.Set<String> reportedCancelledPanelRequests = ConcurrentHashMap.newKeySet();
+
+    // The clock the login timeout and the /panel link lifetime read (tests replace it).
+    private volatile java.util.function.LongSupplier clock = System::currentTimeMillis;
+
+    // Login-timeout pause while a /panel link is pending (Phase 18 magic-link contract, section 13).
+    // A player's countdown is paused while at least one of their pending requests has not been
+    // reported cancelled; panelPausedAt records when the pause began, and on resume the join time
+    // moves forward by the paused span, so the countdown continues with exactly the time that was
+    // left. All transitions go through syncPanelPause under panelPauseLock.
+    private final Map<UUID, Long> panelPausedAt = new ConcurrentHashMap<>();
+    // Players who were told their countdown is paused; only they are told it resumed.
+    private final java.util.Set<UUID> panelPauseAnnounced = ConcurrentHashMap.newKeySet();
+    private final Object panelPauseLock = new Object();
 
     /**
      * Constructor with dependency injection.
@@ -175,6 +200,25 @@ public class LoginService {
      */
     public String i18n(String key) {
         return plugin.i18n(key);
+    }
+
+    /**
+     * Replace the transport {@code /panel} uses to reach the Worker (tests, and the credentialed
+     * transport that replaces the anonymous one).
+     *
+     * @param transport the transport to use from now on
+     */
+    void setPanelLinkTransport(PanelLinkTransport transport) {
+        this.panelLinkTransport = transport;
+    }
+
+    /**
+     * Replace the clock the login timeout and the {@code /panel} link lifetime read (tests).
+     *
+     * @param clock milliseconds since the epoch
+     */
+    void setClock(java.util.function.LongSupplier clock) {
+        this.clock = clock;
     }
 
     /**
@@ -202,6 +246,10 @@ public class LoginService {
         lockedUuids.clear();
         pendingPanelRequests.clear();
         pendingPanelTimestamps.clear();
+        panelRequestTransports.clear();
+        reportedCancelledPanelRequests.clear();
+        panelPausedAt.clear();
+        panelPauseAnnounced.clear();
         invalidationGenerations.clear();
         credentialGuiTransitions.clear();
         openCredentialGuiPlayers.clear();
@@ -415,6 +463,19 @@ public class LoginService {
         String hash = hashPassword(password, salt);
         
         // Create account
+        dataOperator.insert(newAccountRow(player, hash, salt, ip));
+        
+        // Auto login after register
+        completeLogin(player);
+        
+        return true;
+    }
+    
+    /**
+     * The account row {@code /register} creates, and the one a web registration creates with an
+     * empty password hash and salt.
+     */
+    private AccountData newAccountRow(Player player, String hash, String salt, String ip) {
         AccountData account = new AccountData();
         account.setPlayerUuid(player.getUniqueId().toString());
         account.setPlayerName(player.getName());
@@ -423,15 +484,17 @@ public class LoginService {
         account.setRegisterIp(ip);
         account.setLastIp(ip);
         account.setLastLogin(System.currentTimeMillis());
-        
-        dataOperator.insert(account);
-        
-        // Auto login after register
-        completeLogin(player);
-        
-        return true;
+        return account;
     }
-    
+
+    /**
+     * Whether a stored password hash means "no game password": the account was created by a web
+     * registration (Phase 18 magic-link contract, section 13) and {@code /setpassword} has not run yet.
+     */
+    private static boolean isEmptyHash(String passwordHash) {
+        return passwordHash == null || passwordHash.isEmpty();
+    }
+
     /**
      * Login a player.
      * 
@@ -450,6 +513,13 @@ public class LoginService {
         AccountData account = getAccount(player.getUniqueId());
         if (account == null) {
             return new LoginResult(false, config.getNotRegistered());
+        }
+
+        // An account created on the web has no game password. Refuse before any hash comparison, so
+        // no password can ever match it (fails closed), and do not count it as a wrong password: the
+        // player is told to use /panel and then /setpassword (contract section 13).
+        if (isEmptyHash(account.getPasswordHash())) {
+            return new LoginResult(false, i18n("login_no_game_password"));
         }
         
         // Verify password
@@ -625,14 +695,28 @@ public class LoginService {
      * @param playerUuid the player whose pending panel request should be cancelled
      */
     private void cancelPendingPanelRequest(UUID playerUuid) {
+        dropPendingPanelRequests(playerUuid);
+        cancelActivePollingTask(playerUuid);
+        syncPanelPause(playerUuid);
+    }
+
+    /**
+     * Forget every pending {@code /panel} request of a player, with all its bookkeeping (timestamp,
+     * creating transport, reported-cancelled mark), without touching the poll or the countdown pause.
+     * A completion that arrives afterwards finds no pending request and logs nobody in.
+     *
+     * @param playerUuid the player whose pending requests are forgotten
+     */
+    private void dropPendingPanelRequests(UUID playerUuid) {
         pendingPanelRequests.entrySet().removeIf(entry -> {
             if (entry.getValue().equals(playerUuid)) {
                 pendingPanelTimestamps.remove(entry.getKey());
+                panelRequestTransports.remove(entry.getKey());
+                reportedCancelledPanelRequests.remove(entry.getKey());
                 return true;
             }
             return false;
         });
-        cancelActivePollingTask(playerUuid);
     }
 
     /**
@@ -698,7 +782,7 @@ public class LoginService {
         Player player = Bukkit.getPlayer(playerUuid);
         if (player != null && player.isOnline()) {
             loggedInPlayers.put(playerUuid, false);
-            joinTimes.put(playerUuid, System.currentTimeMillis());
+            joinTimes.put(playerUuid, clock.getAsLong());
             if (presentPrompt) {
                 applyNoSessionProtections(player);
                 presentCredentialPrompt(player);
@@ -923,7 +1007,7 @@ public class LoginService {
     public void onPlayerJoin(Player player) {
         UUID uuid = player.getUniqueId();
         loggedInPlayers.put(uuid, false);
-        joinTimes.put(uuid, System.currentTimeMillis());
+        joinTimes.put(uuid, clock.getAsLong());
         
         // Store original location
         originalLocations.put(uuid, player.getLocation().clone());
@@ -941,9 +1025,17 @@ public class LoginService {
 
         // Send prompt based on mode
         if (isRegistered(uuid)) {
-            String message = config.isGuiModeEnabled() 
-                ? config.getLoginPromptGui() 
-                : config.getLoginPrompt();
+            String message;
+            if (config.isGuiModeEnabled() && hasNoGamePassword(uuid)) {
+                // GUI mode never shows the number pad to an account created on the web: no digits
+                // can match its empty password, and the pad would keep the player from typing
+                // /panel (maintainer decision 2026-10-09).
+                message = i18n("login_no_game_password");
+            } else {
+                message = config.isGuiModeEnabled()
+                    ? config.getLoginPromptGui()
+                    : config.getLoginPrompt();
+            }
             player.sendMessage(ChatColor.translateAlternateColorCodes('&', message));
         } else {
             String message = config.isGuiModeEnabled() 
@@ -961,7 +1053,11 @@ public class LoginService {
         loggedInPlayers.remove(uuid);
         joinTimes.remove(uuid);
         originalLocations.remove(uuid);
+        // A link belongs to the connection that asked for it: a completion still in flight when the
+        // player left must not log in whoever joins next under the same name (gate-1 review F1).
+        dropPendingPanelRequests(uuid);
         cancelActivePollingTask(uuid);
+        clearPanelPause(uuid);
     }
     
     /**
@@ -984,6 +1080,7 @@ public class LoginService {
         UUID uuid = player.getUniqueId();
         loggedInPlayers.put(uuid, true);
         joinTimes.remove(uuid);
+        clearPanelPause(uuid);
 
         closeCredentialGuiIfOpen(player);
 
@@ -1176,10 +1273,15 @@ public class LoginService {
      */
     @Scheduled(period = 20, async = false)
     public void checkTimeouts() {
-        long now = System.currentTimeMillis();
+        long now = clock.getAsLong();
         long timeout = config.getLoginTimeout() * 1000L;
 
         for (Map.Entry<UUID, Long> entry : joinTimes.entrySet()) {
+            // A pending /panel link holds the countdown (contract section 13); every other
+            // unauthenticated restriction stays in LoginProtectionListener.
+            if (panelPausedAt.containsKey(entry.getKey())) {
+                continue;
+            }
             if (now - entry.getValue() > timeout) {
                 Player player = Bukkit.getPlayer(entry.getKey());
                 if (player != null && player.isOnline()) {
@@ -1244,6 +1346,42 @@ public class LoginService {
         invalidateSession(playerUuid);
 
         return true;
+    }
+
+    /**
+     * Whether the player has an account and it has no game password -- it was created by a web
+     * registration through {@code /panel} (Phase 18 magic-link contract, section 13).
+     *
+     * @param playerUuid the player
+     * @return {@code true} only for an existing account with an empty password hash
+     */
+    public boolean hasNoGamePassword(UUID playerUuid) {
+        AccountData account = getAccount(playerUuid);
+        return account != null && isEmptyHash(account.getPasswordHash());
+    }
+
+    /**
+     * Set the first game password of an account created on the web ({@code /setpassword}).
+     * <p>
+     * Refuses an account that already has a password -- that is {@code /changepassword}'s job, which
+     * asks for the old one -- so this can never replace a password without knowing it. The caller
+     * checks that the player is logged in. Unlike a password change, this does not end the player's
+     * session: nothing that authenticated them changes.
+     *
+     * @param playerUuid  the player
+     * @param newPassword the new password, already checked against the password policy
+     * @return {@code true} when the password was stored
+     */
+    public boolean setInitialPassword(UUID playerUuid, String newPassword) {
+        AccountData account = getAccount(playerUuid);
+        if (account == null || !isEmptyHash(account.getPasswordHash())) {
+            return false;
+        }
+        String newSalt = generateSalt();
+        account.setSalt(newSalt);
+        account.setPasswordHash(hashPassword(newPassword, newSalt));
+        return AccountWrites.update(dataOperator, plugin.getLogger(), account,
+                i18n("log_account_update_failed"), i18n("log_account_row_gone"));
     }
 
     /**
@@ -1457,21 +1595,15 @@ public class LoginService {
             // Track the pending request -- this insert and the generation check above must stay
             // atomic with each other (see javadoc above); nothing else belongs inside this lock.
             pendingPanelRequests.put(requestId, playerUuidRaw);
-            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
+            pendingPanelTimestamps.put(requestId, clock.getAsLong());
+            // The countdown pauses from the moment the request exists; the player is told once the
+            // link is actually delivered (startAuthPolling), so a failed request resumes silently.
+            syncPanelPause(playerUuidRaw);
         }
 
         String code = generateVerificationCode();
         String playerUuid = playerUuidRaw.toString();
         String playerName = player.getName();
-
-        // Build API request
-        String apiUrl;
-        try {
-            apiUrl = UltiTools.getEnv().getString("api-url");
-        } catch (Exception e) {
-            cleanupPanelRequest(requestId);
-            return new PanelLinkResult(false, null, "API URL not configured");
-        }
 
         String serverUuid;
         try {
@@ -1481,22 +1613,32 @@ public class LoginService {
             return new PanelLinkResult(false, null, "Server UUID not available");
         }
 
-        JsonObject body = new JsonObject();
-        body.addProperty("requestId", requestId);
-        body.addProperty("code", code);
-        body.addProperty("playerUuid", playerUuid);
-        body.addProperty("playerName", playerName);
-        body.addProperty("serverUuid", serverUuid);
-
         try {
-            Map<String, String> headers = new HashMap<>();
-            headers.put("Content-Type", "application/json");
+            // Phase 18 magic-link contract, section 2: the plugin reports two facts and the Worker
+            // decides which proofs they allow. The Worker honours them only on a request that
+            // carries the server owner's credential, and treats a missing one as the unsafe value.
+            JsonObject body = new JsonObject();
+            body.addProperty("requestId", requestId);
+            body.addProperty("code", code);
+            body.addProperty("playerUuid", playerUuid);
+            body.addProperty("playerName", playerName);
+            body.addProperty("serverUuid", serverUuid);
+            body.addProperty("inGameLogin", isLoggedIn(playerUuidRaw));
+            body.addProperty("registeredInUltiLogin", isRegistered(playerUuidRaw));
 
-            SimpleHttpClient.Response response = SimpleHttpClient.post(
-                apiUrl + "/auth/magic-link",
-                headers,
-                gson.toJson(body)
-            );
+            // Credentialed first; the anonymous request only when the server is not logged in to
+            // UltiCloud. A refused credential or a failed helper call is never retried anonymously.
+            PanelLinkTransport transport = panelLinkTransport;
+            SimpleHttpClient.Response response;
+            try {
+                response = transport.create(body);
+            } catch (PanelLinkTransport.NotConnectedException e) {
+                transport = anonymousPanelLinkTransport;
+                response = transport.create(body);
+            }
+            // Every branch below that does not publish the link removes this entry again
+            // (cleanupPanelRequest).
+            panelRequestTransports.put(requestId, transport);
 
             if (response.isOk()) {
                 JsonObject responseBody = JsonParser.parseString(response.getBody()).getAsJsonObject();
@@ -1539,6 +1681,20 @@ public class LoginService {
                 cleanupPanelRequest(requestId);
                 return new PanelLinkResult(false, null, "API returned status " + response.getStatus());
             }
+        } catch (PanelLinkTransport.NotConfiguredException e) {
+            cleanupPanelRequest(requestId);
+            return new PanelLinkResult(false, null, "API URL not configured");
+        } catch (PanelLinkTransport.CredentialRefusedException e) {
+            cleanupPanelRequest(requestId);
+            plugin.getLogger().warn(i18n("log_panel_credential_refused")
+                    .replace("{STATUS}", String.valueOf(e.getStatus())));
+            return new PanelLinkResult(false, null, "Server credential refused", null,
+                    PanelLinkResult.Failure.CREDENTIAL_REFUSED);
+        } catch (PanelLinkTransport.LinkFailedException e) {
+            cleanupPanelRequest(requestId);
+            plugin.getLogger().warn(i18n("log_panel_link_failed").replace("{ERROR}", String.valueOf(e.getMessage())));
+            return new PanelLinkResult(false, null, "Request failed: " + e.getMessage(), null,
+                    PanelLinkResult.Failure.LINK_ERROR);
         } catch (Exception e) {
             cleanupPanelRequest(requestId);
             plugin.getLogger().warn(i18n("log_panel_link_failed").replace("{ERROR}", String.valueOf(e.getMessage())));
@@ -1599,7 +1755,8 @@ public class LoginService {
      * for this player". Cancelling a task that was already superseded by a newer poll for the
      * same player must never remove or cancel that newer poll's own task.
      *
-     * @param playerUuid the player's UUID string
+     * @param playerUuid the player's UUID string; kept for callers, the poll itself is keyed by
+     *                   {@code player}'s UUID through {@link PanelLinkTransport#poll(String, UUID)}
      * @param player the online player
      * @param requestId the pending request id this poll is confirming, from {@link
      *                  PanelLinkResult#getRequestId()}
@@ -1618,15 +1775,6 @@ public class LoginService {
             }
         }
 
-        String apiUrl;
-        try {
-            apiUrl = UltiTools.getEnv().getString("api-url");
-        } catch (Exception e) {
-            plugin.getLogger().warn(i18n("log_auth_polling_no_api"));
-            return;
-        }
-
-        String pollUrl = apiUrl + "/auth/magic-link/poll?playerUuid=" + playerUuid;
         final int maxPolls = 100; // 100 * 3s = 5 minutes
         final int[] pollCount = {0};
 
@@ -1636,16 +1784,13 @@ public class LoginService {
             if (!player.isOnline() || pollCount[0] > maxPolls) {
                 // Remove/cancel only this poll's own task, keyed by its own request id (round
                 // 11) -- never "whatever task pollingTasks currently holds for this player".
-                BukkitTask self = pollingTasks.remove(requestId);
-                if (self != null) {
-                    self.cancel();
-                }
-                currentPollingRequestId.remove(uuid, requestId);
+                stopOwnPoll(uuid, requestId);
                 return;
             }
 
             try {
-                SimpleHttpClient.Response response = SimpleHttpClient.get(pollUrl);
+                PanelLinkTransport transport = panelRequestTransports.getOrDefault(requestId, panelLinkTransport);
+                SimpleHttpClient.Response response = transport.poll(requestId, uuid);
                 if (!response.isOk()) {
                     return;
                 }
@@ -1657,35 +1802,161 @@ public class LoginService {
                     return;
                 }
 
-                String status = data.has("status") ? data.get("status").getAsString() : null;
-                if (!"completed".equals(status)) {
-                    return;
-                }
-
-                // Auth completed -- remove/cancel only this poll's own task, keyed by its own
-                // request id: see the class-level javadoc on pollingTasks for why a stale,
-                // superseded poll's completion must never touch a replacement's task.
-                BukkitTask self = pollingTasks.remove(requestId);
-                if (self != null) {
-                    self.cancel();
-                }
-                currentPollingRequestId.remove(uuid, requestId);
-
-                boolean isServerOwner = data.has("is_server_owner")
-                    && !data.get("is_server_owner").isJsonNull()
-                    && data.get("is_server_owner").getAsBoolean();
-                final boolean finalIsServerOwner = isServerOwner;
-
-                // Complete login on main thread, resolving by the exact request id this poll was
-                // started for -- see handlePanelPollCompleted's javadoc for why.
-                Bukkit.getScheduler().runTask(bukkitPlugin,
-                        () -> handlePanelPollCompleted(player, requestId, finalIsServerOwner));
+                dispatchPanelPollStatus(player, uuid, requestId, stringOrNull(data, "status"), data,
+                        transport.credentialed());
+            } catch (PanelLinkTransport.NotConfiguredException e) {
+                plugin.getLogger().warn(i18n("log_auth_polling_no_api"));
+                stopOwnPoll(uuid, requestId);
             } catch (Exception e) {
                 plugin.getLogger().debug(i18n("log_auth_poll_error").replace("{ERROR}", String.valueOf(e.getMessage())));
             }
         }, 60L, 60L); // 60 ticks = 3 seconds
 
         pollingTasks.put(requestId, task);
+        announcePanelPause(player);
+    }
+
+    /**
+     * Act on one poll's {@code status}, on the poll's own (asynchronous) thread: decide whether this
+     * poll goes on, and hand every state change and message to the main thread.
+     * <p>
+     * Phase 18 magic-link contract, sections 7 and 13. {@code refused}, {@code expired} and {@code
+     * completed} are final, so this poll stops itself; {@code cancelled} is not (the link stays
+     * completable until it expires), so the poll goes on. Any other status -- {@code pending}, or one
+     * this version does not know -- keeps polling silently. Only {@code completed} can reach {@link
+     * #completePanelLogin(String, boolean)}; every other branch ends without logging anyone in.
+     *
+     * @param player    the player the poll is running for
+     * @param uuid      that player's UUID
+     * @param requestId the request this poll confirms
+     * @param status    the reported status, or {@code null} when the response carried none
+     * @param data      the response's {@code data} object
+     * @param credentialed whether the link was created with the server's credential; only then is the
+     *                     {@code proof} of a completion read (contract sections 7 and 14)
+     */
+    private void dispatchPanelPollStatus(Player player, UUID uuid, String requestId, String status, JsonObject data,
+                                         boolean credentialed) {
+        if (status == null) {
+            return;
+        }
+        switch (status) {
+            case "completed": {
+                // Auth completed -- remove/cancel only this poll's own task, keyed by its own
+                // request id: see the class-level javadoc on pollingTasks for why a stale,
+                // superseded poll's completion must never touch a replacement's task.
+                stopOwnPoll(uuid, requestId);
+                final boolean isServerOwner = data.has("is_server_owner")
+                    && !data.get("is_server_owner").isJsonNull()
+                    && data.get("is_server_owner").getAsBoolean();
+                // The legacy (anonymous) poll never carries a proof; a link made without the server's
+                // credential cannot have satisfied proof 3, so a proof there is not trusted.
+                final String proof = credentialed ? stringOrNull(data, "proof") : null;
+                // Complete login on main thread, resolving by the exact request id this poll was
+                // started for -- see handlePanelPollCompleted's javadoc for why.
+                Bukkit.getScheduler().runTask(bukkitPlugin,
+                        () -> handlePanelPollCompleted(player, requestId, isServerOwner, proof));
+                return;
+            }
+            case "cancelled":
+                if (!reportedCancelledPanelRequests.contains(requestId)) {
+                    Bukkit.getScheduler().runTask(bukkitPlugin, () -> handlePanelPollCancelled(player, requestId));
+                }
+                return;
+            case "refused": {
+                stopOwnPoll(uuid, requestId);
+                final String reason = stringOrNull(data, "reason");
+                Bukkit.getScheduler().runTask(bukkitPlugin, () -> handlePanelPollRefused(player, requestId, reason));
+                return;
+            }
+            case "expired":
+                stopOwnPoll(uuid, requestId);
+                Bukkit.getScheduler().runTask(bukkitPlugin, () -> handlePanelPollExpired(player, requestId));
+                return;
+            default:
+                // pending, or a status this version does not know: keep polling, say nothing.
+        }
+    }
+
+    /**
+     * Cancel and remove this poll's own task, and clear the player's current-poll pointer only if it
+     * still names this request -- never a newer poll's (see {@code pollingTasks}).
+     */
+    private void stopOwnPoll(UUID uuid, String requestId) {
+        BukkitTask self = pollingTasks.remove(requestId);
+        if (self != null) {
+            self.cancel();
+        }
+        currentPollingRequestId.remove(uuid, requestId);
+    }
+
+    /**
+     * The web reported this link cancelled: tell the player once. The request stays pending and its
+     * poll goes on, because a cancelled link stays completable until it expires.
+     */
+    private void handlePanelPollCancelled(Player player, String requestId) {
+        UUID owner = pendingPanelRequests.get(requestId);
+        if (owner == null || !reportedCancelledPanelRequests.add(requestId)) {
+            return;
+        }
+        sendPanelMessage(player, i18n("panel_outcome_cancelled"));
+        // A cancelled link no longer holds the countdown, although its poll goes on.
+        syncPanelPause(owner);
+    }
+
+    /**
+     * The web refused this link: end the request and tell the player why. Nobody is logged in.
+     * A request that is no longer pending (completed, or cancelled by a credential change) is left
+     * alone and nothing is said.
+     */
+    private void handlePanelPollRefused(Player player, String requestId, String reason) {
+        if (pendingPanelRequests.get(requestId) == null) {
+            return;
+        }
+        cleanupPanelRequest(requestId);
+        sendPanelMessage(player, panelRefusalMessage(reason));
+    }
+
+    /**
+     * The web reports this link expired: end the request and tell the player. Nobody is logged in.
+     */
+    private void handlePanelPollExpired(Player player, String requestId) {
+        if (pendingPanelRequests.get(requestId) == null) {
+            return;
+        }
+        cleanupPanelRequest(requestId);
+        sendPanelMessage(player, i18n("panel_outcome_expired"));
+    }
+
+    /**
+     * The player-facing text for a refusal reason (contract section 7's reason vocabulary); a reason
+     * this version does not know still reads as a refusal.
+     */
+    private String panelRefusalMessage(String reason) {
+        if (reason == null) {
+            return i18n("panel_outcome_refused");
+        }
+        switch (reason) {
+            case "identity_bound_elsewhere":
+                return i18n("panel_outcome_refused_identity_bound_elsewhere");
+            case "game_login_required":
+                return i18n("panel_outcome_refused_game_login_required");
+            case "link_not_permitted":
+                return i18n("panel_outcome_refused_link_not_permitted");
+            case "too_many_attempts":
+                return i18n("panel_outcome_refused_too_many_attempts");
+            default:
+                return i18n("panel_outcome_refused");
+        }
+    }
+
+    private static void sendPanelMessage(Player player, String message) {
+        if (player.isOnline()) {
+            player.sendMessage(ChatColor.translateAlternateColorCodes('&', message));
+        }
+    }
+
+    private static String stringOrNull(JsonObject object, String key) {
+        return object.has(key) && object.get(key).isJsonPrimitive() ? object.get(key).getAsString() : null;
     }
 
     /**
@@ -1729,12 +2000,13 @@ public class LoginService {
      * @param player the online player the poll was running for
      * @param requestId the exact pending request id this poll was started for
      * @param isServerOwner whether the confirmed panel session reported server-owner status
+     * @param proof the completion's proof on a credentialed link, else {@code null}
      */
-    private void handlePanelPollCompleted(Player player, String requestId, boolean isServerOwner) {
+    private void handlePanelPollCompleted(Player player, String requestId, boolean isServerOwner, String proof) {
         if (!player.isOnline()) {
             return;
         }
-        completePanelLogin(requestId, isServerOwner);
+        completePanelLogin(requestId, isServerOwner, proof);
     }
 
     /**
@@ -1755,15 +2027,44 @@ public class LoginService {
      * @return true if the player was successfully logged in
      */
     public boolean completePanelLogin(String requestId, boolean isServerOwner) {
+        return completePanelLogin(requestId, isServerOwner, null);
+    }
+
+    /**
+     * Handle a panel login completion, with the proof the Worker reported for a credentialed link
+     * (Phase 18 magic-link contract, sections 7 and 13).
+     * <p>
+     * Proof {@code web_registration} (proof 3: a brand-new name registered on the web) creates the
+     * UltiLogin account with an empty password hash when the player has none, then logs them in and
+     * hints once at {@code /setpassword}. It never overwrites an account: if one exists by the time
+     * this runs -- the player registered in game while the web page was open, a niche interleaving --
+     * the account is left exactly as it is and the player is logged in as for {@code bound_account}.
+     * The existence check and the insert both run here on the main thread, as {@code /register} does,
+     * so they cannot interleave with it. The operator's {@code max-register-per-ip} limit applies to a
+     * web registration as it does to {@code /register}.
+     * <p>
+     * Every other proof keeps the registered-only refusal: without an account the player is told they
+     * are not registered in game and nobody is logged in.
+     *
+     * @param requestId the request ID
+     * @param isServerOwner whether the user is a server owner
+     * @param proof the reported proof ({@code in_game_login}, {@code bound_account},
+     *              {@code web_registration}), or {@code null} when none is trusted
+     * @return true if the player was successfully logged in
+     */
+    public boolean completePanelLogin(String requestId, boolean isServerOwner, String proof) {
         UUID playerUuid = pendingPanelRequests.get(requestId);
         if (playerUuid == null) {
             return false;
         }
 
-        cleanupPanelRequest(requestId);
+        // Removed without resuming the countdown yet: a successful login below clears the pause
+        // (completeLogin), and only a refusal resumes it.
+        removePanelRequest(requestId);
 
         Player player = Bukkit.getPlayer(playerUuid);
         if (player == null || !player.isOnline()) {
+            syncPanelPause(playerUuid);
             return false;
         }
 
@@ -1773,8 +2074,30 @@ public class LoginService {
         // invalidateSession's cancellation reached it (or, in the future, through some other
         // path that never calls invalidateSession). Refuse to grant the login rather than trust
         // that the account still exists just because a pending request for it does.
-        if (!isRegistered(playerUuid)) {
-            return false;
+        boolean webRegistered = false;
+        boolean accountReady = false;
+        try {
+            if (!isRegistered(playerUuid)) {
+                if (!"web_registration".equals(proof)) {
+                    syncPanelPause(playerUuid);
+                    sendPanelMessage(player, i18n("panel_not_registered_in_game"));
+                    return false;
+                }
+                if (!createWebRegisteredAccount(player)) {
+                    syncPanelPause(playerUuid);
+                    return false;
+                }
+                webRegistered = true;
+            }
+            accountReady = true;
+        } finally {
+            // The request is already gone and its poll stopped, so nothing else would end the pause:
+            // a database call that throws here (one failed lookup or insert) must still resume the
+            // countdown with the time that remained. A refusal above has resumed it already, and a
+            // second call changes nothing.
+            if (!accountReady) {
+                syncPanelPause(playerUuid);
+            }
         }
 
         // Complete the login
@@ -1785,6 +2108,9 @@ public class LoginService {
             ? i18n("panel_auth_success_owner")
             : i18n("panel_auth_success_player");
         player.sendMessage(ChatColor.translateAlternateColorCodes('&', message));
+        if (webRegistered) {
+            sendPanelMessage(player, i18n("panel_web_registration_hint"));
+        }
 
         // Update account last login
         AccountData account = getAccount(playerUuid);
@@ -1806,6 +2132,22 @@ public class LoginService {
     }
 
     /**
+     * Create the account of a player who registered on the web: the row {@code /register} creates,
+     * with an empty password hash and salt. Only called when the player has no account.
+     *
+     * @return {@code false} when the operator's per-address registration limit is reached
+     */
+    private boolean createWebRegisteredAccount(Player player) {
+        String ip = getPlayerIp(player);
+        if (config.getMaxRegisterPerIp() > 0 && countRegistrationsByIp(ip) >= config.getMaxRegisterPerIp()) {
+            player.sendMessage(ChatColor.RED + i18n("ip_limit_reached"));
+            return false;
+        }
+        dataOperator.insert(newAccountRow(player, "", "", ip));
+        return true;
+    }
+
+    /**
      * Check if a player has a pending panel login request.
      */
     public boolean hasPendingPanelRequest(UUID playerUuid) {
@@ -1816,23 +2158,119 @@ public class LoginService {
      * Clean up a panel request.
      */
     private void cleanupPanelRequest(String requestId) {
-        pendingPanelRequests.remove(requestId);
+        UUID owner = removePanelRequest(requestId);
+        if (owner != null) {
+            syncPanelPause(owner);
+        }
+    }
+
+    /**
+     * Forget a panel request without touching the login-timeout pause.
+     *
+     * @return the player the request belonged to, or {@code null} if it was not pending
+     */
+    private UUID removePanelRequest(String requestId) {
         pendingPanelTimestamps.remove(requestId);
+        panelRequestTransports.remove(requestId);
+        reportedCancelledPanelRequests.remove(requestId);
+        return pendingPanelRequests.remove(requestId);
+    }
+
+    /**
+     * Whether any of the player's pending requests holds the login countdown: pending, and not
+     * reported cancelled by the web (contract section 13).
+     */
+    private boolean holdsLoginTimeout(UUID playerUuid) {
+        for (Map.Entry<String, UUID> entry : pendingPanelRequests.entrySet()) {
+            if (entry.getValue().equals(playerUuid) && !reportedCancelledPanelRequests.contains(entry.getKey())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Bring the player's login-timeout pause in line with their pending requests.
+     * <p>
+     * Pauses when a request holds the countdown and the player is still counting down (has not
+     * logged in); resumes when none holds any more, moving the join time forward by the paused span
+     * so the countdown continues with exactly the time that remained -- never an immediate kick,
+     * never a fresh full timeout. Says "resumed" only to a player who was told it paused.
+     */
+    private void syncPanelPause(UUID playerUuid) {
+        boolean resumedAnnounced = false;
+        synchronized (panelPauseLock) {
+            boolean holds = holdsLoginTimeout(playerUuid);
+            Long pausedAt = panelPausedAt.get(playerUuid);
+            if (holds && pausedAt == null) {
+                if (joinTimes.containsKey(playerUuid)) {
+                    panelPausedAt.put(playerUuid, clock.getAsLong());
+                }
+            } else if (!holds && pausedAt != null) {
+                panelPausedAt.remove(playerUuid);
+                long pausedFor = clock.getAsLong() - pausedAt;
+                joinTimes.computeIfPresent(playerUuid, (uuid, joinedAt) -> joinedAt + pausedFor);
+                resumedAnnounced = panelPauseAnnounced.remove(playerUuid);
+            }
+        }
+        if (resumedAnnounced) {
+            Player player = Bukkit.getPlayer(playerUuid);
+            if (player != null) {
+                sendPanelMessage(player, i18n("panel_timeout_resumed"));
+            }
+        }
+    }
+
+    /** Tell a paused player, once per pause, that the countdown waits for the web link. */
+    private void announcePanelPause(Player player) {
+        boolean announce;
+        synchronized (panelPauseLock) {
+            UUID uuid = player.getUniqueId();
+            announce = panelPausedAt.containsKey(uuid) && panelPauseAnnounced.add(uuid);
+        }
+        if (announce) {
+            sendPanelMessage(player, i18n("panel_timeout_paused"));
+        }
+    }
+
+    /** End a player's pause without resuming anything: they logged in or left. */
+    private void clearPanelPause(UUID playerUuid) {
+        synchronized (panelPauseLock) {
+            panelPausedAt.remove(playerUuid);
+            panelPauseAnnounced.remove(playerUuid);
+        }
     }
 
     /**
      * Clean up expired panel requests (older than 5 minutes).
      */
     public void cleanupExpiredPanelRequests() {
-        long now = System.currentTimeMillis();
+        long now = clock.getAsLong();
         long expiry = 5 * 60 * 1000L; // 5 minutes
-        pendingPanelTimestamps.entrySet().removeIf(entry -> {
+        java.util.List<String> expired = new java.util.ArrayList<>();
+        for (Map.Entry<String, Long> entry : pendingPanelTimestamps.entrySet()) {
             if (now - entry.getValue() > expiry) {
-                pendingPanelRequests.remove(entry.getKey());
-                return true;
+                expired.add(entry.getKey());
             }
-            return false;
-        });
+        }
+        for (String requestId : expired) {
+            UUID owner = pendingPanelRequests.get(requestId);
+            // Tell the player when this was the link being polled for them (or nothing is being
+            // polled any more): an older link a newer /panel superseded expires silently.
+            String polled = owner == null ? null : currentPollingRequestId.get(owner);
+            boolean tell = owner != null && (polled == null || polled.equals(requestId));
+            if (owner != null) {
+                stopOwnPoll(owner, requestId);
+            }
+            removePanelRequest(requestId);
+            if (owner != null) {
+                Player player = Bukkit.getPlayer(owner);
+                if (tell && player != null) {
+                    sendPanelMessage(player, i18n("panel_outcome_expired"));
+                }
+                syncPanelPause(owner);
+            }
+        }
     }
 
     /**
@@ -1843,6 +2281,21 @@ public class LoginService {
         private final String url;
         private final String error;
         private final String requestId;
+        private final Failure failure;
+
+        /**
+         * Why a link was not published, so {@code /panel} can tell the player the right thing.
+         */
+        public enum Failure {
+            /** The link was published. */
+            NONE,
+            /** Any failure without a message of its own. */
+            GENERIC,
+            /** The Worker refused the server's UltiCloud credential (401 or 403); not retried anonymously. */
+            CREDENTIAL_REFUSED,
+            /** The framework helper could not complete the request; not retried anonymously. */
+            LINK_ERROR
+        }
 
         public PanelLinkResult(boolean success, String url, String error) {
             this(success, url, error, null);
@@ -1858,10 +2311,18 @@ public class LoginService {
          *                  result, since there is nothing to poll for.
          */
         public PanelLinkResult(boolean success, String url, String error, String requestId) {
+            this(success, url, error, requestId, success ? Failure.NONE : Failure.GENERIC);
+        }
+
+        /**
+         * @param failure why the link was not published ({@link Failure#NONE} for a published link)
+         */
+        public PanelLinkResult(boolean success, String url, String error, String requestId, Failure failure) {
             this.success = success;
             this.url = url;
             this.error = error;
             this.requestId = requestId;
+            this.failure = failure;
         }
 
         public boolean isSuccess() {
@@ -1878,6 +2339,10 @@ public class LoginService {
 
         public String getRequestId() {
             return requestId;
+        }
+
+        public Failure getFailure() {
+            return failure;
         }
     }
 

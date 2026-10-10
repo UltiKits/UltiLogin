@@ -7,6 +7,7 @@ import com.ultikits.plugins.login.gui.LoginGUIPage;
 import com.ultikits.plugins.login.gui.RegisterGUIPage;
 import com.ultikits.plugins.login.service.LoginService;
 
+import org.bukkit.ChatColor;
 import org.bukkit.Server;
 import org.bukkit.entity.Player;
 import org.bukkit.event.block.BlockBreakEvent;
@@ -1299,6 +1300,24 @@ class LoginProtectionListenerTest {
         }
 
         @Test
+        @DisplayName("F3: should not open the number pad for an account created on the web (no game password)")
+        void skipsNumberPadForWebAccount() {
+            Runnable task = captureDelayedTask();
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
+            when(loginService.hasValidSession(player)).thenReturn(false);
+            when(loginService.isRegistered(playerUuid)).thenReturn(true);
+            when(loginService.hasNoGamePassword(playerUuid)).thenReturn(true);
+
+            try (MockedStatic<LoginGUIPage> loginGui = mockStatic(LoginGUIPage.class);
+                 MockedStatic<RegisterGUIPage> registerGui = mockStatic(RegisterGUIPage.class)) {
+                task.run();
+
+                loginGui.verifyNoInteractions();
+                registerGui.verifyNoInteractions();
+            }
+        }
+
+        @Test
         @DisplayName("Should open the register GUI for an unregistered player once the delayed task runs")
         void opensRegisterGuiForUnregistered() {
             Runnable task = captureDelayedTask();
@@ -1388,6 +1407,24 @@ class LoginProtectionListenerTest {
                 loginGui.verify(() -> LoginGUIPage.open(player, UltiLoginTestHelper.getMockPlugin(), loginService));
                 registerGui.verifyNoInteractions();
             }
+        }
+
+        @Test
+        @DisplayName("F3: an account created on the web gets the /panel hint instead of the number pad")
+        void webAccountGetsPanelHintInsteadOfNumberPad() {
+            Runnable task = captureReopenTask();
+            when(loginService.isRegistered(playerUuid)).thenReturn(true);
+            when(loginService.hasNoGamePassword(playerUuid)).thenReturn(true);
+            when(loginService.i18n("login_no_game_password")).thenReturn("&cUse /panel, then /setpassword");
+
+            try (MockedStatic<LoginGUIPage> loginGui = mockStatic(LoginGUIPage.class);
+                 MockedStatic<RegisterGUIPage> registerGui = mockStatic(RegisterGUIPage.class)) {
+                task.run();
+
+                loginGui.verifyNoInteractions();
+                registerGui.verifyNoInteractions();
+            }
+            verify(player).sendMessage(ChatColor.translateAlternateColorCodes('&', "&cUse /panel, then /setpassword"));
         }
 
         @Test

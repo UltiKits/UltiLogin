@@ -174,6 +174,11 @@ public class LoginProtectionListener implements Listener {
                     }
                     
                     if (loginService.isRegistered(player.getUniqueId())) {
+                        // An account created on the web has no game password: no number pad; the
+                        // join prompt already pointed the player at /panel.
+                        if (loginService.hasNoGamePassword(player.getUniqueId())) {
+                            return;
+                        }
                         LoginGUIPage.open(player, plugin, loginService);
                     } else {
                         RegisterGUIPage.open(player, plugin, loginService);
@@ -620,6 +625,14 @@ public class LoginProtectionListener implements Listener {
             dispatchOnMainThread(player, plugin, bukkitPlugin, () -> {
                 if (player.isOnline() && !loginService.isLoggedIn(player.getUniqueId())) {
                     UUID uuid = player.getUniqueId();
+                    // An account created on the web has no game password, so the number pad can
+                    // never succeed and would keep the player from typing /panel: tell them to
+                    // log in with /panel instead (maintainer decision 2026-10-09).
+                    if (loginService.isRegistered(uuid) && loginService.hasNoGamePassword(uuid)) {
+                        player.sendMessage(ChatColor.translateAlternateColorCodes('&',
+                            loginService.i18n("login_no_game_password")));
+                        return;
+                    }
                     // Mark this player as mid-transition before opening the new credential GUI.
                     // In real Bukkit, opening a new inventory implicitly closes whatever the
                     // player currently has open, which runs that GUI's own onClose reopen hook

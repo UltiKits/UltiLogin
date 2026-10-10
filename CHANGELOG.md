@@ -7,7 +7,93 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `/setpassword <new> <confirm>` (alias `/setpw`) sets the first game password of an account created on the web
+  through `/panel`. It works only while the player is logged in and the account has no game password, and it follows
+  the same password rules as `/register`; afterwards `/login` works with it. An account that already has a password
+  is told to use `/changepassword`.
+- `/setpassword <新密码> <确认>`（别名 `/setpw`）为通过 `/panel` 在网页上创建的账号设置第一个游戏密码。仅在玩家已登录且账号没有
+  游戏密码时可用，密码规则与 `/register` 相同；之后即可用 `/login` 登录。已有密码的账号会被提示使用 `/changepassword`。
+
+- A web registration counts as an UltiLogin registration. When a player whose name has no UltiLogin account on this
+  server creates a new UltiKits account on the `/panel` page, the game creates their UltiLogin account without a game
+  password, logs them in and tells them once to set one with `/setpassword`. `/login` refuses such an account, whatever
+  is typed, until a game password is set, and the refused try is not counted as a wrong password. If the player
+  registers in game first, that account is kept untouched. A `max-register-per-ip` limit, when set, applies to it too.
+  With `gui-mode.enabled: true` such an account is never shown the number pad, which no digits could satisfy: on
+  joining and at every re-prompt the player is told to log in with `/panel` and then set a game password.
+- 网页注册视同 UltiLogin 注册。名字在本服务器上没有 UltiLogin 账号的玩家在 `/panel` 页面上新建 UltiKits 账号后，游戏会为其创建
+  一个没有游戏密码的 UltiLogin 账号、让其登录，并提示一次用 `/setpassword` 设置游戏密码。在设置游戏密码之前，无论输入什么
+  `/login` 都会拒绝该账号，且不计为密码错误。若玩家先在游戏内注册，则保留该账号不变。设置了 `max-register-per-ip` 时同样适用。
+  在 `gui-mode.enabled: true` 下，这样的账号不会弹出任何数字都无法通过的数字键盘：进入服务器及每次再次提示时，玩家都会被告知
+  用 `/panel` 登录，然后设置游戏密码。
+
+- Every web outcome of a `/panel` link is shown in game: cancelled on the page, refused by the web (with the reason),
+  expired, signed in, or the server's UltiCloud credential refused (also logged to the console). While a player who
+  has not logged in holds a pending link, the login countdown is paused; it resumes with the time that was left when
+  the link is cancelled, refused or expires, never with a fresh full timeout. The other restrictions stay. A player who
+  leaves the server loses their pending links, so a sign-in completed on the web after they left logs nobody in.
+- `/panel` 链接在网页上的每种结果都会在游戏内显示：网页取消、网页拒绝（附原因）、链接过期、登录成功，或服务器的 UltiCloud 凭据被
+  拒绝（同时写入控制台）。未登录的玩家持有待处理链接期间，登录倒计时暂停；链接被取消、拒绝或过期后，按暂停时剩余的时间继续，
+  绝不重新计满。其他限制保持不变。玩家离开服务器后其待处理链接作废，
+  此后在网页上完成的登录不会让任何人登录。
+
 ### Changed
+
+- **`/panel` now needs the account password or a remembered device once the new UltiCloud panel is live.** The link
+  is created with the server's own UltiCloud credential (through UltiTools 6.3.0's authenticated request helper) and
+  tells the web whether the player is logged in in game and whether the name has an UltiLogin account. Opening the
+  link no longer logs the player in by itself: the page asks for the password of the account the game name is linked
+  to, a device that account told it to remember (one click), a confirmation by a signed-in account (only for a player
+  logged in in game), or a new account (only for a name without an UltiLogin account). A name with an UltiLogin
+  account that is neither logged in in game nor linked is refused until the player runs `/login` once. A server that
+  is not signed in to UltiCloud falls back to a link without the credential, which can only sign in to an account the
+  name is already linked to; a refused credential (HTTP 401/403) is reported and never retried without it. Older
+  UltiLogin versions keep working under those restricted rules until the old path is switched off some time after
+  this release.
+- **新 UltiCloud 面板上线后，`/panel` 需要账号密码或已记住的设备。** 链接使用服务器自己的 UltiCloud 凭据创建（通过 UltiTools 6.3.0
+  的带认证请求助手），并告知网页玩家是否已在游戏内登录、该名字是否有 UltiLogin 账号。仅打开链接不再让玩家登录：网页会要求输入
+  游戏名所关联账号的密码、该账号让其记住的设备（点击一次）、已登录账号的确认（仅限已在游戏内登录的玩家），或新建账号（仅限没有
+  UltiLogin 账号的名字）。有 UltiLogin 账号、但既未在游戏内登录也未关联的名字会被拒绝，直到玩家执行一次 `/login`。未登录 UltiCloud
+  的服务器会退回到不带凭据的链接，只能登录到名字已关联的账号；凭据被拒绝（HTTP 401/403）时会提示，且绝不改用不带凭据的请求重试。
+  旧版 UltiLogin 在这些受限规则下仍可使用，直到旧路径在本版本发布后的某个时间关闭。
+
+- This version requires UltiTools 6.3.0 or later, including its authenticated request helper (`UltiCloudRequests`),
+  and declares `api-version: 630` in `plugin.yml` (it was `621`; the last release, 1.0.0, declared `620`). Raising
+  `api-version` makes the next published version of this module a major change; its number is decided when it is
+  released. Every earlier framework checks this value and refuses the module with a warning that the UltiTools
+  version is outdated, naming it `UltiLogin`; the module's own start-up (`registerSelf`) does not run. An error about
+  a class those versions do not have (this module uses `UltiCloudRequests`, added in 6.3.0) may be logged first, and
+  on 6.2.1–6.2.4, which check only after building the module's components, it may take the warning's place. The
+  README now states UltiTools 6.3.0+, Paper 1.21+ and Java 21+, and that a new module jar needs a server restart
+  (`/ul reload` does not load it) (UltiKits/UltiTools-Reborn#544).
+- 本版本需要 UltiTools 6.3.0 或更高版本（包括其带认证请求助手 `UltiCloudRequests`），并在 `plugin.yml` 中声明 `api-version: 630`
+  （原为 `621`；上一个发布版本 1.0.0 声明的是 `620`）。提高 `api-version` 使本模块下一个发布版本成为主版本变更；具体版本号在发布时
+  决定。所有更早的框架都会检查该值并拒绝加载本模块，给出点名 `UltiLogin` 的"UltiTools 版本过旧"警告；本模块自身的启动逻辑
+  （`registerSelf`）不会运行。可能先记录一条缺少类的错误（本模块使用 6.3.0 新增的 `UltiCloudRequests`）；6.2.1–6.2.4 在构建模块
+  组件之后才检查，该错误可能取代警告。README 现写明 UltiTools 6.3.0+、Paper 1.21+ 与 Java 21+，以及新的模块 JAR 需要重启服务器
+  （`/ul reload` 不会加载它）（UltiKits/UltiTools-Reborn#544）。
+
+- `plugin.yml` now declares `identify-string: ultilogin`, the key of this module's entry in the UltiCloud catalogue.
+  The framework's update check and `/upm update` skip a module that does not declare it, so this module now takes part
+  in both: a later published version carrying the same key is reported at startup and can be installed with
+  `/upm update` (UltiKits/UltiTools-Reborn#474).
+- `plugin.yml` 现在声明 `identify-string: ultilogin`，即本模块在 UltiCloud 模块目录中的条目键。框架的更新检查和 `/upm update`
+  会跳过未声明该键的模块，因此本模块现在会参与两者：带有同一键的更高发布版本会在启动时提示，并可用 `/upm update` 安装
+  （UltiKits/UltiTools-Reborn#474）。
+
+- `max-register-per-ip` in `config/login.yml` now ships as `0` (no per-IP registration limit) instead of `3`. Many
+  players can share one public IP address (carrier-grade NAT, common in mainland China and on mobile and campus
+  networks), so a limit can stop legitimate players from registering; the comment above the key now says so. Only a
+  file without the key gets the new default: a value already in your file, including `3`, is kept, and only the comment
+  earlier versions wrote above it is replaced. When you set a limit, it also applies to an account created on the web
+  through `/panel`: the web page reports the registration, but the game refuses the account and the player sees the
+  IP-limit message.
+- `config/login.yml` 中的 `max-register-per-ip` 出厂值由 `3` 改为 `0`（不限制同一 IP 的注册数）。许多玩家可能共用同一个公网
+  IP（运营商级 NAT，在中国大陆以及移动网络、校园网中很常见），限制可能导致正常玩家无法注册；该键上方的注释现已写明这一点。
+  只有缺少该键的文件才写入新默认值：文件中已有的值（包括 `3`）保持不变，只替换旧版本写在其上方的注释。设置限制后，它同样
+  适用于通过 `/panel` 在网页上创建的账号：网页会显示注册成功，但游戏内拒绝创建账号，玩家会看到 IP 上限提示。
 
 - `allowed-commands: []` (or `~`) in `config/login.yml` no longer refuses every command to a player who has not
   logged in. The setting is declared `@NotEmpty`, and from UltiTools 6.3.0 the framework treats an empty value of such a
