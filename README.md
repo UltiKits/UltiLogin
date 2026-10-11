@@ -162,6 +162,10 @@ UltiCloud 凭据被拒绝（同时写入控制台）。
   时间内从该 IP 以尚未关联的名字进入，就可能把它关联到自己的账号。此类服务器请关闭会话（`session-enabled: false`），或尽早关联
   自己的名字。
 
+UltiLogin requires Minecraft 1.21 or later (Paper 1.21+), even though the UltiTools-API 6.3.0 framework itself runs on Paper 1.19.2 build 163 or later. On Paper 1.19.2–1.20.6, the module can load, but the registration GUI and login-protection inventory handling fail with `IncompatibleClassChangeError`: `InventoryView` became an interface in Minecraft 1.21, and framework-loaded modules do not receive Paper's bytecode rewriting. Run this module on Paper 1.21 or later. Backward compatibility is tracked in [UltiKits/UltiTools-Reborn#655](https://github.com/UltiKits/UltiTools-Reborn/issues/655).
+
+UltiLogin 需要 Minecraft 1.21 或更高版本（Paper 1.21+），即使 UltiTools-API 6.3.0 框架本身可运行于 Paper 1.19.2 build 163 或更高版本。在 Paper 1.19.2–1.20.6 上，模块可能成功加载，但注册界面和登录保护中的物品栏处理会出现 `IncompatibleClassChangeError`：`InventoryView` 在 Minecraft 1.21 中由类变为接口，而由框架加载的模块不会经过 Paper 的字节码改写。请在 Paper 1.21 或更高版本上运行本模块。向下兼容工作由 [UltiKits/UltiTools-Reborn#655](https://github.com/UltiKits/UltiTools-Reborn/issues/655) 跟踪。
+
 ## 配置文件
 
 配置文件位于 `plugins/UltiTools/config/login.yml`
