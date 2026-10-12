@@ -209,5 +209,7 @@
   "login_config_comment_email_max_accounts_per_email": "每个邮箱最多绑定账号数",
   "login_config_comment_email_reward_enabled": "启用绑定邮箱奖励",
   "login_config_comment_email_reward_commands": "绑定奖励命令（%player% 替换为玩家名）",
-  "log_account_row_gone": "已存储的账号记录已不存在，未写入任何内容"
+  "log_account_row_gone": "已存储的账号记录已不存在，未写入任何内容",
+  "log_password_filter_unavailable": "无法安装用于遮蔽 /login、/register 等密码命令的服务器日志过滤器（{REASON}）；在安装成功之前，这些命令行会以明文写入控制台和 logs/latest.log。",
+  "log_password_filter_removal_failed": "无法移除用于遮蔽密码命令的服务器日志过滤器（{REASON}）。"
 }

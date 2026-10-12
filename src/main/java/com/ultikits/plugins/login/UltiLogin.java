@@ -3,6 +3,8 @@ package com.ultikits.plugins.login;
 import com.ultikits.plugins.login.config.ConfigTextDefaults;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.config.RemovedConfigKeys;
+import com.ultikits.plugins.login.logging.PasswordCommandMask;
+import com.ultikits.plugins.login.logging.PasswordLogFilterInstaller;
 import com.ultikits.plugins.login.util.Placeholders;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
@@ -25,6 +27,11 @@ import java.io.IOException;
  * {@code login.yml} into {@code LoginConfig} (UltiKits/UltiLogin#13, #29). The {@link #onReload()}
  * hook adds only the removed-key warning (UltiKits/UltiLogin#23).
  * </p>
+ * <p>
+ * On enable the module installs a filter on the server's Log4j root logger that masks the
+ * arguments of its password commands in the console, {@code logs/latest.log} and the framework's
+ * panel log mirror ({@link PasswordLogFilterInstaller}); {@link #onUnregister()} removes it.
+ * </p>
  *
  * @author wisdomme
  * @version 1.0.0
@@ -35,6 +42,7 @@ public class UltiLogin extends UltiToolsPlugin {
     @Override
     public boolean registerSelf() {
         getLogger().info(i18n("login_enabled"));
+        installPasswordLogFilter();
         // Deleting a key from LoginConfig does nothing to the operator's existing file, so tell
         // them about any key this version no longer reads (UltiKits/UltiLogin#23).
         warnAboutRemovedConfigKeys();
@@ -53,6 +61,30 @@ public class UltiLogin extends UltiToolsPlugin {
         warnAboutRemovedConfigKeys();
         warnAboutUnusableLockoutType();
         writeConfigTextInServerLanguage();
+    }
+
+    /**
+     * Removes the password log filter, so a disabled module leaves no filter behind and the next
+     * enable installs exactly one again. Runs before the framework unregisters this module's commands.
+     */
+    @Override
+    protected void onUnregister() {
+        String problem = PasswordLogFilterInstaller.uninstall();
+        if (problem != null) {
+            getLogger().warn(Placeholders.fill(i18n("log_password_filter_removal_failed"), "{REASON}", problem));
+        }
+    }
+
+    /**
+     * Masks the password arguments of this module's commands in the server log (Paper logs every
+     * player command line). A server without a usable Log4j Core gets a warning and runs unmasked,
+     * as before this filter existed; the module itself still enables.
+     */
+    private void installPasswordLogFilter() {
+        String problem = PasswordLogFilterInstaller.install(PasswordCommandMask.forModuleCommands());
+        if (problem != null) {
+            getLogger().warn(Placeholders.fill(i18n("log_password_filter_unavailable"), "{REASON}", problem));
+        }
     }
 
     /**

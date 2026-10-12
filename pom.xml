@@ -56,6 +56,17 @@
             <version>1.18.30</version>
             <scope>provided</scope>
         </dependency>
+        <!-- Log4j Core, provided by the Paper server at runtime and never shaded. The password log
+             filter (logging/Log4jPasswordFilter) sits on Log4j's root logger configuration, where
+             Paper's player command lines and UltiTools-API's console mirror both pass. Same
+             coordinates as UltiTools-API's own pom; Paper 1.21.11 ships 2.25.2, and only
+             long-stable Log4j 2 API is used. -->
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-core</artifactId>
+            <version>2.24.1</version>
+            <scope>provided</scope>
+        </dependency>
 
         <!-- Test dependencies -->
         <!-- UltiTools-API's own VaultAPI dependency is <scope>provided</scope>, and provided-scope

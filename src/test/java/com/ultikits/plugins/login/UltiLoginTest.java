@@ -1,5 +1,6 @@
 package com.ultikits.plugins.login;
 
+import com.ultikits.plugins.login.logging.PasswordLogFilterInstaller;
 import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 
 import org.junit.jupiter.api.*;
@@ -23,6 +24,8 @@ class UltiLoginTest {
     @AfterEach
     void tearDown() throws Exception {
         UltiLoginTestHelper.tearDown();
+        // registerSelf() installs the password log filter in this JVM's Log4j context.
+        PasswordLogFilterInstaller.uninstall();
     }
 
     @Test
@@ -51,8 +54,12 @@ class UltiLoginTest {
      * Rewritten for UltiKits/UltiLogin#23: an {@code onReload()} hook now exists, and its only work
      * is the removed-key warning (see {@link RemovedKeyCheckWiring}) -- so that an operator who edits
      * the dead {@code messages.wrong-password} and runs {@code /ul reload UltiLogin} is told it has
-     * no effect. The unload hook is still absent: nothing is unloaded that the framework does not
-     * already unload.
+     * no effect.
+     * <p>
+     * Rewritten again for the password log filter: the module now has unload work of its
+     * own, removing the Log4j filter it installed on enable, so it declares the {@code onUnregister()}
+     * hook -- the hook, never the final template method. {@code PasswordLogFilterWiring} guards what
+     * the hook does.
      */
     @Nested
     @DisplayName("Lifecycle template methods (UltiKits/UltiLogin#29)")
@@ -66,10 +73,10 @@ class UltiLoginTest {
         }
 
         @Test
-        @DisplayName("declares no onUnregister() hook, because the unload override was log-only")
-        void declaresNoUnloadHook() {
+        @DisplayName("declares the onUnregister() hook, which removes the password log filter")
+        void declaresTheUnloadHook() {
             assertThat(declaredMethodNames())
-                    .doesNotContain("onUnregister");
+                    .contains("onUnregister");
         }
 
         private List<String> declaredMethodNames() {
@@ -308,6 +315,92 @@ class UltiLoginTest {
                     .getOrDefault("log_removed_key_check_failed", "<lang/zh has no log_removed_key_check_failed>")
                     .replace("{FILE}", com.ultikits.plugins.login.config.LoginConfig.CONFIG_FILE);
             verify(logger).warn(any(Throwable.class), org.mockito.ArgumentMatchers.eq(expected));
+        }
+    }
+
+    /**
+     * enabling the module installs the password log filter on Log4j's root logger and
+     * unloading it removes the filter, so an unload leaves none behind and a re-enable never stacks
+     * two. A failed install warns and never costs the module its enable.
+     */
+    @Nested
+    @DisplayName("the password log filter is installed on enable and removed on unload")
+    class PasswordLogFilterWiring {
+
+        private PluginLogger logger;
+
+        private UltiLogin plugin() {
+            UltiLogin plugin = mock(UltiLogin.class);
+            logger = mock(PluginLogger.class);
+            when(plugin.getLogger()).thenReturn(logger);
+            when(plugin.i18n(anyString())).thenAnswer(com.ultikits.plugins.login.i18n.CatalogueText.answer("en"));
+            when(plugin.registerSelf()).thenCallRealMethod();
+            doCallRealMethod().when(plugin).onUnregister();
+            return plugin;
+        }
+
+        @Test
+        @DisplayName("enable installs exactly one filter, and unload removes it")
+        void enableInstallsUnloadRemoves() {
+            UltiLogin plugin = plugin();
+
+            assertThat(plugin.registerSelf()).isTrue();
+            assertThat(PasswordLogFilterInstaller.isInstalled()).isTrue();
+            assertThat(com.ultikits.plugins.login.logging.Log4jTestSupport.passwordFiltersOnRoot()).isEqualTo(1);
+
+            plugin.onUnregister();
+
+            assertThat(PasswordLogFilterInstaller.isInstalled()).isFalse();
+            assertThat(com.ultikits.plugins.login.logging.Log4jTestSupport.passwordFiltersOnRoot()).isZero();
+            verify(logger, never()).warn(anyString());
+        }
+
+        @Test
+        @DisplayName("enable, unload, enable leaves exactly one filter; two enables in a row never stack")
+        void reEnableNeverStacks() {
+            UltiLogin plugin = plugin();
+
+            plugin.registerSelf();
+            plugin.onUnregister();
+            plugin.registerSelf();
+            plugin.registerSelf();
+
+            assertThat(com.ultikits.plugins.login.logging.Log4jTestSupport.passwordFiltersOnRoot()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("a failed install warns with the reason, and the module still enables")
+        void failedInstallWarns() {
+            UltiLogin plugin = plugin();
+            try (org.mockito.MockedStatic<PasswordLogFilterInstaller> installer =
+                         mockStatic(PasswordLogFilterInstaller.class)) {
+                installer.when(() -> PasswordLogFilterInstaller.install(any())).thenReturn("Log4j Core is missing");
+
+                assertThat(plugin.registerSelf()).isTrue();
+            }
+
+            ArgumentCaptor<String> warning = ArgumentCaptor.forClass(String.class);
+            verify(logger).warn(warning.capture());
+            assertThat(warning.getValue())
+                    .contains("Log4j Core is missing")
+                    .contains("plain text")
+                    .doesNotContain("{REASON}");
+        }
+
+        @Test
+        @DisplayName("a failed removal warns with the reason")
+        void failedRemovalWarns() {
+            UltiLogin plugin = plugin();
+            try (org.mockito.MockedStatic<PasswordLogFilterInstaller> installer =
+                         mockStatic(PasswordLogFilterInstaller.class)) {
+                installer.when(PasswordLogFilterInstaller::uninstall).thenReturn("root logger is gone");
+
+                plugin.onUnregister();
+            }
+
+            ArgumentCaptor<String> warning = ArgumentCaptor.forClass(String.class);
+            verify(logger).warn(warning.capture());
+            assertThat(warning.getValue()).contains("root logger is gone").doesNotContain("{REASON}");
         }
     }
 }
