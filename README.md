@@ -151,6 +151,17 @@ UltiCloud 凭据被拒绝（同时写入控制台）。
   name to an UltiKits account on the web. On an offline-mode server where players share a public IP, someone else
   joining under a name that is not linked yet, from that IP, within that window, could link it to their own account.
   On such a server turn sessions off (`session-enabled: false`) or link your name early.
+- **A password reset sent from the panel's remote console is recorded in plain text.** UltiTools writes every command
+  the panel's remote console runs to the server log as `[Remote command] > <command>` and records it in its
+  remote-action audit log. `logadmin reset <player> <password>` sent that way therefore puts the password in the
+  console, `logs/latest.log`, the panel log stream and that audit log; UltiLogin's log filter (see "Passwords in the
+  server log" below) only covers the line Paper writes for a player's command. Reset passwords in game instead
+  (UltiKits/UltiLogin#57).
+- **A password reset run from the server console shows the new password in its reply.** `logadmin reset <player>`
+  (a generated password) and `logadmin reset <player> <password>` both reply with the new password, so the operator
+  can pass it on. Run from the server console or the panel's remote console, that reply is written to
+  `logs/latest.log` and mirrored to the panel log stream. Run the reset in game: the reply goes only to the operator
+  who ran it, and the command line itself is logged as `/logadmin reset ******` (UltiKits/UltiLogin#57).
 
 - **待处理的链接最多按其有效期暂停登录倒计时。** 未登录的玩家可以再次执行 `/panel` 让倒计时继续暂停，每个链接五分钟；暂停期间仍
   不能移动、聊天或执行未放行的命令。
@@ -161,6 +172,14 @@ UltiCloud 凭据被拒绝（同时写入控制台）。
   重进的玩家无需密码即被登录，随后可在网页上把该名字关联到 UltiKits 账号。在玩家共用公网 IP 的离线模式服务器上，他人若在这段
   时间内从该 IP 以尚未关联的名字进入，就可能把它关联到自己的账号。此类服务器请关闭会话（`session-enabled: false`），或尽早关联
   自己的名字。
+- **通过面板远程控制台发送的密码重置会以明文记录。** UltiTools 会把面板远程控制台执行的每条命令以
+  `[Remote command] > <命令>` 写入服务器日志，并记入其远程操作审计日志。因此以这种方式发送的
+  `logadmin reset <玩家> <密码>` 会把密码写入控制台、`logs/latest.log`、面板日志流和该审计日志；UltiLogin 的日志过滤器
+  （见下文"服务器日志中的密码"）只处理 Paper 为玩家命令写的那一行。请改为在游戏内重置密码（UltiKits/UltiLogin#57）。
+- **在服务器控制台执行的密码重置会在回复中显示新密码。** `logadmin reset <玩家>`（随机生成密码）和
+  `logadmin reset <玩家> <密码>` 都会在回复中给出新密码，以便管理员转告玩家。在服务器控制台或面板远程控制台执行时，这条回复
+  会写入 `logs/latest.log` 并同步到面板日志流。请在游戏内执行重置：回复只发给执行命令的管理员，命令行本身记录为
+  `/logadmin reset ******`（UltiKits/UltiLogin#57）。
 
 UltiLogin requires Minecraft 1.21 or later (Paper 1.21+), even though the UltiTools-API 6.3.0 framework itself runs on Paper 1.19.2 build 163 or later. On Paper 1.19.2–1.20.6, the module can load, but the registration GUI and login-protection inventory handling fail with `IncompatibleClassChangeError`: `InventoryView` became an interface in Minecraft 1.21, and framework-loaded modules do not receive Paper's bytecode rewriting. Run this module on Paper 1.21 or later. Backward compatibility is tracked in [UltiKits/UltiTools-Reborn#655](https://github.com/UltiKits/UltiTools-Reborn/issues/655).
 
@@ -306,6 +325,27 @@ them in Chinese.
 `UUID` 按账号计数并封禁，一个账号的封禁或输错密码不会算到同一地址上的其他账号头上；账号共用地址时请使用它。
 `BOTH` 两种计数都保留：地址的计数达到上限时封禁该地址，账号自己的计数达到上限时封禁该账号。
 配置文件中的注释跟随服务器的 `language`；上面的示例以中文显示。
+
+### Passwords in the server log / 服务器日志中的密码
+
+Paper writes every player command line to the console and `logs/latest.log`, and UltiTools-API 6.3.0 also mirrors the
+console to the UltiPanel log stream. While UltiLogin is enabled it keeps a filter on the server's log (Log4j's root
+logger) that replaces the arguments of its password commands with `******`: `/login`, `/l`, `/register`, `/reg`,
+`/changepassword`, `/changepw`, `/cpw`, `/setpassword`, `/setpw`, `/recover`, and `/logadmin reset` (also
+`/loginadmin reset`), in any letter case and with or without a namespace such as `ultitools:`. The console then shows
+`Steve issued server command: /login ******`, so a login attempt stays visible without its password. Other commands
+are logged unchanged (a command of another plugin with one of these names is masked too). The list comes from the
+commands' own declarations, so a new alias is covered automatically. The filter is removed when the module is
+unloaded. If the server's logging is not Log4j Core, the module logs a warning at start-up and these lines are not
+masked. Two cases the filter cannot cover are listed under "Known limitations" above.
+
+Paper 会把玩家输入的每条命令写入控制台和 `logs/latest.log`，UltiTools-API 6.3.0 还会把控制台同步到 UltiPanel 面板日志流。
+UltiLogin 启用期间会在服务器日志（Log4j 根日志器）上挂一个过滤器，把其密码类命令的参数替换为 `******`：`/login`、`/l`、
+`/register`、`/reg`、`/changepassword`、`/changepw`、`/cpw`、`/setpassword`、`/setpw`、`/recover` 以及 `/logadmin reset`
+（也包括 `/loginadmin reset`），不区分大小写，带或不带 `ultitools:` 之类的命名空间前缀均可。控制台上显示为
+`Steve issued server command: /login ******`，登录尝试仍然可见，但看不到密码。其他命令照常记录（其他插件中同名的命令也会被遮蔽）。
+命令列表取自命令本身的声明，新增别名会自动覆盖。模块卸载时过滤器随之移除。若服务器的日志系统不是 Log4j Core，模块会在启动时
+输出一条警告，这些命令行不会被遮蔽。过滤器无法覆盖的两种情况见上文"已知限制"。
 
 ### 会话保持
 

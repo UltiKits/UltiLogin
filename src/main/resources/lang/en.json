@@ -209,5 +209,7 @@
   "login_config_comment_email_max_accounts_per_email": "Maximum accounts that can be bound to one email address",
   "login_config_comment_email_reward_enabled": "Enable the reward for binding an email address",
   "login_config_comment_email_reward_commands": "Commands run as the binding reward (%player% is replaced with the player name)",
-  "log_account_row_gone": "The stored account row no longer exists, so nothing was written"
+  "log_account_row_gone": "The stored account row no longer exists, so nothing was written",
+  "log_password_filter_unavailable": "Could not install the server log filter that masks passwords in /login, /register and the other password commands ({REASON}); until it is installed, those command lines are written to the console and logs/latest.log in plain text.",
+  "log_password_filter_removal_failed": "Could not remove the server log filter that masks password commands ({REASON})."
 }
