@@ -174,7 +174,7 @@ public final class PasswordCommandMask {
     /**
      * Masks one command line as a player typed it.
      *
-     * @param commandLine the command line, with or without its leading {@code /}
+     * @param commandLine the command line, with or without its leading {@code /} (or several)
      * @return the line with the label (and any literal sub-command) kept and every later argument
      *     replaced by one {@link #MASK}, or {@code null} when nothing needs masking: not one of these
      *     labels, no arguments, no secret sub-command, or the arguments are already exactly {@link #MASK}
@@ -183,7 +183,11 @@ public final class PasswordCommandMask {
         if (commandLine == null) {
             return null;
         }
-        int labelStart = commandLine.startsWith("/") ? 1 : 0;
+        // Every leading slash is skipped: Paper logs a mistyped "//login <password>" as well.
+        int labelStart = 0;
+        while (labelStart < commandLine.length() && commandLine.charAt(labelStart) == '/') {
+            labelStart++;
+        }
         int labelEnd = labelStart;
         while (labelEnd < commandLine.length() && !Character.isWhitespace(commandLine.charAt(labelEnd))) {
             labelEnd++;

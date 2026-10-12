@@ -163,6 +163,31 @@ class Log4jPasswordFilterTest {
         }
 
         @Test
+        @DisplayName("the masked copy owns its context data: clearing the original's (as Log4j does when it reuses an event) leaves the copy intact")
+        void copyOwnsItsContextData() {
+            org.apache.logging.log4j.util.StringMap original =
+                    org.apache.logging.log4j.core.impl.ContextDataFactory.createContextData();
+            original.putValue("trace", "t-1");
+            LogEvent event = new Log4jLogEvent.Builder()
+                    .setLoggerName(PAPER_COMMAND_LOGGER)
+                    .setLevel(Level.INFO)
+                    .setContextData(original)
+                    .setMessage(new SimpleMessage("Steve issued server command: /login " + FAKE_PASSWORD))
+                    .build();
+            org.mockito.ArgumentCaptor<LogEvent> copy = org.mockito.ArgumentCaptor.forClass(LogEvent.class);
+
+            assertThat(filter.filter(event)).isEqualTo(Filter.Result.DENY);
+            org.mockito.Mockito.verify(owner).log(copy.capture());
+            original.clear();
+
+            assertThat(copy.getValue().getContextData().<String>getValue("trace")).isEqualTo("t-1");
+            assertThat(copy.getValue().getMessage().getFormattedMessage())
+                    .isEqualTo("Steve issued server command: /login " + PasswordCommandMask.MASK);
+            assertThat(copy.getValue().getLoggerName()).isEqualTo(PAPER_COMMAND_LOGGER);
+            assertThat(copy.getValue().isIncludeLocation()).isFalse();
+        }
+
+        @Test
         @DisplayName("fails closed: if the masked copy cannot be logged, the original is still denied")
         void failsClosed() {
             doThrow(new IllegalStateException("appender broke")).when(owner).log(any(LogEvent.class));

@@ -198,6 +198,13 @@ class PasswordCommandMaskTest {
         }
 
         @Test
+        @DisplayName("a mistyped extra leading slash does not hide a password from the mask")
+        void extraLeadingSlash() {
+            assertThat(mask.maskCommandLine("//login fake-pw-1")).isEqualTo("//login " + PasswordCommandMask.MASK);
+            assertThat(mask.maskCommandLine("login fake-pw-1")).isEqualTo("login " + PasswordCommandMask.MASK);
+        }
+
+        @Test
         @DisplayName("an already-masked line is left alone, so a masked copy is never masked again")
         void alreadyMasked() {
             assertThat(mask.maskCommandLine("/login " + PasswordCommandMask.MASK)).isNull();

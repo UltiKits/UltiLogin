@@ -7,6 +7,7 @@ import org.apache.logging.log4j.core.LoggerContext;
 import org.apache.logging.log4j.core.config.LoggerConfig;
 import org.apache.logging.log4j.core.filter.AbstractFilter;
 import org.apache.logging.log4j.core.filter.CompositeFilter;
+import org.apache.logging.log4j.core.impl.ContextDataFactory;
 import org.apache.logging.log4j.core.impl.Log4jLogEvent;
 import org.apache.logging.log4j.message.Message;
 import org.apache.logging.log4j.message.SimpleMessage;
@@ -152,12 +153,42 @@ final class Log4jPasswordFilter extends AbstractFilter {
             return Result.NEUTRAL;
         }
         try {
-            owner.log(new Log4jLogEvent.Builder(event).setMessage(new SimpleMessage(masked)).build());
+            owner.log(maskedCopy(event, masked));
         } catch (RuntimeException e) {
             // Fail closed: the masked copy is lost, but the original, which holds the password, is
             // still denied below. An appender's own failure is Log4j's to report, not this filter's.
             return Result.DENY;
         }
         return Result.DENY;
+    }
+
+    /**
+     * A copy of {@code event} carrying {@code masked} as its message, which shares nothing mutable
+     * with it. {@code new Log4jLogEvent.Builder(event)} would not do: Log4j reuses one mutable event
+     * per thread by default, and that constructor keeps the event's context-data map, which Log4j
+     * clears and refills for the next event while an asynchronous appender (Paper's {@code Async})
+     * may still be holding the copy. The time is copied by value ({@code setInstant} copies), and the
+     * caller location is left out: computed here it would point into this filter, and Paper's layouts
+     * do not print it.
+     */
+    private static LogEvent maskedCopy(LogEvent event, String masked) {
+        return Log4jLogEvent.newBuilder()
+                .setLoggerName(event.getLoggerName())
+                .setLoggerFqcn(event.getLoggerFqcn())
+                .setMarker(event.getMarker())
+                .setLevel(event.getLevel())
+                .setMessage(new SimpleMessage(masked))
+                .setThrown(event.getThrown())
+                .setInstant(event.getInstant())
+                .setNanoTime(event.getNanoTime())
+                .setContextData(event.getContextData() == null
+                        ? ContextDataFactory.createContextData()
+                        : ContextDataFactory.createContextData(event.getContextData()))
+                .setContextStack(event.getContextStack())
+                .setThreadName(event.getThreadName())
+                .setThreadId(event.getThreadId())
+                .setThreadPriority(event.getThreadPriority())
+                .setIncludeLocation(false)
+                .build();
     }
 }
