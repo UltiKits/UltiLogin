@@ -276,6 +276,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Passwords no longer reach the server log in plain text. Paper writes every player command line to the console and
+  `logs/latest.log`, and UltiTools-API 6.3.0 mirrors the console to the UltiPanel log stream, so `/login`, `/register`,
+  `/changepassword`, `/setpassword`, `/recover` and `/logadmin reset`, with every alias, used to be recorded with the
+  password. While the module is enabled a filter on the server's Log4j root logger now replaces their arguments with
+  `******` (`Steve issued server command: /login ******`), in any letter case and with any namespace prefix; other
+  commands are logged unchanged, and the filter is removed when the module is unloaded. Two paths are not covered and
+  are documented under Known limitations: a reset sent from the panel's remote console, and the reply to
+  `logadmin reset` run from the console (UltiKits/UltiLogin#57).
+- 密码不再以明文进入服务器日志。Paper 会把玩家输入的每条命令写入控制台和 `logs/latest.log`，UltiTools-API 6.3.0 还会把控制台同步到
+  UltiPanel 面板日志流，因此 `/login`、`/register`、`/changepassword`、`/setpassword`、`/recover` 和 `/logadmin reset`
+  （含所有别名）过去会连同密码一起被记录。现在模块启用期间，服务器 Log4j 根日志器上的过滤器会把这些命令的参数替换为 `******`
+  （`Steve issued server command: /login ******`），不区分大小写、带任何命名空间前缀均可；其他命令照常记录，模块卸载时过滤器随之
+  移除。有两条路径未覆盖，已写入"已知限制"：通过面板远程控制台发送的重置，以及在控制台执行 `logadmin reset` 时的回复
+  （UltiKits/UltiLogin#57）。
 - The failed-login count now follows what `security.lockout-type` locks. With `UUID` it is kept per account, so
   one account's lock no longer leaves every other account at the same address one wrong password away from being
   locked, and one account's wrong passwords no longer count against another's; `messages.attempts-remaining`
