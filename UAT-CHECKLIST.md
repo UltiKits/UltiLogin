@@ -94,6 +94,12 @@ for real-machine verification, not user-facing documentation.
   `security.lockout-duration: 900`, `max-register-per-ip: 0` (no per-IP limit), `password.min-length: 6`,
   `password.max-length: 32`, `gui-mode.enabled: false` (command-mode password flow) as its
   defaults; every row below assumes these unless its own Preconditions say otherwise.
+- **Console lines carry the module-logger prefix.** Every line this module logs reaches the console as
+  `[UltiTools] [UltiLogin] <text>`: Paper adds `[UltiTools] `, and the framework's module logger (`PluginLogger`)
+  adds `[UltiLogin] ` (this module's `plugin.yml` `name`). A console line quoted below is the `<text>` after both
+  prefixes, character for character, unless the row quotes a prefix itself; a row that counts or excludes this
+  module's console lines means lines carrying `[UltiLogin]`. A line the framework logs is quoted after Paper's
+  prefix, with its own `[UltiTools-API] ` where the row shows it.
 
 ## Register
 
