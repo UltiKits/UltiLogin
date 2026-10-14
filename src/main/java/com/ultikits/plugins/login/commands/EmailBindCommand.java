@@ -42,7 +42,8 @@ public class EmailBindCommand extends BaseCommandExecutor {
     public void handleCommand(@CmdSender Player player, @CmdParam("arg") String arg) {
         // Must be logged in
         if (!loginService.isLoggedIn(player.getUniqueId())) {
-            player.sendMessage(ChatColor.translateAlternateColorCodes('&', plugin.i18n("please_login_first")));
+            // Red, as /changepassword and /setpassword send the same key (UltiTools-API 6.3.0 Phase 19, D19-155).
+            player.sendMessage(ChatColor.RED + ChatColor.translateAlternateColorCodes('&', plugin.i18n("please_login_first")));
             return;
         }
 
@@ -77,7 +78,7 @@ public class EmailBindCommand extends BaseCommandExecutor {
 
     @Override
     protected void handleHelp(CommandSender sender) {
-        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', plugin.i18n("help_email_bind")));
-        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', plugin.i18n("help_email_verify")));
+        sender.sendMessage(HelpLines.usage(ChatColor.translateAlternateColorCodes('&', plugin.i18n("help_email_bind"))));
+        sender.sendMessage(HelpLines.usage(ChatColor.translateAlternateColorCodes('&', plugin.i18n("help_email_verify"))));
     }
 }

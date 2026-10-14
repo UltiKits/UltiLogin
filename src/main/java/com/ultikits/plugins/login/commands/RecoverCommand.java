@@ -78,7 +78,8 @@ public class RecoverCommand extends BaseCommandExecutor {
 
         // Check password match
         if (!newPassword.equals(confirm)) {
-            player.sendMessage(ChatColor.translateAlternateColorCodes('&', plugin.i18n("password_mismatch")));
+            // Red, like the register and change-password mismatch messages (UltiTools-API 6.3.0 Phase 19 sweep).
+            player.sendMessage(ChatColor.RED + ChatColor.translateAlternateColorCodes('&', plugin.i18n("password_mismatch")));
             return;
         }
 
@@ -114,7 +115,7 @@ public class RecoverCommand extends BaseCommandExecutor {
 
     @Override
     protected void handleHelp(CommandSender sender) {
-        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', plugin.i18n("help_recover")));
-        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', plugin.i18n("help_recover_reset")));
+        sender.sendMessage(HelpLines.usage(ChatColor.translateAlternateColorCodes('&', plugin.i18n("help_recover"))));
+        sender.sendMessage(HelpLines.usage(ChatColor.translateAlternateColorCodes('&', plugin.i18n("help_recover_reset"))));
     }
 }

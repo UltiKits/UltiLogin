@@ -310,6 +310,8 @@ class RecoverCommandTest {
             ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
             verify(player).sendMessage(captor.capture());
             assertThat(captor.getValue()).contains("password_mismatch");
+            // Red, like the register and change-password mismatch messages (UltiTools-API 6.3.0 Phase 19 sweep).
+            assertThat(captor.getValue()).startsWith(org.bukkit.ChatColor.RED.toString());
             verify(emailVerificationService, never()).verifyRecoveryCode(any(), anyString());
         }
 
@@ -367,6 +369,21 @@ class RecoverCommandTest {
             command.handleHelp(player);
 
             verify(player, times(2)).sendMessage(anyString());
+        }
+
+        @Test
+        @DisplayName("Each help line shows its command in yellow and its description in white, like /logadmin's")
+        void helpLinesUseTheSiblingUsageColours() {
+            when(plugin.i18n("help_recover")).thenReturn("/recover - Request password recovery code");
+            when(plugin.i18n("help_recover_reset")).thenReturn("/recover <code> <new_password> <confirm> - Reset password");
+
+            command.handleHelp(player);
+
+            org.mockito.InOrder order = inOrder(player);
+            order.verify(player).sendMessage(org.bukkit.ChatColor.YELLOW + "/recover"
+                    + org.bukkit.ChatColor.WHITE + " - Request password recovery code");
+            order.verify(player).sendMessage(org.bukkit.ChatColor.YELLOW + "/recover <code> <new_password> <confirm>"
+                    + org.bukkit.ChatColor.WHITE + " - Reset password");
         }
     }
 }
