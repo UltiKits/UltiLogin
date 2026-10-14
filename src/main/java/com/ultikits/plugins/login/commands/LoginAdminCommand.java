@@ -211,17 +211,9 @@ public class LoginAdminCommand extends BaseCommandExecutor {
         sender.sendMessage(usage(i18n("help_admin_info")));
     }
 
-    /**
-     * One usage line: the command in yellow, and from its {@code " - "} on, the description in white,
-     * as this help always looked. The colour is the module's rather than the language file's, because a
-     * language file extracted by an earlier version holds these keys with the same words and no colour
-     * codes (UltiKits/UltiLogin#20). A line without {@code " - "} is shown all in yellow.
-     */
+    /** One usage line, coloured as every sibling command's help is ({@link HelpLines#usage}). */
     private static String usage(String line) {
-        int split = line.indexOf(" - ");
-        return split < 0
-                ? ChatColor.YELLOW + line
-                : ChatColor.YELLOW + line.substring(0, split) + ChatColor.WHITE + line.substring(split);
+        return HelpLines.usage(line);
     }
 
     /** One line of the info block: {@code label}, then {@code value}. */
