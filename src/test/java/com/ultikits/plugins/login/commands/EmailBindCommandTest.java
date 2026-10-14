@@ -80,6 +80,8 @@ class EmailBindCommandTest {
             ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
             verify(player).sendMessage(captor.capture());
             assertThat(captor.getValue()).contains("please_login_first");
+            // Red, like /changepassword and /setpassword send the same key (UltiTools-API 6.3.0 Phase 19, D19-155).
+            assertThat(captor.getValue()).startsWith(org.bukkit.ChatColor.RED.toString());
             verify(emailVerificationService, never()).requestEmailBind(any(), anyString());
         }
 
@@ -93,6 +95,7 @@ class EmailBindCommandTest {
             ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
             verify(player).sendMessage(captor.capture());
             assertThat(captor.getValue()).contains("please_login_first");
+            assertThat(captor.getValue()).startsWith(org.bukkit.ChatColor.RED.toString());
             verify(emailVerificationService, never()).verifyEmailBind(any(), anyString());
         }
     }
@@ -317,6 +320,21 @@ class EmailBindCommandTest {
             command.help(player);
 
             verify(player, times(2)).sendMessage(anyString());
+        }
+
+        @Test
+        @DisplayName("Each help line shows its command in yellow and its description in white, like /logadmin's")
+        void helpLinesUseTheSiblingUsageColours() {
+            when(plugin.i18n("help_email_bind")).thenReturn("/regs <email> - Bind email address");
+            when(plugin.i18n("help_email_verify")).thenReturn("/regs <code> - Verify email");
+
+            command.help(player);
+
+            org.mockito.InOrder order = inOrder(player);
+            order.verify(player).sendMessage(org.bukkit.ChatColor.YELLOW + "/regs <email>"
+                    + org.bukkit.ChatColor.WHITE + " - Bind email address");
+            order.verify(player).sendMessage(org.bukkit.ChatColor.YELLOW + "/regs <code>"
+                    + org.bukkit.ChatColor.WHITE + " - Verify email");
         }
     }
 
