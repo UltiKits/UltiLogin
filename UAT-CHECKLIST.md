@@ -100,6 +100,11 @@ for real-machine verification, not user-facing documentation.
   prefixes, character for character, unless the row quotes a prefix itself; a row that counts or excludes this
   module's console lines means lines carrying `[UltiLogin]`. A line the framework logs is quoted after Paper's
   prefix, with its own `[UltiTools-API] ` where the row shows it.
+- **Panel button labels are compared as text, not as rendered case.** Where a web-flow row quotes a button of the panel
+  (for example "Create new account", "Confirm and link", "Sign in", "Cancel"), the quoted words are the button's
+  text. The panel's button style may render them in capitals (a CSS text transform; the page's own text holds the
+  quoted case), so a row passes on the quoted words whatever case the button is drawn in (Phase 19 production smoke,
+  B32).
 
 ## Register
 
