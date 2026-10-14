@@ -1,8 +1,6 @@
 # UltiLogin
 
 [![UltiTools-API](https://img.shields.io/badge/UltiTools--API-6.3.0%2B-blue)](https://github.com/UltiKits/UltiTools-Reborn)
-[![Paper](https://img.shields.io/badge/Paper-1.21%2B-green)](https://papermc.io/)
-[![Java](https://img.shields.io/badge/Java-21%2B-orange)](https://adoptium.net/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 UltiLogin 是 UltiTools 插件系统的登录验证模块，为 Minecraft 服务器提供安全的玩家认证系统。
@@ -181,10 +179,6 @@ UltiCloud 凭据被拒绝（同时写入控制台）。
   会写入 `logs/latest.log` 并同步到面板日志流。请在游戏内执行重置：回复只发给执行命令的管理员，命令行本身记录为
   `/logadmin reset ******`（UltiKits/UltiLogin#57）。
 
-UltiLogin requires Minecraft 1.21 or later (Paper 1.21+), even though the UltiTools-API 6.3.0 framework itself runs on Paper 1.19.2 build 163 or later. On Paper 1.19.2–1.20.6, the module can load, but the registration GUI and login-protection inventory handling fail with `IncompatibleClassChangeError`: `InventoryView` became an interface in Minecraft 1.21, and framework-loaded modules do not receive Paper's bytecode rewriting. Run this module on Paper 1.21 or later. Backward compatibility is tracked in [UltiKits/UltiTools-Reborn#655](https://github.com/UltiKits/UltiTools-Reborn/issues/655).
-
-UltiLogin 需要 Minecraft 1.21 或更高版本（Paper 1.21+），即使 UltiTools-API 6.3.0 框架本身可运行于 Paper 1.19.2 build 163 或更高版本。在 Paper 1.19.2–1.20.6 上，模块可能成功加载，但注册界面和登录保护中的物品栏处理会出现 `IncompatibleClassChangeError`：`InventoryView` 在 Minecraft 1.21 中由类变为接口，而由框架加载的模块不会经过 Paper 的字节码改写。请在 Paper 1.21 或更高版本上运行本模块。向下兼容工作由 [UltiKits/UltiTools-Reborn#655](https://github.com/UltiKits/UltiTools-Reborn/issues/655) 跟踪。
-
 ## 配置文件
 
 配置文件位于 `plugins/UltiTools/config/login.yml`
@@ -355,7 +349,7 @@ UltiLogin 启用期间会在服务器日志（Log4j 根日志器）上挂一个�
 
 ## 依赖
 
-- **UltiTools-API** 6.3.0 or later / 6.3.0 或更高版本 (required / 必需), on **Paper 1.21+** with **Java 21+**.
+- **UltiTools-API** 6.3.0 or later / 6.3.0 或更高版本 (required / 必需).
   This module declares `api-version: 630`, so an older framework refuses to load it with a warning that the
   UltiTools version is outdated. 本模块声明 `api-version: 630`，更早的框架会拒绝加载它，并警告 UltiTools 版本过旧。
 - Install: put `UltiLogin-<version>.jar` into `plugins/UltiTools/plugins/` and restart the server (`/ul reload` only
@@ -364,7 +358,7 @@ UltiLogin 启用期间会在服务器日志（Log4j 根日志器）上挂一个�
 
 ## 版本历史
 
-### v1.1.0
+### v1.1.0（未发布 / unreleased）
 - 新增 GUI 数字键盘登录模式
 - 新增登录失败保护机制（IP/UUID 封禁）
 - 新增管理员命令（reset/forcelogin/unregister/info）
