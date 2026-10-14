@@ -181,7 +181,7 @@ UltiCloud 凭据被拒绝（同时写入控制台）。
 
 ## 配置文件
 
-配置文件位于 `plugins/UltiTools/config/login.yml`
+配置文件位于 `plugins/UltiTools/pluginConfig/UltiLogin/config/login.yml`
 
 ```yaml
 # ==================== 基础设置 ====================
@@ -358,23 +358,26 @@ UltiLogin 启用期间会在服务器日志（Log4j 根日志器）上挂一个�
 
 ## 版本历史
 
-### v1.1.0（未发布 / unreleased）
-- 新增 GUI 数字键盘登录模式
-- 新增登录失败保护机制（IP/UUID 封禁）
-- 新增管理员命令（reset/forcelogin/unregister/info）
-- 优化密码验证逻辑（支持 GUI/命令模式切换）
-- 扩展语言文件支持
+### 未发布 / Unreleased
 
-### v1.0.0
+- 需要 UltiTools-API 6.3.0 或更高版本（`api-version: 630`）
+
+### v1.0.0 (2026-02-15)
+
 - 基础登录/注册功能
 - 会话保持功能
 - SHA-256 + Salt 密码加密
 - 登录超时踢出
 - 登录前操作限制
+- GUI 数字键盘登录模式（`gui-mode.enabled`）
+- 登录失败保护机制（IP/UUID 封禁）
+- 管理员命令（reset/forcelogin/unregister/info）
+- 密码验证逻辑支持 GUI/命令模式切换
+- 邮箱绑定（`/regs`）与密码找回（`/recover`，使用 UltiTools-API 提供的 EmailService）
+- 中英文语言文件
 
 ## 未来计划
 
-- [ ] 邮箱绑定与密码找回（依赖 UltiTools-API 提供的 EmailService）
 - [ ] 二次验证 (2FA)
 - [ ] 登录日志记录
 - [ ] Web API 接口
