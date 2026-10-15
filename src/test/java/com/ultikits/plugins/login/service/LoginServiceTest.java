@@ -495,11 +495,7 @@ class LoginServiceTest {
             service.login(player, "wrong1");
             assertThat(service.login(player, "wrong2").getMessage()).isEqualTo("LOCKED 900");
 
-            Map<UUID, Long> lockedUuids = (Map<UUID, Long>) getFieldValue(service, "lockedUuids");
-            Map<String, Long> lockedIps = (Map<String, Long>) getFieldValue(service, "lockedIps");
-            long past = System.currentTimeMillis() - 1000;
-            lockedUuids.replaceAll((k, v) -> past);
-            lockedIps.replaceAll((k, v) -> past);
+            service.setClock(() -> System.currentTimeMillis() + 901_000L);
             assertThat(service.isLocked(player)).as("scenario: the lock has expired").isFalse();
 
             assertThat(service.getRemainingAttempts(player)).isEqualTo(2);
@@ -510,10 +506,9 @@ class LoginServiceTest {
         }
 
         /**
-         * UltiKits/UltiLogin#48 (supervisor decision, 2026-10-04): the failure count follows the lock target.
-         * Under {@code UUID} it is per account, so one account's lock never makes another account at the same
-         * address lock on its first wrong password; under {@code IP} it stays per address; {@code BOTH} keeps
-         * both counts and each lock follows its own count.
+         * Failure counts follow the configured targets: UUID counts by account and IP by address.
+         * BOTH counts each address-account pair separately and locks the address only when enough
+         * distinct accounts have failed there (UltiKits/UltiLogin#50).
          */
         private Player otherPlayerAtTheSameAddress() {
             return UltiLoginTestHelper.createMockPlayer("Other", UUID.randomUUID());
@@ -565,8 +560,8 @@ class LoginServiceTest {
         }
 
         @Test
-        @DisplayName("BOTH: the address count locks the address, the account's own count locks the account (#48)")
-        void bothKeepsBothCounts() {
+        @DisplayName("BOTH: two distinct failing accounts lock the address at threshold two")
+        void bothDistinctAccountsLockAddress() {
             when(config.getMaxLoginAttempts()).thenReturn(2);
             when(config.getLockoutType()).thenReturn("BOTH");
             Player other = otherPlayerAtTheSameAddress();
@@ -579,8 +574,8 @@ class LoginServiceTest {
         }
 
         @Test
-        @DisplayName("BOTH: remaining attempts follow the nearer lock (#48)")
-        void bothRemainingFollowsTheNearerLock() {
+        @DisplayName("BOTH: remaining attempts follow the address-account pair")
+        void bothRemainingFollowsItsOwnPair() {
             when(config.getMaxLoginAttempts()).thenReturn(3);
             when(config.getLockoutType()).thenReturn("BOTH");
             Player other = otherPlayerAtTheSameAddress();
@@ -588,25 +583,27 @@ class LoginServiceTest {
             service.login(player, "wrong1");
             service.login(other, "wrong1");
 
-            assertThat(service.getRemainingAttempts(other)).as("address 2 of 3, account 1 of 3").isEqualTo(1);
-            assertThat(service.getRemainingAttempts(player)).isEqualTo(1);
+            assertThat(service.getRemainingAttempts(other)).as("each pair has failed once").isEqualTo(2);
+            assertThat(service.getRemainingAttempts(player)).isEqualTo(2);
         }
 
         /**
          * UltiKits/UltiLogin#37 (maintainer decision: refuse and name the value): a
-         * {@code security.lockout-type} other than IP / UUID / BOTH falls back to the default, IP,
+         * {@code security.lockout-type} other than IP / UUID / BOTH falls back to the default, BOTH,
          * instead of switching the lockout off.
          */
         @ParameterizedTest(name = "lockout-type \"{0}\"")
         @ValueSource(strings = {"NONE", "IPs", "", "ip-only"})
-        @DisplayName("an unrecognised lockout-type locks by IP, the default (UltiKits/UltiLogin#37)")
-        void unrecognisedLockoutTypeLocksByIp(String lockoutType) {
+        @DisplayName("an unrecognised lockout-type locks by BOTH, the default (UltiKits/UltiLogin#37)")
+        void unrecognisedLockoutTypeLocksByBoth(String lockoutType) {
             when(config.getMaxLoginAttempts()).thenReturn(2);
             when(config.getLockoutType()).thenReturn(lockoutType);
 
             assertThat(service.login(player, "wrong1").getMessage()).isEqualTo("REMAINING 1");
             assertThat(service.login(player, "wrong2").getMessage()).isEqualTo("LOCKED 900");
             assertThat(service.isLocked(player)).isTrue();
+            Player other = otherPlayerAtTheSameAddress();
+            assertThat(service.isLocked(other)).as("default BOTH locks this pair, not an uninvolved neighbour").isFalse();
 
             LoginService.LoginResult result = service.login(player, PASSWORD);
             assertThat(result.isSuccess()).isFalse();
@@ -2323,6 +2320,7 @@ class LoginServiceTest {
         @Test
         @DisplayName("Should return remaining time for UUID lock")
         void uuidLockRemaining() throws Exception {
+            when(config.getLockoutType()).thenReturn("UUID");
             @SuppressWarnings("unchecked")
             Map<UUID, Long> lockedUuids = (Map<UUID, Long>) getFieldValue(service, "lockedUuids");
             lockedUuids.put(playerUuid, System.currentTimeMillis() + 120000); // 120 seconds
@@ -2333,20 +2331,24 @@ class LoginServiceTest {
         }
 
         @Test
-        @DisplayName("Should return max of IP and UUID remaining time")
+        @DisplayName("BOTH returns the longer of its pair and address locks, never an unrelated UUID lock")
         void bothLocksMaxRemaining() throws Exception {
-            @SuppressWarnings("unchecked")
-            Map<String, Long> lockedIps = (Map<String, Long>) getFieldValue(service, "lockedIps");
-            lockedIps.put("127.0.0.1", System.currentTimeMillis() + 30000);
-
-            @SuppressWarnings("unchecked")
-            Map<UUID, Long> lockedUuids = (Map<UUID, Long>) getFieldValue(service, "lockedUuids");
-            lockedUuids.put(playerUuid, System.currentTimeMillis() + 120000);
-
-            long remaining = service.getRemainingLockoutTime(player);
-            // Should pick the larger of the two
-            assertThat(remaining).isGreaterThan(30);
+            when(config.getLockoutType()).thenReturn("BOTH");
+            when(config.getMaxLoginAttempts()).thenReturn(2);
+            when(config.getLockoutDuration()).thenReturn(120);
+            long start = System.currentTimeMillis();
+            service.setClock(() -> start);
+            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
+            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+            service.login(player, "wrong");
+            service.login(player, "wrong");
+            service.setClock(() -> start + 30_000L);
+            Player other = UltiLoginTestHelper.createMockPlayer("Other", UUID.randomUUID());
+            service.login(other, "wrong");
+            assertThat(service.getRemainingLockoutTime(player)).isEqualTo(120);
+            assertThat(service.getRemainingLockoutTime(other)).isEqualTo(120);
         }
+
     }
 
     // ==================== getRemainingAttempts ====================

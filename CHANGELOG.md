@@ -41,6 +41,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Lockout redesign (UltiKits/UltiLogin#50):** BOTH now counts and locks each (address, account UUID) pair,
+  independently of that account at other addresses, and separately locks an address after `max-login-attempts`
+  different accounts fail there. Success clears only its own pair, never the address's failed-account memberships.
+  IP-mode successes no longer clear the shared address count, closing the success-reset bypass. IP counts and
+  each BOTH address membership expire `lockout-duration` seconds after their latest failure; unlocked UUID/pair
+  counts still reset only on their own success or corresponding lock expiry. BOTH is the new fresh/missing-key
+  default. Existing operator values (including IP and lowercase uuid) stay byte for byte; unusable values warn and
+  fall back to BOTH only in memory. Recognised old shipped comments refresh without overwriting custom comments.
+- **登录封禁重构（UltiKits/UltiLogin#50）：** BOTH 改为按（地址、账号 UUID）组合计数并封禁，同一账号在其他地址不受该组合封禁影响；
+  同一地址失败的不同账号数达到 `max-login-attempts` 时另封禁整个地址。成功只清除自身组合计数，不清除地址集合。
+  IP 模式成功不再清除共用地址计数，修复成功登录清零绕过；IP 计数和 BOTH 的每个地址集合成员在最近一次失败的 `lockout-duration` 秒后过期。
+  未封禁的 UUID/组合计数仍只在自身成功或对应封禁到期时重置。新文件或缺少键时默认 BOTH；现有值（含 IP、小写 uuid）逐字节保留，
+  无效值只警告并在内存回退到 BOTH。已识别的旧出厂注释更新，自写注释不覆盖。
+
 - **`/panel` now needs the account password or a remembered device once the new UltiCloud panel is live.** The link
   is created with the server's own UltiCloud credential (through UltiTools 6.3.0's authenticated request helper) and
   tells the web whether the player is logged in in game and whether the name has an UltiLogin account. Opening the

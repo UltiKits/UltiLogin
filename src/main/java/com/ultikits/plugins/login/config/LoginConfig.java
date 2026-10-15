@@ -97,16 +97,20 @@ public class LoginConfig extends AbstractConfigEntity {
     @ConfigEntry(path = "security.lockout-duration", comment = "{login_config_comment_security_lockout_duration}")
     private int lockoutDuration = 900;
 
-    // previousComments: the comment every earlier version wrote here. The zh catalogue text now explains how
-    // failures are counted, so it no longer equals that comment; registering it lets the framework recognise
-    // an upgraded server's comment as its own and rewrite it in the server's language (UltiKits/UltiLogin#51).
+    // Only recognised shipped comments are refreshed; values and operator comments are never replaced.
     @NotEmpty
     @ConfigEntry(path = "security.lockout-type", comment = "{login_config_comment_security_lockout_type}",
-            previousComments = "封禁类型：IP / UUID / BOTH")
+            previousComments = {"封禁类型：IP / UUID / BOTH",
+                    "Lockout type: IP / UUID / BOTH. Failed logins are counted by the same key the type locks: IP counts and locks per IP address (accounts behind one address share the count, and one player's wrong passwords can lock the others out); UUID counts and locks per account; BOTH keeps both counts and locks the address when its count reaches the limit and the account when its own count does",
+                    "封禁类型：IP / UUID / BOTH。失败次数按与封禁相同的键计数：IP 按 IP 地址计数并封禁（同一地址的账号共用计数，一名玩家输错密码可能把其他人一起锁住）；UUID 按账号计数并封禁；BOTH 两种计数都保留，地址的计数达到上限时封禁该地址，账号自己的计数达到上限时封禁该账号"})
     private String lockoutType = LOCKOUT_TYPE_DEFAULT;
 
-    /** The declared default of {@code security.lockout-type}, and what an unusable value falls back to. */
-    public static final String LOCKOUT_TYPE_DEFAULT = "IP";
+    /**
+     * Default for a missing or unusable lockout type. The module never writes this key: the
+     * framework inserts defaults only when missing, and refreshes only recognised shipped comments.
+     * Existing operator-written values, including unusable ones, stay byte for byte on disk.
+     */
+    public static final String LOCKOUT_TYPE_DEFAULT = "BOTH";
 
     /**
      * Whether {@code value} is a {@code security.lockout-type} this module can use: {@code IP},
@@ -125,10 +129,11 @@ public class LoginConfig extends AbstractConfigEntity {
 
     /**
      * The lockout type the module applies for {@code value}: the value itself when it is usable,
-     * otherwise the default {@code IP}. An unusable value used to switch the lockout off while the
+     * otherwise the default {@code BOTH}. An unusable value used to switch the lockout off while the
      * reply still said the account was locked (UltiKits/UltiLogin#37); the maintainer's rule is that
      * a value the module cannot use falls back to the default and is named in a warning. The file
-     * keeps what the operator wrote.
+     * keeps what the operator wrote. The module never rewrites the key; the framework only inserts
+     * a missing default and refreshes recognised shipped comments, not operator-written values.
      *
      * @param value the value as written in the file
      * @return {@code IP}, {@code UUID} or {@code BOTH}

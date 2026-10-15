@@ -207,7 +207,7 @@ password:
 security:
   max-login-attempts: 5     # 最大登录失败次数（0为不限制）
   lockout-duration: 900     # 封禁时长（秒）
-  lockout-type: IP          # 封禁类型：IP / UUID / BOTH
+  lockout-type: BOTH        # Pair + distinct-account address protection / 组合及地址防护
 
 # ==================== 位置设置 ====================
 spawn-location:
@@ -299,26 +299,54 @@ registration limit!" and is not logged in.
 2. 将密码与 Salt 拼接后进行 SHA-256 哈希
 3. 哈希结果以 Base64 编码存储
 
-### 登录失败保护
+### Failed-login protection / 登录失败保护
 
-- 连续失败达到阈值后触发封禁
-- 支持按 IP、UUID 或两者同时封禁
-- 封禁时长可配置（默认 15 分钟）
-- 成功登录后清除失败记录
+`security.max-login-attempts` is the threshold (default `5`; `0` disables new failure counting and locking).
+`security.lockout-duration` is the lock duration in seconds (default `900`, or 15 minutes).
 
-**By design (UltiKits/UltiLogin#45, #48):** the failure count follows what `security.lockout-type` locks.
-`IP` counts and locks per IP address, so accounts behind one address (a household, a school, a proxy) share
-one count and one player's wrong passwords can lock the others out. `UUID` counts and locks per account, so
-one account's lock or wrong passwords never count against another account at the same address; use it when
-accounts share addresses. `BOTH` keeps both counts: the address is locked when its count reaches the limit and
-the account when its own count does. Config comments follow the server's `language`; the sample above shows
-them in Chinese.
+- **IP:** count failures and lock the source address. Accounts at that address share the count. A successful
+  login does **not** clear it, closing the success-reset bypass (UltiKits/UltiLogin#50).
+- **UUID:** count failures and lock the account, regardless of address. Success clears only that account's count.
+- **BOTH (default):** count failures per **(source address, account UUID) pair**. Reaching the threshold locks
+  only that pair: the same account at another address and a different account at the original address are not
+  refused by that pair lock. Separately, reaching the same threshold of **different accounts** with retained
+  failures at one address locks that whole address. Success clears only its own pair's count, never the
+  address's collection of failed accounts.
 
-**设计如此（UltiKits/UltiLogin#45、#48）：** 失败次数按 `security.lockout-type` 所封禁的对象计数。
-`IP` 按 IP 地址计数并封禁，因此同一地址（家庭、学校、代理）背后的账号共用一个计数，一名玩家输错密码可能把其他人一起锁住。
-`UUID` 按账号计数并封禁，一个账号的封禁或输错密码不会算到同一地址上的其他账号头上；账号共用地址时请使用它。
-`BOTH` 两种计数都保留：地址的计数达到上限时封禁该地址，账号自己的计数达到上限时封禁该账号。
-配置文件中的注释跟随服务器的 `language`；上面的示例以中文显示。
+IP-mode counts expire `lockout-duration` seconds after the address's latest failure. In BOTH, each account's
+membership in an address's collection expires that many seconds after **that account's** latest failure at that
+address. Unlocked UUID and pair counts do not time-expire: their own success or their corresponding lock's expiry
+resets them. Each lock keeps its recorded unlock time; a success never removes or shortens it. These counts and
+locks are in memory and do not survive a server restart.
+
+**Upgrading:** an existing `login.yml` keeps its `security.lockout-type` value byte for byte, including `IP` or
+lowercase `uuid`. Only a missing key gets `BOTH`. To opt in, explicitly set `security.lockout-type: BOTH` and run
+`/ul reload UltiLogin`. Values are case-insensitive with surrounding spaces ignored. An unusable value is named in
+a warning and uses `BOTH` in memory only; the value on disk is never repaired automatically. Recognised historical
+shipped comments refresh to the new explanation; operator-written comments are kept.
+
+**Address limits:** without proxy address forwarding, players share the proxy's observed address. IP locks and
+BOTH's whole-address protection can therefore affect those players together. These address limits do not prevent
+an attacker from distributing guesses over many addresses.
+
+`security.max-login-attempts` 是阈值（默认 `5`；`0` 不再计入新的失败或建立新封禁）；
+`security.lockout-duration` 是封禁秒数（默认 `900`，即 15 分钟）。
+
+- **IP：** 按来源地址计数并封禁，同一地址的账号共用计数；登录成功不再清零，修复 UltiKits/UltiLogin#50 的绕过漏洞。
+- **UUID：** 按账号计数并封禁，不区分地址；成功只清除自身账号计数。
+- **BOTH（默认）：** 按 **（来源地址、账号 UUID）组合** 计数，达到阈值只封禁该组合，不影响其他地址的同一账号或原地址的其他账号。
+  另按每个地址上仍保留失败记录的 **不同账号数** 计数，达到同一阈值则封禁整个地址。成功只清除自身组合计数，不清除地址集合。
+
+IP 计数在该地址最近一次失败的 `lockout-duration` 秒后过期；BOTH 地址集合中的每个账号在该账号于该地址最近一次失败的相同时长后过期。
+未封禁的 UUID 和组合计数不随时间过期，只在自身成功或对应封禁到期时重置。每项封禁保留自己的解锁时间，成功不会解除或缩短封禁；
+这些计数和封禁只在内存中保存，重启后不保留。
+
+**升级：** 现有 `login.yml` 的 `security.lockout-type` 值逐字节保留，包括 `IP`、小写 `uuid`；只有缺少该键时才写入 `BOTH`。
+如需采用新默认，请主动设置 `security.lockout-type: BOTH` 并执行 `/ul reload UltiLogin`。值忽略大小写和两端空格；
+无法使用的值会被警告指出，仅在内存中按 `BOTH` 执行，绝不自动修改磁盘值。已识别的旧版出厂注释会更新，服主自写注释保留。
+
+**地址限制：** 代理未转发玩家地址时，玩家共用服务器看到的代理地址，因此 IP 封禁和 BOTH 的整地址防护会一起影响这些玩家。
+这不能阻止攻击者使用大量不同地址分散猜测。
 
 ### Passwords in the server log / 服务器日志中的密码
 
