@@ -65,7 +65,7 @@ class LoginServiceLockoutModesTest {
         when(player.getAddress()).thenReturn(new InetSocketAddress(ip, 25565));
         String salt = "lockout-salt";
         byte[] hash = MessageDigest.getInstance("SHA-256")
-                .digest((salt + "password123").getBytes(StandardCharsets.UTF_8));
+                .digest(("password123" + salt).getBytes(StandardCharsets.UTF_8));
         accounts.putIfAbsent(uuid, UltiLoginTestHelper.createSampleAccount(uuid, player.getName(),
                 Base64.getEncoder().encodeToString(hash), salt));
         return player;
@@ -79,6 +79,12 @@ class LoginServiceLockoutModesTest {
         for (int i = 0; i < count; i++) {
             assertThat(service.login(player, "wrong").isSuccess()).isFalse();
         }
+    }
+
+    @Test
+    @DisplayName("Positive control: a fresh account accepts its correct password")
+    void freshAccountCanLogIn() throws Exception {
+        assertThat(service.login(player("10.0.0.1"), "password123").isSuccess()).isTrue();
     }
 
     @Nested
