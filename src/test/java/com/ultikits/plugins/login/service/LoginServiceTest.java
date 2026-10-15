@@ -590,19 +590,21 @@ class LoginServiceTest {
 
         /**
          * UltiKits/UltiLogin#37 (maintainer decision: refuse and name the value): a
-         * {@code security.lockout-type} other than IP / UUID / BOTH falls back to the default, IP,
+         * {@code security.lockout-type} other than IP / UUID / BOTH falls back to the default, BOTH,
          * instead of switching the lockout off.
          */
         @ParameterizedTest(name = "lockout-type \"{0}\"")
         @ValueSource(strings = {"NONE", "IPs", "", "ip-only"})
-        @DisplayName("an unrecognised lockout-type locks by IP, the default (UltiKits/UltiLogin#37)")
-        void unrecognisedLockoutTypeLocksByIp(String lockoutType) {
+        @DisplayName("an unrecognised lockout-type locks by BOTH, the default (UltiKits/UltiLogin#37)")
+        void unrecognisedLockoutTypeLocksByBoth(String lockoutType) {
             when(config.getMaxLoginAttempts()).thenReturn(2);
             when(config.getLockoutType()).thenReturn(lockoutType);
 
             assertThat(service.login(player, "wrong1").getMessage()).isEqualTo("REMAINING 1");
             assertThat(service.login(player, "wrong2").getMessage()).isEqualTo("LOCKED 900");
             assertThat(service.isLocked(player)).isTrue();
+            Player other = otherPlayerAtTheSameAddress();
+            assertThat(service.isLocked(other)).as("default BOTH locks this pair, not an uninvolved neighbour").isFalse();
 
             LoginService.LoginResult result = service.login(player, PASSWORD);
             assertThat(result.isSuccess()).isFalse();

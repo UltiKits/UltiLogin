@@ -107,10 +107,10 @@ class LoginConfigTest {
         }
 
         @Test
-        @DisplayName("Should have IP lockout type")
+        @DisplayName("Should have BOTH lockout type")
         void lockoutType() {
             LoginConfig config = createRealConfig();
-            assertThat(config.getLockoutType()).isEqualTo("IP");
+            assertThat(config.getLockoutType()).isEqualTo("BOTH");
         }
 
         @Test

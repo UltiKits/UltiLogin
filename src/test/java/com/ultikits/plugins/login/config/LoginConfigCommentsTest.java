@@ -177,15 +177,21 @@ class LoginConfigCommentsTest {
     }
 
     @Test
-    @DisplayName("the lockout-type comment says failed logins are counted per address, what each type counts and locks (#45, #48)")
-    void lockoutTypeCommentStatesTheSharedCounter() {
+    @DisplayName("The lockout comment explains address, account, pair, distinct accounts and the BOTH default")
+    void lockoutTypeCommentStatesThePairAndAddressRules() {
         String en = CatalogueText.text("en", "login_config_comment_security_lockout_type");
-        assertThat(en).contains("IP / UUID / BOTH").contains("counted by the same key the type locks")
-                .contains("per IP address").contains("share the count")
-                .contains("UUID counts and locks per account").contains("BOTH keeps both counts");
+        assertThat(en).contains("IP / UUID / BOTH").contains("default: BOTH")
+                .contains("IP counts and locks per address").contains("success does not clear")
+                .contains("UUID counts and locks per account").contains("account at one address")
+                .contains("different accounts").contains("whole address")
+                .contains("success clears only its own pair").contains("lockout-duration")
+                .doesNotContain("BOTH keeps both counts");
         String zh = CatalogueText.text("zh", "login_config_comment_security_lockout_type");
-        assertThat(zh).contains("IP / UUID / BOTH").contains("\u5171\u7528\u8ba1\u6570")
-                .contains("UUID \u6309\u8d26\u53f7\u8ba1\u6570\u5e76\u5c01\u7981");
+        assertThat(zh).contains("IP / UUID / BOTH").contains("默认 BOTH")
+                .contains("IP 按地址计数并封禁").contains("成功不会清除")
+                .contains("UUID 按账号计数并封禁").contains("同一地址的同一账号")
+                .contains("不同账号").contains("整个地址").contains("成功只清除自身组合")
+                .contains("lockout-duration");
     }
 
     @Test
