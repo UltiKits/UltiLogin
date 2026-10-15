@@ -172,7 +172,7 @@
   "login_config_comment_password_max_length": "命令模式密码最大长度",
   "login_config_comment_security_max_login_attempts": "最大登录失败次数（0为不限制）",
   "login_config_comment_security_lockout_duration": "登录失败封禁时长（秒）",
-  "login_config_comment_security_lockout_type": "封禁类型：IP / UUID / BOTH。失败次数按与封禁相同的键计数：IP 按 IP 地址计数并封禁（同一地址的账号共用计数，一名玩家输错密码可能把其他人一起锁住）；UUID 按账号计数并封禁；BOTH 两种计数都保留，地址的计数达到上限时封禁该地址，账号自己的计数达到上限时封禁该账号",
+  "login_config_comment_security_lockout_type": "封禁类型：IP / UUID / BOTH（默认 BOTH）。IP 按地址计数并封禁；登录成功不会清除失败计数，计数在最近一次失败的 lockout-duration 秒后过期。UUID 按账号计数并封禁，成功清除自身账号计数。BOTH 在同一地址的同一账号失败达到 max-login-attempts 次时封禁该组合，在同一地址失败的不同账号达到 max-login-attempts 个时封禁整个地址；成功只清除自身组合计数，不清除地址集合。集合中每个账号在其最近一次失败的 lockout-duration 秒后过期。未封禁的组合和 UUID 计数不会随时间过期；每项封禁保留自身解锁时间，过期时重置对应计数",
   "login_config_comment_spawn_location_enabled": "未登录时传送到指定位置",
   "login_config_comment_spawn_location_world": "出生点世界",
   "login_config_comment_spawn_location_x": "出生点X",

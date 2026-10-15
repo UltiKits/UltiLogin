@@ -506,10 +506,9 @@ class LoginServiceTest {
         }
 
         /**
-         * UltiKits/UltiLogin#48 (supervisor decision, 2026-10-04): the failure count follows the lock target.
-         * Under {@code UUID} it is per account, so one account's lock never makes another account at the same
-         * address lock on its first wrong password; under {@code IP} it stays per address; {@code BOTH} keeps
-         * both counts and each lock follows its own count.
+         * Failure counts follow the configured targets: UUID counts by account and IP by address.
+         * BOTH counts each address-account pair separately and locks the address only when enough
+         * distinct accounts have failed there (UltiKits/UltiLogin#50).
          */
         private Player otherPlayerAtTheSameAddress() {
             return UltiLoginTestHelper.createMockPlayer("Other", UUID.randomUUID());

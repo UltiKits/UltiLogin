@@ -67,12 +67,7 @@ public class LoginService {
     // Sessions (IP:UUID -> last login time)
     private final Map<String, Long> sessions = new ConcurrentHashMap<>();
 
-    // Failed login attempts tracking (IP -> count)
-    /**
-     * Failed logins counted per IP address. The count follows the lock target (UltiKits/UltiLogin#48): it is
-     * kept under {@code IP} and {@code BOTH}, the types that lock an address, and accounts behind one
-     * address share it.
-     */
+    /** IP-mode failure count with the time of its latest failure; success never clears it. */
     private static final class AddressFailures {
         private final int count;
         private final long lastFailure;
