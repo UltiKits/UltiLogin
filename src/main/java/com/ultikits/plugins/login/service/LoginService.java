@@ -30,6 +30,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -72,13 +73,21 @@ public class LoginService {
      * kept under {@code IP} and {@code BOTH}, the types that lock an address, and accounts behind one
      * address share it.
      */
-    private final Map<String, Integer> failedAttempts = new ConcurrentHashMap<>();
-    /**
-     * Failed logins counted per account. Kept under {@code UUID} and {@code BOTH}, the types that lock an
-     * account, so one account's wrong passwords never count against another account at the same address
-     * under {@code UUID} (UltiKits/UltiLogin#48).
-     */
+    private static final class AddressFailures {
+        private final int count;
+        private final long lastFailure;
+
+        private AddressFailures(int count, long lastFailure) {
+            this.count = count;
+            this.lastFailure = lastFailure;
+        }
+    }
+
+    private final Map<String, AddressFailures> failedAttempts = new ConcurrentHashMap<>();
+    // UUID mode alone counts by account, independent of its address.
     private final Map<UUID, Integer> failedAttemptsByUuid = new ConcurrentHashMap<>();
+    // The outer map's compute serialises each address's distinct-account membership updates.
+    private final Map<String, Map<UUID, Long>> failingAccountsByIp = new ConcurrentHashMap<>();
 
     /** Immutable identity for one account attempting a login from one address. */
     private static final class LoginPair {
@@ -269,6 +278,7 @@ public class LoginService {
         originalLocations.clear();
         failedAttempts.clear();
         failedAttemptsByUuid.clear();
+        failingAccountsByIp.clear();
         failedAttemptsByPair.clear();
         lockedPairs.clear();
         lockedIps.clear();
@@ -312,153 +322,139 @@ public class LoginService {
     }
     
     /**
-     * Check if IP/UUID is locked due to failed attempts.
+     * Remove expired time-bearing counters on reads and writes, including idle addresses.
+     * Unlocked UUID and pair counters deliberately have no time-based expiry.
      */
-    public boolean isLocked(Player player) {
-        String ip = getPlayerIp(player);
-        UUID uuid = player.getUniqueId();
-        long now = clock.getAsLong();
-        
-        String lockoutType = LoginConfig.lockoutTypeOrDefault(config.getLockoutType());
-        
-        // Check IP lock
-        if ("IP".equals(lockoutType)) {
-            Long ipLockEnd = lockedIps.get(ip);
-            if (ipLockEnd != null && now < ipLockEnd) {
-                return true;
-            } else if (ipLockEnd != null) {
-                lockedIps.remove(ip);
-                failedAttempts.remove(ip);
-            }
-        }
+    private void pruneFailureWindows(long now) {
+        long duration = config.getLockoutDuration() * 1000L;
+        failedAttempts.forEach((ip, value) -> failedAttempts.computeIfPresent(ip,
+                (key, current) -> now - current.lastFailure >= duration ? null : current));
+        failingAccountsByIp.forEach((ip, value) -> failingAccountsByIp.computeIfPresent(ip, (key, current) -> {
+            current.values().removeIf(last -> now - last >= duration);
+            return current.isEmpty() ? null : current;
+        }));
+    }
 
-        // Check UUID lock
-        if ("UUID".equals(lockoutType)) {
-            Long uuidLockEnd = lockedUuids.get(uuid);
-            if (uuidLockEnd != null && now < uuidLockEnd) {
-                return true;
-            } else if (uuidLockEnd != null) {
-                // An expired lock resets the failure count too, as the IP branch does; otherwise the
-                // first wrong password after a UUID lock expired re-locked at once
-                // (UltiKits/UltiLogin#38).
-                lockedUuids.remove(uuid);
-                failedAttemptsByUuid.remove(uuid);
+    /** Expiring a lock also resets its own counter (UltiKits/UltiLogin#38). */
+    private <K> boolean activeLock(Map<K, Long> locks, K key, long now, Runnable resetCount) {
+        Long end = locks.get(key);
+        if (end == null) { return false; }
+        if (now < end) { return true; }
+        locks.computeIfPresent(key, (target, current) -> {
+            if (now >= current) {
+                resetCount.run();
+                return null;
             }
-        }
-        
-        if ("BOTH".equals(lockoutType)) {
-            LoginPair pair = new LoginPair(ip, uuid);
-            Long end = lockedPairs.get(pair);
-            if (end != null && now < end) {
-                return true;
-            } else if (end != null) {
-                lockedPairs.remove(pair, end);
-                failedAttemptsByPair.remove(pair);
-            }
-        }
+            return current;
+        });
         return false;
     }
-    
-    /**
-     * Get remaining lockout time in seconds.
-     */
-    public long getRemainingLockoutTime(Player player) {
-        String ip = getPlayerIp(player);
-        UUID uuid = player.getUniqueId();
-        long now = clock.getAsLong();
-        long remaining = 0;
-        
-        String type = LoginConfig.lockoutTypeOrDefault(config.getLockoutType());
-        Long ipEnd = "IP".equals(type) ? lockedIps.get(ip) : null;
-        if (ipEnd != null) {
-            remaining = Math.max(remaining, (ipEnd - now) / 1000);
-        }
-        Long uuidEnd = "UUID".equals(type) ? lockedUuids.get(uuid) : null;
-        if (uuidEnd != null) {
-            remaining = Math.max(remaining, (uuidEnd - now) / 1000);
-        }
-        
-        Long pairEnd = "BOTH".equals(type) ? lockedPairs.get(new LoginPair(ip, uuid)) : null;
-        if (pairEnd != null) {
-            remaining = Math.max(remaining, (pairEnd - now) / 1000);
-        }
-        return remaining;
-    }
-    
-    /**
-     * Record a failed login attempt.
-     */
-    private void recordFailedAttempt(Player player) {
-        if (config.getMaxLoginAttempts() <= 0) {
-            return;
-        }
-        
-        String ip = getPlayerIp(player);
-        UUID uuid = player.getUniqueId();
-        String lockoutType = LoginConfig.lockoutTypeOrDefault(config.getLockoutType());
-        boolean locksIp = "IP".equals(lockoutType);
-        boolean locksUuid = "UUID".equals(lockoutType);
-        long unlockTime = clock.getAsLong() + (config.getLockoutDuration() * 1000L);
 
-        // The count follows the lock target (UltiKits/UltiLogin#48): the address is counted and locked under
-        // IP, the account under UUID, and BOTH keeps both counts, each lock following its own.
-        if ("BOTH".equals(lockoutType)) {
+    /**
+     * Check the configured lock targets. Lockout operations share a monitor so expiry cannot
+     * reset a newly recorded count between updating a counter and publishing its lock.
+     */
+    public synchronized boolean isLocked(Player player) {
+        long now = clock.getAsLong();
+        pruneFailureWindows(now);
+        String ip = getPlayerIp(player);
+        UUID uuid = player.getUniqueId();
+        String type = LoginConfig.lockoutTypeOrDefault(config.getLockoutType());
+        if ("UUID".equals(type)) {
+            return activeLock(lockedUuids, uuid, now, () -> failedAttemptsByUuid.remove(uuid));
+        }
+        boolean addressLocked = activeLock(lockedIps, ip, now, () -> {
+            failedAttempts.remove(ip);
+            failingAccountsByIp.remove(ip);
+        });
+        if ("IP".equals(type)) { return addressLocked; }
+        LoginPair pair = new LoginPair(ip, uuid);
+        boolean pairLocked = activeLock(lockedPairs, pair, now, () -> failedAttemptsByPair.remove(pair));
+        return addressLocked || pairLocked;
+    }
+
+    /** Get the longest applicable remaining lockout time in seconds. */
+    public synchronized long getRemainingLockoutTime(Player player) {
+        isLocked(player); // Prune counters and expire locks before reading their times.
+        long now = clock.getAsLong();
+        String type = LoginConfig.lockoutTypeOrDefault(config.getLockoutType());
+        UUID uuid = player.getUniqueId();
+        String ip = getPlayerIp(player);
+        long end;
+        if ("UUID".equals(type)) {
+            end = lockedUuids.getOrDefault(uuid, now);
+        } else {
+            end = lockedIps.getOrDefault(ip, now);
+            if ("BOTH".equals(type)) {
+                end = Math.max(end, lockedPairs.getOrDefault(new LoginPair(ip, uuid), now));
+            }
+        }
+        return Math.max(0L, (end - now) / 1000L);
+    }
+
+    /** Record one password failure, atomically within each target's counter. */
+    private synchronized void recordFailedAttempt(Player player) {
+        long now = clock.getAsLong();
+        pruneFailureWindows(now);
+        int maximum = config.getMaxLoginAttempts();
+        if (maximum <= 0) { return; }
+        String ip = getPlayerIp(player);
+        UUID uuid = player.getUniqueId();
+        String type = LoginConfig.lockoutTypeOrDefault(config.getLockoutType());
+        long unlockTime = now + config.getLockoutDuration() * 1000L;
+        if ("IP".equals(type)) {
+            AddressFailures failures = failedAttempts.compute(ip, (key, current) ->
+                    new AddressFailures(current == null ? 1 : current.count + 1, now));
+            if (failures.count >= maximum) { lockedIps.putIfAbsent(ip, unlockTime); }
+        } else if ("UUID".equals(type)) {
+            int attempts = failedAttemptsByUuid.merge(uuid, 1, Integer::sum);
+            if (attempts >= maximum) { lockedUuids.putIfAbsent(uuid, unlockTime); }
+        } else {
             LoginPair pair = new LoginPair(ip, uuid);
             int attempts = failedAttemptsByPair.merge(pair, 1, Integer::sum);
-            if (attempts >= config.getMaxLoginAttempts()) {
-                lockedPairs.putIfAbsent(pair, unlockTime);
-            }
-        }
-        if (locksIp) {
-            int attempts = failedAttempts.getOrDefault(ip, 0) + 1;
-            failedAttempts.put(ip, attempts);
-            if (attempts >= config.getMaxLoginAttempts()) {
-                lockedIps.put(ip, unlockTime);
-            }
-        }
-        if (locksUuid) {
-            int attempts = failedAttemptsByUuid.getOrDefault(uuid, 0) + 1;
-            failedAttemptsByUuid.put(uuid, attempts);
-            if (attempts >= config.getMaxLoginAttempts()) {
-                lockedUuids.put(uuid, unlockTime);
-            }
+            if (attempts >= maximum) { lockedPairs.putIfAbsent(pair, unlockTime); }
+            failingAccountsByIp.compute(ip, (key, current) -> {
+                Map<UUID, Long> accounts = current == null ? new HashMap<>() : current;
+                accounts.put(uuid, now);
+                if (accounts.size() >= maximum) { lockedIps.putIfAbsent(ip, unlockTime); }
+                return accounts;
+            });
         }
     }
-    
-    /**
-     * Get remaining login attempts for a player.
-     */
-    public int getRemainingAttempts(Player player) {
-        if (config.getMaxLoginAttempts() <= 0) {
-            return -1; // Unlimited
-        }
-        String lockoutType = LoginConfig.lockoutTypeOrDefault(config.getLockoutType());
-        int attempts = 0;
-        if ("IP".equals(lockoutType)) {
-            attempts = Math.max(attempts, failedAttempts.getOrDefault(getPlayerIp(player), 0));
-        }
-        if ("UUID".equals(lockoutType)) {
-            attempts = Math.max(attempts, failedAttemptsByUuid.getOrDefault(player.getUniqueId(), 0));
-        }
-        if ("BOTH".equals(lockoutType)) {
+
+    /** Get remaining attempts for the configured counter, or -1 when unlimited. */
+    public synchronized int getRemainingAttempts(Player player) {
+        boolean locked = isLocked(player);
+        int maximum = config.getMaxLoginAttempts();
+        if (maximum <= 0) { return -1; }
+        if (locked) { return 0; }
+        String type = LoginConfig.lockoutTypeOrDefault(config.getLockoutType());
+        int attempts;
+        if ("IP".equals(type)) {
+            AddressFailures failures = failedAttempts.get(getPlayerIp(player));
+            attempts = failures == null ? 0 : failures.count;
+        } else if ("UUID".equals(type)) {
+            attempts = failedAttemptsByUuid.getOrDefault(player.getUniqueId(), 0);
+        } else {
             attempts = failedAttemptsByPair.getOrDefault(new LoginPair(getPlayerIp(player), player.getUniqueId()), 0);
         }
-        return config.getMaxLoginAttempts() - attempts;
+        return Math.max(0, maximum - attempts);
     }
-    
+
     /**
-     * Clear failed attempts for a player (on successful login).
+     * Success clears only its account (UUID) or pair (BOTH). Shared IP failures and distinct
+     * failing-account memberships expire naturally; success never removes or shortens a lock.
      */
-    private void clearFailedAttempts(Player player) {
+    private synchronized void clearFailedAttempts(Player player) {
+        pruneFailureWindows(clock.getAsLong());
         String type = LoginConfig.lockoutTypeOrDefault(config.getLockoutType());
-        if ("BOTH".equals(type)) {
-            failedAttemptsByPair.remove(new LoginPair(getPlayerIp(player), player.getUniqueId()));
-        } else {
-            failedAttempts.remove(getPlayerIp(player));
+        if ("UUID".equals(type)) {
             failedAttemptsByUuid.remove(player.getUniqueId());
+        } else if ("BOTH".equals(type)) {
+            failedAttemptsByPair.remove(new LoginPair(getPlayerIp(player), player.getUniqueId()));
         }
     }
-    
+
     /**
      * Validate password based on current mode (GUI/Command).
      */
@@ -585,9 +581,9 @@ public class LoginService {
         if (!hashesMatch(hash, account.getPasswordHash())) {
             recordFailedAttempt(player);
             // The reply says "locked" only when this attempt actually recorded a lock, never
-            // because of the count (UltiLogin#23): unlimited attempts and an unrecognised
-            // lockout-type both count without locking, and a limited count can reach -1 while
-            // locked (UltiLogin#38). A lock that existed before this attempt was refused above,
+            // because of the count (UltiLogin#23). Unlimited attempts do not count or lock;
+            // an unusable lockout type resolves to the declared default. A lock that existed
+            // before this attempt was refused above,
             // before any password check, so the lock here is new and lasts lockout-duration.
             if (isLocked(player)) {
                 return new LoginResult(false, config.getAccountLocked()
@@ -600,9 +596,6 @@ public class LoginService {
             }
             return new LoginResult(false, i18n("wrong_password"));
         }
-        
-        // Clear failed attempts on success
-        clearFailedAttempts(player);
         
         // Update last login
         String ip = getPlayerIp(player);
@@ -1135,6 +1128,7 @@ public class LoginService {
      * @param player the player to complete login for
      */
     public void completeLogin(Player player) {
+        clearFailedAttempts(player);
         UUID uuid = player.getUniqueId();
         loggedInPlayers.put(uuid, true);
         joinTimes.remove(uuid);
