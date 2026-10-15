@@ -80,6 +80,33 @@ public class LoginService {
      */
     private final Map<UUID, Integer> failedAttemptsByUuid = new ConcurrentHashMap<>();
 
+    /** Immutable identity for one account attempting a login from one address. */
+    private static final class LoginPair {
+        private final String address;
+        private final UUID uuid;
+
+        private LoginPair(String address, UUID uuid) {
+            this.address = address;
+            this.uuid = uuid;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            if (this == other) { return true; }
+            if (!(other instanceof LoginPair)) { return false; }
+            LoginPair pair = (LoginPair) other;
+            return address.equals(pair.address) && uuid.equals(pair.uuid);
+        }
+
+        @Override
+        public int hashCode() {
+            return 31 * address.hashCode() + uuid.hashCode();
+        }
+    }
+
+    private final Map<LoginPair, Integer> failedAttemptsByPair = new ConcurrentHashMap<>();
+    private final Map<LoginPair, Long> lockedPairs = new ConcurrentHashMap<>();
+
     // Locked IPs (IP -> unlock time)
     private final Map<String, Long> lockedIps = new ConcurrentHashMap<>();
 
@@ -242,6 +269,8 @@ public class LoginService {
         originalLocations.clear();
         failedAttempts.clear();
         failedAttemptsByUuid.clear();
+        failedAttemptsByPair.clear();
+        lockedPairs.clear();
         lockedIps.clear();
         lockedUuids.clear();
         pendingPanelRequests.clear();
@@ -288,12 +317,12 @@ public class LoginService {
     public boolean isLocked(Player player) {
         String ip = getPlayerIp(player);
         UUID uuid = player.getUniqueId();
-        long now = System.currentTimeMillis();
+        long now = clock.getAsLong();
         
         String lockoutType = LoginConfig.lockoutTypeOrDefault(config.getLockoutType());
         
         // Check IP lock
-        if ("IP".equals(lockoutType) || "BOTH".equals(lockoutType)) {
+        if ("IP".equals(lockoutType)) {
             Long ipLockEnd = lockedIps.get(ip);
             if (ipLockEnd != null && now < ipLockEnd) {
                 return true;
@@ -304,7 +333,7 @@ public class LoginService {
         }
 
         // Check UUID lock
-        if ("UUID".equals(lockoutType) || "BOTH".equals(lockoutType)) {
+        if ("UUID".equals(lockoutType)) {
             Long uuidLockEnd = lockedUuids.get(uuid);
             if (uuidLockEnd != null && now < uuidLockEnd) {
                 return true;
@@ -317,6 +346,16 @@ public class LoginService {
             }
         }
         
+        if ("BOTH".equals(lockoutType)) {
+            LoginPair pair = new LoginPair(ip, uuid);
+            Long end = lockedPairs.get(pair);
+            if (end != null && now < end) {
+                return true;
+            } else if (end != null) {
+                lockedPairs.remove(pair, end);
+                failedAttemptsByPair.remove(pair);
+            }
+        }
         return false;
     }
     
@@ -326,18 +365,23 @@ public class LoginService {
     public long getRemainingLockoutTime(Player player) {
         String ip = getPlayerIp(player);
         UUID uuid = player.getUniqueId();
-        long now = System.currentTimeMillis();
+        long now = clock.getAsLong();
         long remaining = 0;
         
-        Long ipEnd = lockedIps.get(ip);
+        String type = LoginConfig.lockoutTypeOrDefault(config.getLockoutType());
+        Long ipEnd = "IP".equals(type) ? lockedIps.get(ip) : null;
         if (ipEnd != null) {
             remaining = Math.max(remaining, (ipEnd - now) / 1000);
         }
-        Long uuidEnd = lockedUuids.get(uuid);
+        Long uuidEnd = "UUID".equals(type) ? lockedUuids.get(uuid) : null;
         if (uuidEnd != null) {
             remaining = Math.max(remaining, (uuidEnd - now) / 1000);
         }
         
+        Long pairEnd = "BOTH".equals(type) ? lockedPairs.get(new LoginPair(ip, uuid)) : null;
+        if (pairEnd != null) {
+            remaining = Math.max(remaining, (pairEnd - now) / 1000);
+        }
         return remaining;
     }
     
@@ -352,12 +396,19 @@ public class LoginService {
         String ip = getPlayerIp(player);
         UUID uuid = player.getUniqueId();
         String lockoutType = LoginConfig.lockoutTypeOrDefault(config.getLockoutType());
-        boolean locksIp = "IP".equals(lockoutType) || "BOTH".equals(lockoutType);
-        boolean locksUuid = "UUID".equals(lockoutType) || "BOTH".equals(lockoutType);
-        long unlockTime = System.currentTimeMillis() + (config.getLockoutDuration() * 1000L);
+        boolean locksIp = "IP".equals(lockoutType);
+        boolean locksUuid = "UUID".equals(lockoutType);
+        long unlockTime = clock.getAsLong() + (config.getLockoutDuration() * 1000L);
 
         // The count follows the lock target (UltiKits/UltiLogin#48): the address is counted and locked under
         // IP, the account under UUID, and BOTH keeps both counts, each lock following its own.
+        if ("BOTH".equals(lockoutType)) {
+            LoginPair pair = new LoginPair(ip, uuid);
+            int attempts = failedAttemptsByPair.merge(pair, 1, Integer::sum);
+            if (attempts >= config.getMaxLoginAttempts()) {
+                lockedPairs.putIfAbsent(pair, unlockTime);
+            }
+        }
         if (locksIp) {
             int attempts = failedAttempts.getOrDefault(ip, 0) + 1;
             failedAttempts.put(ip, attempts);
@@ -383,13 +434,15 @@ public class LoginService {
         }
         String lockoutType = LoginConfig.lockoutTypeOrDefault(config.getLockoutType());
         int attempts = 0;
-        if ("IP".equals(lockoutType) || "BOTH".equals(lockoutType)) {
+        if ("IP".equals(lockoutType)) {
             attempts = Math.max(attempts, failedAttempts.getOrDefault(getPlayerIp(player), 0));
         }
-        if ("UUID".equals(lockoutType) || "BOTH".equals(lockoutType)) {
+        if ("UUID".equals(lockoutType)) {
             attempts = Math.max(attempts, failedAttemptsByUuid.getOrDefault(player.getUniqueId(), 0));
         }
-        // Under BOTH the nearer of the two locks decides how many attempts are left.
+        if ("BOTH".equals(lockoutType)) {
+            attempts = failedAttemptsByPair.getOrDefault(new LoginPair(getPlayerIp(player), player.getUniqueId()), 0);
+        }
         return config.getMaxLoginAttempts() - attempts;
     }
     
@@ -397,8 +450,13 @@ public class LoginService {
      * Clear failed attempts for a player (on successful login).
      */
     private void clearFailedAttempts(Player player) {
-        failedAttempts.remove(getPlayerIp(player));
-        failedAttemptsByUuid.remove(player.getUniqueId());
+        String type = LoginConfig.lockoutTypeOrDefault(config.getLockoutType());
+        if ("BOTH".equals(type)) {
+            failedAttemptsByPair.remove(new LoginPair(getPlayerIp(player), player.getUniqueId()));
+        } else {
+            failedAttempts.remove(getPlayerIp(player));
+            failedAttemptsByUuid.remove(player.getUniqueId());
+        }
     }
     
     /**
