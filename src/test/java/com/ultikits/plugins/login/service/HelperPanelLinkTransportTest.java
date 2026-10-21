@@ -276,27 +276,29 @@ class HelperPanelLinkTransportTest {
         }
     }
 
-    // ==================== Test 2: not connected -> anonymous fallback ====================
+    // ==================== Test 2: not connected -> visible link error, no request (plan 21-18) ====================
 
     @Nested
     @DisplayName("server not logged in to UltiCloud")
     class NotConnected {
 
         @Test
-        @DisplayName("NOT_CONNECTED on create falls back to the anonymous request and the legacy playerUuid poll")
-        void fallsBackToAnonymous() {
+        @DisplayName("NOT_CONNECTED on create says 'link error' on the main thread, cancels the request and sends nothing without the credential")
+        void notConnectedFailsVisiblyWithoutAnyRequest() {
             createScript.add(noExchange(UltiCloudRequests.Outcome.NOT_CONNECTED));
 
-            String requestId = openLink();
-            anonymousPollScript.add(status("completed"));
-            runLastPoll();
+            new PanelCommand(UltiLoginTestHelper.getMockPlugin(), service).openPanel(player);
 
-            assertThat(anonymousBodies).as("the anonymous create carried the same body").hasSize(1);
-            assertThat(anonymousBodies.get(0).get("requestId").getAsString()).isEqualTo(requestId);
-            http.verify(() -> SimpleHttpClient.post(eq("http://ulticloud.test/auth/magic-link"), anyMap(), anyString()));
-            http.verify(() -> SimpleHttpClient.get("http://ulticloud.test/auth/magic-link/poll?playerUuid=" + playerUuid));
+            verify(player).sendMessage(text("panel_link_error"));
+            verify(player, never()).sendMessage(text("panel_error"));
+            assertThat(service.hasPendingPanelRequest(playerUuid)).as("the request was cancelled").isFalse();
+            assertThat(pollRunnables).as("no poll was started").isEmpty();
+            cloud.verify(() -> UltiCloudRequests.post(anyString(), anyString()), times(1));
             cloud.verify(() -> UltiCloudRequests.get(anyString(), anyMap()), never());
-            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+            assertThat(anonymousBodies).as("requests sent without the server's credential").isEmpty();
+            http.verify(() -> SimpleHttpClient.post(anyString(), anyMap(), anyString()), never());
+            http.verify(() -> SimpleHttpClient.get(anyString()), never());
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
         }
     }
 

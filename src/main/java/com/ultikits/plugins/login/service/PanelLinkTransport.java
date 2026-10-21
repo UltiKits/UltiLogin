@@ -1,12 +1,8 @@
 package com.ultikits.plugins.login.service;
 
-import com.google.gson.Gson;
 import com.google.gson.JsonObject;
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.utils.SimpleHttpClient;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -41,7 +37,7 @@ interface PanelLinkTransport {
     /**
      * Whether a link this transport created carries the server owner's UltiCloud credential, so the
      * Worker honoured the facts {@code /panel} reported and a {@code proof} in its poll is trusted
-     * (Phase 18 magic-link contract, sections 2 and 14). The anonymous transport never is.
+     * (Phase 18 magic-link contract, sections 2 and 14).
      *
      * @return {@code true} only for the transport that goes through the framework's credential
      */
@@ -62,8 +58,9 @@ interface PanelLinkTransport {
     }
 
     /**
-     * The server is not logged in to UltiCloud, so the credentialed transport made no request. This is
-     * the only signal on which {@code /panel} falls back to the anonymous request (contract section 13).
+     * The server is not logged in to UltiCloud, so the credentialed transport made no request.
+     * {@code /panel} reports it as a link error; since plan 21-18 there is no request without the
+     * server's credential to fall back to.
      */
     final class NotConnectedException extends RuntimeException {
         private static final long serialVersionUID = 1L;
@@ -75,8 +72,8 @@ interface PanelLinkTransport {
 
     /**
      * The Worker answered the credentialed create with 401 or 403: the server's credential is invalid
-     * or does not own this server. Never retried anonymously, so a broken credential surfaces instead
-     * of hiding behind the old-plugin track (contract sections 2 and 13).
+     * or does not own this server. Never retried, so a broken credential surfaces instead
+     * (contract sections 2 and 13).
      */
     final class CredentialRefusedException extends RuntimeException {
         private static final long serialVersionUID = 1L;
@@ -95,42 +92,13 @@ interface PanelLinkTransport {
 
     /**
      * The credentialed transport could not complete the exchange (the helper reported an I/O error or
-     * refused the path). Shown as a failure and never retried anonymously (contract section 13).
+     * refused the path). Shown as a failure and never retried (contract section 13).
      */
     final class LinkFailedException extends RuntimeException {
         private static final long serialVersionUID = 1L;
 
         LinkFailedException(String reason) {
             super("Panel link request failed: " + reason);
-        }
-    }
-
-    /**
-     * The request {@code /panel} has always made: no server credential attached, and the legacy poll
-     * keyed by player UUID, which reports only {@code pending} and {@code completed}.
-     */
-    final class Anonymous implements PanelLinkTransport {
-
-        private final Gson gson = new Gson();
-
-        @Override
-        public SimpleHttpClient.Response create(JsonObject body) {
-            Map<String, String> headers = new HashMap<>();
-            headers.put("Content-Type", "application/json");
-            return SimpleHttpClient.post(apiUrl() + "/auth/magic-link", headers, gson.toJson(body));
-        }
-
-        @Override
-        public SimpleHttpClient.Response poll(String requestId, UUID playerUuid) {
-            return SimpleHttpClient.get(apiUrl() + "/auth/magic-link/poll?playerUuid=" + playerUuid);
-        }
-
-        private static String apiUrl() {
-            try {
-                return UltiTools.getEnv().getString("api-url");
-            } catch (Exception e) {
-                throw new NotConfiguredException(e);
-            }
         }
     }
 }
