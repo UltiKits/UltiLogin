@@ -1712,9 +1712,6 @@ public class LoginService {
                 cleanupPanelRequest(requestId);
                 return new PanelLinkResult(false, null, "API returned status " + response.getStatus());
             }
-        } catch (PanelLinkTransport.NotConfiguredException e) {
-            cleanupPanelRequest(requestId);
-            return new PanelLinkResult(false, null, "API URL not configured");
         } catch (PanelLinkTransport.NotConnectedException e) {
             // The server is not logged in to UltiCloud. Since plan 21-18 there is no request without
             // the server's credential, so this is a visible failure, never a fallback.
@@ -1843,9 +1840,6 @@ public class LoginService {
 
                 dispatchPanelPollStatus(player, uuid, requestId, stringOrNull(data, "status"), data,
                         transport.credentialed());
-            } catch (PanelLinkTransport.NotConfiguredException e) {
-                plugin.getLogger().warn(i18n("log_auth_polling_no_api"));
-                stopOwnPoll(uuid, requestId);
             } catch (Exception e) {
                 plugin.getLogger().debug(i18n("log_auth_poll_error").replace("{ERROR}", String.valueOf(e.getMessage())));
             }

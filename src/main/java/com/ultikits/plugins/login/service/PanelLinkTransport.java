@@ -20,7 +20,9 @@ interface PanelLinkTransport {
      *
      * @param body the create request body (camelCase keys)
      * @return the HTTP response
-     * @throws NotConfiguredException when the UltiCloud API address is not configured
+     * @throws NotConnectedException when the server is not logged in to UltiCloud
+     * @throws CredentialRefusedException when the Worker refused the server's credential
+     * @throws LinkFailedException when the exchange could not be completed
      */
     SimpleHttpClient.Response create(JsonObject body);
 
@@ -29,33 +31,19 @@ interface PanelLinkTransport {
      *
      * @param requestId  the plugin's own id of the request being polled
      * @param playerUuid the player the request was made for
-     * @return the HTTP response
-     * @throws NotConfiguredException when the UltiCloud API address is not configured
+     * @return the HTTP response; a non-2xx status when no answer could be read
      */
     SimpleHttpClient.Response poll(String requestId, UUID playerUuid);
 
     /**
      * Whether a link this transport created carries the server owner's UltiCloud credential, so the
      * Worker honoured the facts {@code /panel} reported and a {@code proof} in its poll is trusted
-     * (Phase 18 magic-link contract, sections 2 and 14).
+     * (Phase 18 magic-link contract, sections 2 and 14). Deliberately without a default: every
+     * transport states it, and only a transport that returns {@code true} has its proofs read.
      *
-     * @return {@code true} only for the transport that goes through the framework's credential
+     * @return {@code true} only for a transport that goes through the framework's credential
      */
-    default boolean credentialed() {
-        return false;
-    }
-
-    /**
-     * The UltiCloud API address ({@code api-url} in the framework's environment) cannot be read, so no
-     * request was sent.
-     */
-    final class NotConfiguredException extends RuntimeException {
-        private static final long serialVersionUID = 1L;
-
-        NotConfiguredException(Throwable cause) {
-            super("API URL not configured", cause);
-        }
-    }
+    boolean credentialed();
 
     /**
      * The server is not logged in to UltiCloud, so the credentialed transport made no request.

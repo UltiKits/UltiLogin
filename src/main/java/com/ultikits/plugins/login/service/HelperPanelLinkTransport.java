@@ -10,7 +10,8 @@ import java.util.UUID;
 
 /**
  * {@code /panel} with the server's own UltiCloud credential, through the framework helper
- * {@link UltiCloudRequests} (Phase 18 magic-link contract, sections 12 and 13).
+ * {@link UltiCloudRequests} (Phase 18 magic-link contract, sections 12 and 13). Since plan 21-18 this
+ * is the only production {@link PanelLinkTransport}: there is no request without the credential.
  * <p>
  * The framework attaches the server owner's bearer to the one connection it opens; this module never
  * sees, reads or stores the token. Create is {@code POST /auth/magic-link}; the poll is
@@ -21,12 +22,12 @@ import java.util.UUID;
  *   <li>create, {@code OK} with 401 or 403 &rarr; {@link PanelLinkTransport.CredentialRefusedException};
  *       any other status is returned for {@link LoginService} to read;</li>
  *   <li>create, {@code NOT_CONNECTED} (the server is not logged in to UltiCloud) &rarr;
- *       {@link PanelLinkTransport.NotConnectedException}, the only case in which {@code /panel} falls
- *       back to the anonymous request;</li>
+ *       {@link PanelLinkTransport.NotConnectedException}, shown as a link error; there is no request
+ *       without the credential to fall back to (plan 21-18);</li>
  *   <li>create, {@code IO_ERROR} or {@code PATH_NOT_ALLOWED} &rarr;
- *       {@link PanelLinkTransport.LinkFailedException}, shown as a failure, never retried anonymously;</li>
+ *       {@link PanelLinkTransport.LinkFailedException}, shown as a link error, never retried;</li>
  *   <li>poll, anything but {@code OK} &rarr; a non-2xx response, so the poll goes on silently until the
- *       link's lifetime is up; a credentialed link is never switched to the legacy poll.</li>
+ *       link's lifetime is up.</li>
  * </ul>
  * The helper refuses to run on the server's primary thread; {@code /panel}'s create and its poll both
  * run on asynchronous tasks.
