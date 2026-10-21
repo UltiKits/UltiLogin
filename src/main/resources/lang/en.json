@@ -86,7 +86,7 @@
   "panel_timeout_paused": "&7Your login countdown is paused while the web panel link is open. You still cannot move or chat until you are logged in.",
   "panel_timeout_resumed": "&eYour login countdown has resumed. Log in before it runs out.",
   "panel_credential_refused": "&cUltiCloud refused this server's credential, so no panel link was created. Ask the server owner to run 'ulticloud login' in the console.",
-  "panel_link_error": "&cCould not reach UltiCloud to create a panel link. Please try again later.",
+  "panel_link_error": "&cCould not create a panel link. The server must be signed in to UltiCloud; ask the server owner to run 'ulticloud login' in the console. If already signed in, check the connection and try again.",
   "panel_not_registered_in_game": "&cYou are not registered in game on this server, so the web panel cannot log you in. Use /register <password> <confirm> first.",
   "panel_web_registration_hint": "&eYour account was created on the web and has no game password yet. Set one with /setpassword <password> <confirm>, so you can also log in with /login.",
 

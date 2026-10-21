@@ -86,7 +86,7 @@
   "panel_timeout_paused": "&7网页面板链接有效期间，登录倒计时已暂停。登录前你仍然无法移动或聊天。",
   "panel_timeout_resumed": "&e登录倒计时已恢复，请在倒计时结束前登录。",
   "panel_credential_refused": "&cUltiCloud 拒绝了本服务器的凭据，未生成面板链接。请服主在控制台运行 'ulticloud login' 重新登录。",
-  "panel_link_error": "&c无法连接 UltiCloud 生成面板链接，请稍后再试。",
+  "panel_link_error": "&c无法生成面板链接。服务器必须先登录 UltiCloud；请服主在控制台运行 'ulticloud login'。若已登录，请检查连接后重试。",
   "panel_not_registered_in_game": "&c你尚未在本服务器的游戏内注册，网页面板无法为你登录。请先使用 /register <密码> <确认密码> 注册。",
   "panel_web_registration_hint": "&e你的账号是在网页上创建的，还没有游戏密码。请使用 /setpassword <密码> <确认密码> 设置，之后也可以用 /login 登录。",
 
