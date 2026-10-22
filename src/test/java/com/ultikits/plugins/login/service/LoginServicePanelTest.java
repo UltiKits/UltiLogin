@@ -72,8 +72,11 @@ import static org.mockito.Mockito.when;
  * the login-timeout pause while a link is pending (Phase 18 magic-link contract, sections 2, 7 and 13).
  * <p>
  * The poll task is captured rather than scheduled, so each test runs one poll at a time by hand;
- * main-thread callbacks run inline. The HTTP layer is the framework's {@link SimpleHttpClient},
- * statically mocked, so the anonymous transport is the one under test unless a test injects its own.
+ * main-thread callbacks run inline. Create and poll go through the framework helper
+ * {@link UltiCloudRequests}, statically mocked; the server is logged in to UltiCloud unless a test
+ * calls {@link #disconnectServer()}. The framework's {@link SimpleHttpClient} is statically mocked
+ * too, and every test ends by proving it was never called: {@code /panel} has no request without the
+ * server's credential (plan 21-18).
  */
 @DisplayName("LoginService /panel facts, outcomes and timeout pause")
 class LoginServicePanelTest {
@@ -98,6 +101,10 @@ class LoginServicePanelTest {
     private MockedStatic<SimpleHttpClient> http;
     private MockedStatic<UltiCloudRequests> cloud;
 
+    /** Outcome the helper reports for create; anything but {@code OK} means no HTTP exchange. */
+    private UltiCloudRequests.Outcome createOutcome = UltiCloudRequests.Outcome.OK;
+    /** Runs inside the helper's create call, while the request is "in flight" (tests set it). */
+    private Runnable duringCreate = () -> { };
     /** Bodies the create requests carried, in order. */
     private final List<JsonObject> createdBodies = new ArrayList<>();
     /** Poll responses still to be served, in order; an empty script answers {@code pending}. */
@@ -157,27 +164,41 @@ class LoginServicePanelTest {
         ultiTools.when(UltiTools::getEnv).thenReturn(env);
         commonUtils = mockStatic(CommonUtils.class);
         commonUtils.when(CommonUtils::getUltiToolsUUID).thenReturn("server-uuid");
+        // No /panel path may reach the framework's plain HTTP client (tearDown proves it); the stubs
+        // only keep a regression from going out to the network before that check fails the test.
         http = mockStatic(SimpleHttpClient.class);
-        http.when(() -> SimpleHttpClient.post(anyString(), anyMap(), anyString())).thenAnswer(invocation -> {
-            createdBodies.add(JsonParser.parseString(invocation.<String>getArgument(2)).getAsJsonObject());
-            return new SimpleHttpClient.Response(200, CREATE_OK);
-        });
-        http.when(() -> SimpleHttpClient.get(anyString())).thenAnswer(invocation -> {
-            String next = pollScript.poll();
-            return new SimpleHttpClient.Response(200, next != null ? next : status("pending"));
-        });
-        // The server is not logged in to UltiCloud unless a test says otherwise, so /panel falls back
-        // to the anonymous request above (HelperPanelLinkTransportTest covers the credentialed one).
+        http.when(() -> SimpleHttpClient.post(anyString(), anyMap(), anyString()))
+                .thenReturn(new SimpleHttpClient.Response(200, CREATE_OK));
+        http.when(() -> SimpleHttpClient.get(anyString()))
+                .thenReturn(new SimpleHttpClient.Response(200, status("pending")));
+        // The server is logged in to UltiCloud: create and poll go through the (mocked) framework
+        // helper with the server's own credential.
         cloud = mockStatic(UltiCloudRequests.class);
-        UltiCloudRequests.Result notConnected = mock(UltiCloudRequests.Result.class);
-        when(notConnected.getOutcome()).thenReturn(UltiCloudRequests.Outcome.NOT_CONNECTED);
-        when(notConnected.getStatusCode()).thenReturn(-1);
-        cloud.when(() -> UltiCloudRequests.post(anyString(), anyString())).thenReturn(notConnected);
-        cloud.when(() -> UltiCloudRequests.get(anyString(), anyMap())).thenReturn(notConnected);
+        cloud.when(() -> UltiCloudRequests.post(anyString(), anyString())).thenAnswer(invocation -> {
+            createdBodies.add(JsonParser.parseString(invocation.<String>getArgument(1)).getAsJsonObject());
+            duringCreate.run();
+            if (createOutcome != UltiCloudRequests.Outcome.OK) {
+                return noExchange(createOutcome);
+            }
+            return cloudResult(200, CREATE_OK);
+        });
+        cloud.when(() -> UltiCloudRequests.get(anyString(), anyMap())).thenAnswer(invocation -> {
+            String next = pollScript.poll();
+            return cloudResult(200, next != null ? next : status("pending"));
+        });
     }
 
     @AfterEach
     void tearDown() throws Exception {
+        try {
+            // Plan 21-18: no request without the server's credential, in any test.
+            http.verifyNoInteractions();
+        } finally {
+            closeStatics();
+        }
+    }
+
+    private void closeStatics() throws Exception {
         cloud.close();
         http.close();
         commonUtils.close();
@@ -299,6 +320,11 @@ class LoginServicePanelTest {
                     seamPolls.add(requestId + "|" + uuid);
                     return new SimpleHttpClient.Response(200, status("pending"));
                 }
+
+                @Override
+                public boolean credentialed() {
+                    return true;
+                }
             });
 
             String requestId = openLink();
@@ -312,15 +338,15 @@ class LoginServicePanelTest {
         }
 
         @Test
-        @DisplayName("the anonymous transport keeps the legacy create URL and the playerUuid poll")
-        void anonymousTransportKeepsLegacyEndpoints() {
-            openLink();
+        @DisplayName("by default create and poll go through the framework helper: POST /auth/magic-link, poll by requestId")
+        void defaultTransportIsTheCredentialedHelper() {
+            String requestId = openLink();
             pollOnce(status("pending"));
 
-            http.verify(() -> SimpleHttpClient.post(
-                    org.mockito.ArgumentMatchers.eq("http://ulticloud.test/auth/magic-link"), anyMap(), anyString()));
-            http.verify(() -> SimpleHttpClient.get(
-                    "http://ulticloud.test/auth/magic-link/poll?playerUuid=" + playerUuid));
+            cloud.verify(() -> UltiCloudRequests.post(
+                    org.mockito.ArgumentMatchers.eq("/auth/magic-link"), anyString()), times(1));
+            cloud.verify(() -> UltiCloudRequests.get("/auth/magic-link/poll",
+                    Collections.singletonMap("requestId", requestId)), times(1));
         }
     }
 
@@ -564,14 +590,9 @@ class LoginServicePanelTest {
 
     // ==================== Plan 18-17 Tests 6-10: web registration and the empty game password ====================
 
-    /** The server is logged in to UltiCloud: create and poll go through the (mocked) framework helper. */
-    private void connectServer() {
-        cloud.when(() -> UltiCloudRequests.post(anyString(), anyString()))
-                .thenAnswer(invocation -> cloudResult(200, CREATE_OK));
-        cloud.when(() -> UltiCloudRequests.get(anyString(), anyMap())).thenAnswer(invocation -> {
-            String next = pollScript.poll();
-            return cloudResult(200, next != null ? next : status("pending"));
-        });
+    /** The server is not logged in to UltiCloud: the helper's create makes no request. */
+    private void disconnectServer() {
+        createOutcome = UltiCloudRequests.Outcome.NOT_CONNECTED;
     }
 
     private static UltiCloudRequests.Result cloudResult(int statusCode, String body) {
@@ -579,6 +600,13 @@ class LoginServicePanelTest {
         when(result.getOutcome()).thenReturn(UltiCloudRequests.Outcome.OK);
         when(result.getStatusCode()).thenReturn(statusCode);
         when(result.getBody()).thenReturn(body);
+        return result;
+    }
+
+    private static UltiCloudRequests.Result noExchange(UltiCloudRequests.Outcome outcome) {
+        UltiCloudRequests.Result result = mock(UltiCloudRequests.Result.class);
+        when(result.getOutcome()).thenReturn(outcome);
+        when(result.getStatusCode()).thenReturn(-1);
         return result;
     }
 
@@ -600,7 +628,6 @@ class LoginServicePanelTest {
         @Test
         @DisplayName("Test 6: completed + web_registration for an unregistered player creates one row with an empty hash, logs in, hints once")
         void createsAccountWithEmptyHash() {
-            connectServer();
             setRegistered(false);
             openLink();
 
@@ -621,7 +648,6 @@ class LoginServicePanelTest {
         @Test
         @DisplayName("Test 7: the same outcome for a player who registered in game meanwhile leaves the row untouched and logs in, no hint")
         void existingAccountIsNeverOverwritten() {
-            connectServer();
             setRegistered(false);
             openLink();
             AccountData existing = registerWith("hash", "salt");
@@ -636,8 +662,28 @@ class LoginServicePanelTest {
         }
 
         @Test
-        @DisplayName("a web_registration proof on an anonymous (uncredentialed) link creates nothing and logs nobody in")
-        void proofOnAnonymousLinkIsIgnored() {
+        @DisplayName("a web_registration proof through a transport that does not vouch for the server credential creates nothing")
+        void proofThroughUncredentialedTransportIsIgnored() {
+            // The proof is trusted only when the transport says the link carries the server
+            // owner's credential (contract sections 7 and 14); the local pending-request map is not
+            // authentication.
+            service.setPanelLinkTransport(new PanelLinkTransport() {
+                @Override
+                public SimpleHttpClient.Response create(JsonObject body) {
+                    return new SimpleHttpClient.Response(200, CREATE_OK);
+                }
+
+                @Override
+                public SimpleHttpClient.Response poll(String requestId, UUID uuid) {
+                    String next = pollScript.poll();
+                    return new SimpleHttpClient.Response(200, next != null ? next : status("pending"));
+                }
+
+                @Override
+                public boolean credentialed() {
+                    return false;
+                }
+            });
             setRegistered(false);
             openLink();
 
@@ -651,7 +697,6 @@ class LoginServicePanelTest {
         @Test
         @DisplayName("completed + bound_account for a player with no game account is refused with 'not registered in game'")
         void boundAccountWithoutGameAccountIsRefused() {
-            connectServer();
             setRegistered(false);
             openLink();
 
@@ -666,7 +711,6 @@ class LoginServicePanelTest {
         @Test
         @DisplayName("web registration respects max-register-per-ip: over the limit nothing is created and nobody logged in")
         void webRegistrationRespectsIpLimit() {
-            connectServer();
             setRegistered(false);
             openLink();
             when(config.getMaxRegisterPerIp()).thenReturn(1);
@@ -797,20 +841,17 @@ class LoginServicePanelTest {
         }
 
         @Test
-        @DisplayName("F4: invalidating a player's credentials also forgets which transport created their pending link")
-        @SuppressWarnings("unchecked")
-        void invalidationForgetsTheTransport() throws Exception {
-            connectServer();
+        @DisplayName("F4: a completion that arrives after the player's credentials were invalidated logs nobody in")
+        void staleCompletionAfterInvalidationIsDiscarded() {
             openLink();
-            java.lang.reflect.Field field = LoginService.class.getDeclaredField("panelRequestTransports");
-            field.setAccessible(true);
-            Map<String, ?> transports = (Map<String, ?>) field.get(service);
-            assertThat(transports).as("control: the link's transport is recorded").hasSize(1);
 
             service.invalidateSession(playerUuid, false);
+            // The poll call that was already in flight when the credentials changed now returns.
+            pollOnce(completed());
 
             assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
-            assertThat(transports).as("transport entries left behind by the invalidation").isEmpty();
+            assertThat(service.isLoggedIn(playerUuid)).as("logged in by a link invalidated before it completed").isFalse();
+            assertMessage("panel_auth_success_player", 0);
         }
 
         @Test
@@ -841,7 +882,6 @@ class LoginServicePanelTest {
     @Test
     @DisplayName("Codex run 1 P2: a web registration whose database write fails resumes the countdown with the time that remained")
     void failedWebRegistrationResumesTheCountdown() {
-        connectServer();
         setRegistered(false);
         service.onPlayerJoin(player);
         advance(55);
@@ -860,6 +900,99 @@ class LoginServicePanelTest {
         assertThat(service.isLoggedIn(playerUuid)).isFalse();
         verify(player, times(1)).kickPlayer(anyString());
         assertMessage("panel_timeout_resumed", 1);
+    }
+
+    // ==================== plan 21-18: no request without the server's credential ====================
+
+    @Nested
+    @DisplayName("server not logged in to UltiCloud (plan 21-18 hard cut)")
+    class NotConnectedHardCut {
+
+        @Test
+        @DisplayName("NOT_CONNECTED fails visibly as a link error, cleans its request and sends nothing without the credential")
+        void notConnectedFailsAsLinkError() {
+            disconnectServer();
+
+            LoginService.PanelLinkResult result = service.requestPanelLink(player);
+
+            assertThat(result.isSuccess()).as("a link was published without the server's credential").isFalse();
+            assertThat(result.getFailure()).isEqualTo(LoginService.PanelLinkResult.Failure.LINK_ERROR);
+            assertThat(result.getRequestId()).as("nothing to poll for").isNull();
+            assertThat(result.getUrl()).isNull();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).as("the request was cleaned up").isFalse();
+            assertThat(pollRunnables).as("no poll was started").isEmpty();
+            cloud.verify(() -> UltiCloudRequests.post(anyString(), anyString()), times(1));
+            cloud.verify(() -> UltiCloudRequests.get(anyString(), anyMap()), never());
+            // tearDown proves SimpleHttpClient (the old request without a credential) was never called.
+        }
+
+        @Test
+        @DisplayName("NOT_CONNECTED resumes the login countdown with exactly the time that remained, silently")
+        void notConnectedResumesTheRemainingCountdownOnce() {
+            service.onPlayerJoin(player);
+            advance(55);
+            disconnectServer();
+
+            assertThat(service.requestPanelLink(player).isSuccess()).isFalse();
+
+            service.checkTimeouts();
+            advance(4);
+            service.checkTimeouts();
+            verify(player, never()).kickPlayer(anyString());
+
+            advance(2);
+            service.checkTimeouts();
+
+            verify(player, times(1)).kickPlayer(anyString());
+            verify(UltiLoginTestHelper.getMockPlugin(), never()).i18n("panel_timeout_paused");
+            verify(UltiLoginTestHelper.getMockPlugin(), never()).i18n("panel_timeout_resumed");
+        }
+
+        @Test
+        @DisplayName("NOT_CONNECTED cleans only its own request: an earlier credentialed link stays pending and still completes")
+        void notConnectedCleansOnlyItsOwnRequest() {
+            String first = openLink();
+            disconnectServer();
+
+            LoginService.PanelLinkResult second = service.requestPanelLink(player);
+
+            assertThat(second.isSuccess()).isFalse();
+            assertThat(second.getFailure()).isEqualTo(LoginService.PanelLinkResult.Failure.LINK_ERROR);
+            assertThat(service.isPanelRequestCurrent(playerUuid, first, service.getInvalidationGeneration(playerUuid)))
+                    .as("the earlier link is untouched").isTrue();
+
+            pollOnce(completed());
+
+            assertThat(service.isLoggedIn(playerUuid)).as("the earlier credentialed link still logs in").isTrue();
+        }
+
+        @Test
+        @DisplayName("an invalidation while the create was in flight leaves nothing pending when the server is not connected")
+        void invalidationDuringNotConnectedCreateLeavesNothingPending() {
+            disconnectServer();
+            long generation = service.getInvalidationGeneration(playerUuid);
+            duringCreate = () -> service.invalidateSession(playerUuid, false);
+
+            LoginService.PanelLinkResult result = service.requestPanelLink(player, generation);
+
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+            assertThat(pollRunnables).isEmpty();
+        }
+
+        @Test
+        @DisplayName("LoginService keeps one transport and no per-request transport bookkeeping")
+        void noPerRequestTransportBookkeeping() {
+            List<String> transportFields = new ArrayList<>();
+            for (java.lang.reflect.Field field : LoginService.class.getDeclaredFields()) {
+                if (field.getGenericType().getTypeName().contains(PanelLinkTransport.class.getName())) {
+                    transportFields.add(field.getName());
+                }
+            }
+            // Control: the scan finds the one transport field the service is known to hold.
+            assertThat(transportFields).as("transport-typed fields of LoginService")
+                    .containsExactly("panelLinkTransport");
+        }
     }
 
     // ==================== Test 5: catalogue parity ====================

@@ -182,17 +182,11 @@ public class LoginService {
     // every 10 ticks indefinitely.
     private final Map<UUID, BukkitTask> pendingCredentialGuiReopenTasks = new ConcurrentHashMap<>();
 
-    // The /panel HTTP seam (see PanelLinkTransport). /panel creates its link with the server's own
-    // UltiCloud credential through the framework helper; only when the server is not logged in to
-    // UltiCloud does it fall back to the anonymous request it has always made (Phase 18 magic-link
-    // contract, section 13).
+    // The /panel HTTP seam (see PanelLinkTransport). /panel creates and polls its link only with the
+    // server's own UltiCloud credential, through the framework helper. A server that is not logged in
+    // to UltiCloud gets a visible link error; there is no request without the credential (plan 21-18;
+    // the Worker refuses such a request since the same hard cut).
     private volatile PanelLinkTransport panelLinkTransport = new HelperPanelLinkTransport();
-    private final PanelLinkTransport anonymousPanelLinkTransport = new PanelLinkTransport.Anonymous();
-
-    // The transport that created each pending request (requestId -> transport). A link is polled with
-    // the transport that created it: a credentialed link through the helper's requestId poll, an
-    // anonymous one through the legacy playerUuid poll -- never switched in the middle.
-    private final Map<String, PanelLinkTransport> panelRequestTransports = new ConcurrentHashMap<>();
 
     // Pending panel requests whose link the web has reported cancelled (requestId). A cancelled link
     // stays completable until it expires, so the request stays pending and its poll goes on; this set
@@ -234,8 +228,8 @@ public class LoginService {
     }
 
     /**
-     * Replace the transport {@code /panel} uses to reach the Worker (tests, and the credentialed
-     * transport that replaces the anonymous one).
+     * Replace the transport {@code /panel} uses to reach the Worker (tests only; production always uses
+     * {@link HelperPanelLinkTransport}).
      *
      * @param transport the transport to use from now on
      */
@@ -280,7 +274,6 @@ public class LoginService {
         lockedUuids.clear();
         pendingPanelRequests.clear();
         pendingPanelTimestamps.clear();
-        panelRequestTransports.clear();
         reportedCancelledPanelRequests.clear();
         panelPausedAt.clear();
         panelPauseAnnounced.clear();
@@ -748,7 +741,7 @@ public class LoginService {
 
     /**
      * Forget every pending {@code /panel} request of a player, with all its bookkeeping (timestamp,
-     * creating transport, reported-cancelled mark), without touching the poll or the countdown pause.
+     * reported-cancelled mark), without touching the poll or the countdown pause.
      * A completion that arrives afterwards finds no pending request and logs nobody in.
      *
      * @param playerUuid the player whose pending requests are forgotten
@@ -757,7 +750,6 @@ public class LoginService {
         pendingPanelRequests.entrySet().removeIf(entry -> {
             if (entry.getValue().equals(playerUuid)) {
                 pendingPanelTimestamps.remove(entry.getKey());
-                panelRequestTransports.remove(entry.getKey());
                 reportedCancelledPanelRequests.remove(entry.getKey());
                 return true;
             }
@@ -1673,19 +1665,11 @@ public class LoginService {
             body.addProperty("inGameLogin", isLoggedIn(playerUuidRaw));
             body.addProperty("registeredInUltiLogin", isRegistered(playerUuidRaw));
 
-            // Credentialed first; the anonymous request only when the server is not logged in to
-            // UltiCloud. A refused credential or a failed helper call is never retried anonymously.
-            PanelLinkTransport transport = panelLinkTransport;
-            SimpleHttpClient.Response response;
-            try {
-                response = transport.create(body);
-            } catch (PanelLinkTransport.NotConnectedException e) {
-                transport = anonymousPanelLinkTransport;
-                response = transport.create(body);
-            }
-            // Every branch below that does not publish the link removes this entry again
+            // Only with the server's credential. Not logged in to UltiCloud, a refused credential and a
+            // failed helper call each end this request below; none is retried without the credential.
+            // Every branch below that does not publish the link removes this request again
             // (cleanupPanelRequest).
-            panelRequestTransports.put(requestId, transport);
+            SimpleHttpClient.Response response = panelLinkTransport.create(body);
 
             if (response.isOk()) {
                 JsonObject responseBody = JsonParser.parseString(response.getBody()).getAsJsonObject();
@@ -1728,9 +1712,13 @@ public class LoginService {
                 cleanupPanelRequest(requestId);
                 return new PanelLinkResult(false, null, "API returned status " + response.getStatus());
             }
-        } catch (PanelLinkTransport.NotConfiguredException e) {
+        } catch (PanelLinkTransport.NotConnectedException e) {
+            // The server is not logged in to UltiCloud. Since plan 21-18 there is no request without
+            // the server's credential, so this is a visible failure, never a fallback.
             cleanupPanelRequest(requestId);
-            return new PanelLinkResult(false, null, "API URL not configured");
+            plugin.getLogger().warn(i18n("log_panel_link_failed").replace("{ERROR}", String.valueOf(e.getMessage())));
+            return new PanelLinkResult(false, null, "Request failed: " + e.getMessage(), null,
+                    PanelLinkResult.Failure.LINK_ERROR);
         } catch (PanelLinkTransport.CredentialRefusedException e) {
             cleanupPanelRequest(requestId);
             plugin.getLogger().warn(i18n("log_panel_credential_refused")
@@ -1803,7 +1791,7 @@ public class LoginService {
      * same player must never remove or cancel that newer poll's own task.
      *
      * @param playerUuid the player's UUID string; kept for callers, the poll itself is keyed by
-     *                   {@code player}'s UUID through {@link PanelLinkTransport#poll(String, UUID)}
+     *                   {@code requestId} through {@link PanelLinkTransport#poll(String, UUID)}
      * @param player the online player
      * @param requestId the pending request id this poll is confirming, from {@link
      *                  PanelLinkResult#getRequestId()}
@@ -1822,6 +1810,8 @@ public class LoginService {
             }
         }
 
+        // The one transport, captured once so every tick of this poll uses the same one.
+        final PanelLinkTransport transport = panelLinkTransport;
         final int maxPolls = 100; // 100 * 3s = 5 minutes
         final int[] pollCount = {0};
 
@@ -1836,7 +1826,6 @@ public class LoginService {
             }
 
             try {
-                PanelLinkTransport transport = panelRequestTransports.getOrDefault(requestId, panelLinkTransport);
                 SimpleHttpClient.Response response = transport.poll(requestId, uuid);
                 if (!response.isOk()) {
                     return;
@@ -1851,9 +1840,6 @@ public class LoginService {
 
                 dispatchPanelPollStatus(player, uuid, requestId, stringOrNull(data, "status"), data,
                         transport.credentialed());
-            } catch (PanelLinkTransport.NotConfiguredException e) {
-                plugin.getLogger().warn(i18n("log_auth_polling_no_api"));
-                stopOwnPoll(uuid, requestId);
             } catch (Exception e) {
                 plugin.getLogger().debug(i18n("log_auth_poll_error").replace("{ERROR}", String.valueOf(e.getMessage())));
             }
@@ -1895,8 +1881,8 @@ public class LoginService {
                 final boolean isServerOwner = data.has("is_server_owner")
                     && !data.get("is_server_owner").isJsonNull()
                     && data.get("is_server_owner").getAsBoolean();
-                // The legacy (anonymous) poll never carries a proof; a link made without the server's
-                // credential cannot have satisfied proof 3, so a proof there is not trusted.
+                // A proof is trusted only from a transport that vouches for the server's credential
+                // (contract sections 7 and 14); the local pending-request map is not authentication.
                 final String proof = credentialed ? stringOrNull(data, "proof") : null;
                 // Complete login on main thread, resolving by the exact request id this poll was
                 // started for -- see handlePanelPollCompleted's javadoc for why.
@@ -2218,7 +2204,6 @@ public class LoginService {
      */
     private UUID removePanelRequest(String requestId) {
         pendingPanelTimestamps.remove(requestId);
-        panelRequestTransports.remove(requestId);
         reportedCancelledPanelRequests.remove(requestId);
         return pendingPanelRequests.remove(requestId);
     }
@@ -2338,9 +2323,12 @@ public class LoginService {
             NONE,
             /** Any failure without a message of its own. */
             GENERIC,
-            /** The Worker refused the server's UltiCloud credential (401 or 403); not retried anonymously. */
+            /** The Worker refused the server's UltiCloud credential (401 or 403); not retried. */
             CREDENTIAL_REFUSED,
-            /** The framework helper could not complete the request; not retried anonymously. */
+            /**
+             * The framework helper could not complete the request, or the server is not logged in to
+             * UltiCloud; never retried without the credential.
+             */
             LINK_ERROR
         }
 

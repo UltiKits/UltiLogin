@@ -5,7 +5,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 本文件记录本项目的所有重要更改，格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)。
 
-## [Unreleased]
+## [2.0.0] - 2026-10-21
 
 ### Added
 
@@ -55,39 +55,30 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   未封禁的 UUID/组合计数仍只在自身成功或对应封禁到期时重置。新文件或缺少键时默认 BOTH；现有值（含 IP、小写 uuid）逐字节保留，
   无效值只警告并在内存回退到 BOTH。已识别的旧出厂注释更新，自写注释不覆盖。
 
-- **`/panel` now needs the account password or a remembered device once the new UltiCloud panel is live.** The link
-  is created with the server's own UltiCloud credential (through UltiTools 6.3.0's authenticated request helper) and
-  tells the web whether the player is logged in in game and whether the name has an UltiLogin account. Opening the
-  link no longer logs the player in by itself: the page asks for the password of the account the game name is linked
-  to, a device that account told it to remember (one click), a confirmation by a signed-in account (only for a player
-  logged in in game), or a new account (only for a name without an UltiLogin account). A name with an UltiLogin
-  account that is neither logged in in game nor linked is refused until the player runs `/login` once. A server that
-  is not signed in to UltiCloud falls back to a link without the credential, which can only sign in to an account the
-  name is already linked to; a refused credential (HTTP 401/403) is reported and never retried without it. Older
-  UltiLogin versions keep working under those restricted rules until the old path is switched off some time after
-  this release.
-- **新 UltiCloud 面板上线后，`/panel` 需要账号密码或已记住的设备。** 链接使用服务器自己的 UltiCloud 凭据创建（通过 UltiTools 6.3.0
-  的带认证请求助手），并告知网页玩家是否已在游戏内登录、该名字是否有 UltiLogin 账号。仅打开链接不再让玩家登录：网页会要求输入
-  游戏名所关联账号的密码、该账号让其记住的设备（点击一次）、已登录账号的确认（仅限已在游戏内登录的玩家），或新建账号（仅限没有
-  UltiLogin 账号的名字）。有 UltiLogin 账号、但既未在游戏内登录也未关联的名字会被拒绝，直到玩家执行一次 `/login`。未登录 UltiCloud
-  的服务器会退回到不带凭据的链接，只能登录到名字已关联的账号；凭据被拒绝（HTTP 401/403）时会提示，且绝不改用不带凭据的请求重试。
-  旧版 UltiLogin 在这些受限规则下仍可使用，直到旧路径在本版本发布后的某个时间关闭。
+- **`/panel` requires the server to be signed in to UltiCloud.** Create and poll both use the server owner's
+  credential; there is no anonymous fallback or grace period for older plugins. If the server is not signed in,
+  no link is created: the player is told to ask the owner to run `ulticloud login` in the console. A failed creation
+  restores the remaining login countdown silently; it does not grant a new timeout. A refused credential (HTTP
+  401/403) is reported in game and in the console, never retried without it. Opening a link never logs the player
+  in by itself: the page asks for the linked account's password, a device that account told it to remember (one
+  click), confirmation by a signed-in account (only for a player logged in in game), or a new account (only for a
+  name without an UltiLogin account). A name with an UltiLogin account that is neither logged in in game nor linked
+  is refused until the player runs `/login` once. Normal website account login, browser link verification,
+  completion and cancellation, and game `/login` remain available.
+- **`/panel` 要求服务器先登录 UltiCloud。** 创建和轮询链接都使用服务器所有者的凭据；没有匿名回退，也不为旧插件保留宽限期。
+  服务器未登录时不生成链接，玩家会被提示请服主在控制台执行 `ulticloud login`。创建失败会按剩余时间静默恢复登录倒计时，
+  不会重新给予完整超时。凭据被拒绝（HTTP 401/403）时会在游戏内及控制台提示，绝不改用无凭据请求重试。仅打开链接不会让玩家登录：
+  网页会要求输入关联账号的密码、使用该账号让其记住的设备（点击一次）、由已登录账号确认（仅限已在游戏内登录的玩家），或新建账号
+  （仅限没有 UltiLogin 账号的名字）。已有 UltiLogin 账号、但既未在游戏内登录也未关联的名字会被拒绝，直到玩家先执行一次 `/login`。
+  正常网站账号登录、浏览器链接验证／完成／取消，以及游戏 `/login` 均保留。
 
-- This version requires UltiTools 6.3.0 or later, including its authenticated request helper (`UltiCloudRequests`),
-  and declares `api-version: 630` in `plugin.yml` (it was `621`; the last release, 1.0.0, declared `620`). Raising
-  `api-version` makes the next published version of this module a major change; its number is decided when it is
-  released. Every earlier framework checks this value and refuses the module with a warning that the UltiTools
-  version is outdated, naming it `UltiLogin`; the module's own start-up (`registerSelf`) does not run. An error about
-  a class those versions do not have (this module uses `UltiCloudRequests`, added in 6.3.0) may be logged first, and
-  on 6.2.1–6.2.4, which check only after building the module's components, it may take the warning's place. The
-  README now states UltiTools 6.3.0+, Paper 1.21+ and Java 21+, and that a new module jar needs a server restart
-  (`/ul reload` does not load it) (UltiKits/UltiTools-Reborn#544).
-- 本版本需要 UltiTools 6.3.0 或更高版本（包括其带认证请求助手 `UltiCloudRequests`），并在 `plugin.yml` 中声明 `api-version: 630`
-  （原为 `621`；上一个发布版本 1.0.0 声明的是 `620`）。提高 `api-version` 使本模块下一个发布版本成为主版本变更；具体版本号在发布时
-  决定。所有更早的框架都会检查该值并拒绝加载本模块，给出点名 `UltiLogin` 的"UltiTools 版本过旧"警告；本模块自身的启动逻辑
-  （`registerSelf`）不会运行。可能先记录一条缺少类的错误（本模块使用 6.3.0 新增的 `UltiCloudRequests`）；6.2.1–6.2.4 在构建模块
-  组件之后才检查，该错误可能取代警告。README 现写明 UltiTools 6.3.0+、Paper 1.21+ 与 Java 21+，以及新的模块 JAR 需要重启服务器
-  （`/ul reload` 不会加载它）（UltiKits/UltiTools-Reborn#544）。
+- UltiLogin 2.0.0 requires UltiTools-API 6.3.0 or later and raises `api-version` in `plugin.yml` from `620`
+  (the last released version, 1.0.0) to `630`. Older frameworks cannot load this module; upgrade UltiTools before
+  installing it. A new module JAR needs a server restart; `/ul reload` only reloads configuration
+  (UltiKits/UltiTools-Reborn#544).
+- UltiLogin 2.0.0 需要 UltiTools-API 6.3.0 或更高版本，`plugin.yml` 中的 `api-version` 从上一个发布版本 1.0.0 的 `620`
+  提高到 `630`。更早的框架无法加载本模块；请先升级 UltiTools，再安装本模块。新的模块 JAR 需要重启服务器，`/ul reload` 只会
+  重载配置（UltiKits/UltiTools-Reborn#544）。
 
 - `plugin.yml` now declares `identify-string: ultilogin`, the key of this module's entry in the UltiCloud catalogue.
   The framework's update check and `/upm update` skip a module that does not declare it, so this module now takes part
@@ -214,26 +205,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `/logadmin`、`/recover`、`/regs`、`/panel`）现在会被真正移除，其 `LoginProtectionListener` 监听器也不再
   触发。此前本模块用一个只打印日志的方法替换了框架的卸载方法，因此两者都会一直保持生效，直到服务器重启
   （UltiKits/UltiLogin#29）。
-- A wrong password is now answered with the account-locked message only when that attempt really
-  locks the account. Two configurations used to show it although nothing was locked and the next
-  attempt was always accepted: `security.max-login-attempts: 0` (unlimited attempts), on every
-  wrong password; and a `security.lockout-type` other than `IP`, `UUID` or `BOTH`, on every wrong
-  password from the one that reaches the limit onwards. Both now answer "Wrong password! Please
-  try again." The account-locked message was `messages.account-locked` ("try again in `{TIME}`
-  seconds", with `{TIME}` set to `security.lockout-duration`); the new reply comes from this
-  module's language catalogue (key `wrong_password`), so it follows the server's `language`
-  setting. Whether an unrecognised `lockout-type` should lock at all is unchanged here and is
-  tracked in UltiKits/UltiLogin#37. Servers with a limit and a recognised `lockout-type` are
-  unchanged: a wrong password still shows the attempts remaining, and the attempt that reaches the
-  limit still shows the account-locked message and locks the account (UltiKits/UltiLogin#23).
-- 输错密码时，只有该次尝试确实锁定了账户，才会回复账户锁定消息。此前有两种配置会在实际并未锁定、下一次尝试
-  也总是照常受理的情况下显示该消息：`security.max-login-attempts: 0`（不限制尝试次数）时的每一次输错；以及
-  `security.lockout-type` 不是 `IP`、`UUID` 或 `BOTH` 时，从达到上限的那一次起的每一次输错。两者现在都回复
-  "密码错误！请重试。"。账户锁定消息即 `messages.account-locked`（"请在 `{TIME}` 秒后重试"，`{TIME}` 取
-  `security.lockout-duration`）；新的回复来自本模块的语言文件（键 `wrong_password`），因此会跟随服务器的
-  `language` 设置。无法识别的 `lockout-type` 究竟是否应当锁定，本次不作改变，由 UltiKits/UltiLogin#37 跟踪。
-  设置了次数上限且 `lockout-type` 可识别的服务器不受影响：输错密码仍显示剩余尝试次数，达到上限的那一次仍
-  显示账户锁定消息并锁定账户（UltiKits/UltiLogin#23）。
+- With `security.max-login-attempts: 0` (unlimited attempts), a wrong password now replies "Wrong password! Please
+  try again." instead of claiming the account was locked when nothing was locked. This reply uses `wrong_password`
+  in the module's language catalogue and follows `language`. With a limit, a wrong password shows the remaining
+  attempts until a lock is actually reached, then shows `messages.account-locked` (UltiKits/UltiLogin#23).
+- 设置 `security.max-login-attempts: 0`（不限制尝试次数）时，输错密码现在回复“密码错误！请重试。”，不再在实际未封禁时声称
+  账号已锁定。该回复取自本模块语言文件的 `wrong_password`，跟随 `language`。设置次数上限时，输错密码会显示剩余次数，
+  只有实际达到封禁条件时才显示 `messages.account-locked`（UltiKits/UltiLogin#23）。
 
 ### Removed
 
@@ -308,13 +286,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   one account's lock no longer leaves every other account at the same address one wrong password away from being
   locked, and one account's wrong passwords no longer count against another's; `messages.attempts-remaining`
   is per account too. With `IP` it stays per address (accounts behind one address share it, by design). With
-  `BOTH` both counts are kept: the address is locked when its count reaches `security.max-login-attempts` and
-  the account when its own count does, and the attempts shown are those left before the nearer lock
+  `BOTH`, failures are counted per (address, account UUID) pair and separately by different failing accounts at
+  each address, as described in the lockout redesign above; remaining attempts follow the pair's count
   (UltiKits/UltiLogin#48, UltiKits/UltiLogin#45).
 - 失败登录次数现在按 `security.lockout-type` 所封禁的对象计数。使用 `UUID` 时按账号计数：一个账号被封禁后，同一地址上
   的其他账号不再只差一次输错就被封禁，一个账号输错密码也不再算到另一个账号头上；`messages.attempts-remaining`
-  同样按账号。使用 `IP` 时仍按地址计数（同一地址背后的账号共用，设计如此）。使用 `BOTH` 时两种计数都保留：地址的计数达到
-  `security.max-login-attempts` 时封禁该地址，账号自己的计数达到上限时封禁该账号，显示的剩余次数为离较近一次封禁所剩的次数
+  同样按账号。使用 `IP` 时仍按地址计数（同一地址背后的账号共用，设计如此）。使用 `BOTH` 时按（地址、账号 UUID）组合计数，
+  另统计每个地址上失败的不同账号数，详见上面的登录封禁重构；显示的剩余次数按组合计数
   （UltiKits/UltiLogin#48、UltiKits/UltiLogin#45）。
 - An account write whose stored row no longer exists is now reported as failed on every storage type. On a
   database shared by several servers, another server's `/logadmin unregister` between this module's read and
@@ -361,13 +339,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - 在 `security.lockout-type: UUID` 下，封禁到期后玩家重新获得完整的 `security.max-login-attempts` 次机会。
   此前失败计数被保留，封禁结束后第一次输错密码就会立即再次锁定（UltiKits/UltiLogin#38）。
 
-- An unrecognised `security.lockout-type` in `config/login.yml` (anything other than `IP`, `UUID` or
-  `BOTH`, in any letter case) now falls back to the default, `IP`, and the module names it in a console
-  warning at start-up and on `/ul reload`, quoting the value as written. Before, such a value switched the
-  lockout off while the wrong-password reply still said the account was locked (UltiKits/UltiLogin#37).
-- `config/login.yml` 中无法识别的 `security.lockout-type`（`IP`、`UUID`、`BOTH` 以外的任何值，不区分大小写）现在回落到默认值
-  `IP`，模块在启动和 `/ul reload` 时会在控制台警告中原样引用该值。此前这样的值会关闭登录封禁，而密码错误的回复仍称账号已被锁定
-  （UltiKits/UltiLogin#37）。
+- An unusable `security.lockout-type` in `config/login.yml` (anything other than `IP`, `UUID` or `BOTH`, ignoring
+  letter case and surrounding spaces) now falls back to `BOTH` in memory only. The module names the original value
+  in a console warning at start-up and on `/ul reload`; the file is unchanged. Before, an unrecognised value switched
+  lockout off while the wrong-password reply still claimed the account was locked (UltiKits/UltiLogin#37).
+- `config/login.yml` 中无法使用的 `security.lockout-type`（忽略大小写及两端空格后，仍不是 `IP`、`UUID` 或 `BOTH` 的值）现在仅在
+  内存中回退到 `BOTH`。模块在启动和 `/ul reload` 时会在控制台警告中原样引用该值，文件不变。此前无法识别的值会关闭登录封禁，
+  而密码错误的回复仍称账号已被锁定（UltiKits/UltiLogin#37）。
 
 - The registration window (`gui-mode.enabled: true`) now shows `gui-mode.title-confirm` once the first
   password is entered, and `gui-mode.title-register` again after a mismatch: the page re-opens its window

@@ -86,6 +86,7 @@ What the player sees in game:
 | Refused by the web | "The web panel refused this sign-in: …" with the reason |
 | Link expired | "Your web panel link has expired. Run /panel again for a new one." |
 | Countdown running again | "Your login countdown has resumed. Log in before it runs out." (with the time that was left, never a fresh full timeout) |
+| The server is not signed in to UltiCloud, or the link request cannot connect | "Could not create a panel link. The server must be signed in to UltiCloud; ask the server owner to run 'ulticloud login' in the console. If already signed in, check the connection and try again." (no link; a failed creation restores the remaining login countdown silently) |
 | The server's UltiCloud credential is refused | "UltiCloud refused this server's credential, so no panel link was created. Ask the server owner to run 'ulticloud login' in the console." (also logged to the console) |
 
 **`/setpassword <new> <confirm>`.** An account created on the web has no game password, and `/login` refuses it
@@ -99,10 +100,11 @@ rules as `/register`. Afterwards `/login` works. An account that already has a p
 logged in automatically when they rejoin from the same IP within `session-timeout`; otherwise an administrator runs
 `/logadmin reset <player> <password>` and tells them the password.
 
-**Older UltiLogin versions** (1.0.0 and earlier) keep working with the new panel under restricted rules: their links
-can only sign in to an account the game name is already linked to, with that account's password. A server running
-this version that is not signed in to UltiCloud gets the same restricted links. The old path is switched off some time
-after this release.
+**The old anonymous path is removed immediately, with no grace period.** Creating and polling `/panel` links now
+requires the server owner's UltiCloud credential. Older plugins that create or poll links without that credential are
+not supported; update UltiLogin and run `ulticloud login` in the server console. This build creates no link when the
+server is not signed in, and never retries a failed or refused request without the credential. Normal website account
+login, browser link verification/completion/cancellation, and game `/login` remain available.
 
 `/panel` 为玩家提供一个可点击的 UltiCloud 链接，有效期五分钟，对应其在本服务器上的游戏名。需要在 `login.yml` 中设置
 `ulticloud.enabled: true`，并且服务器已登录 UltiCloud（在控制台执行 `ulticloud login`）。仅打开链接不会让任何人登录：网页会先要求
@@ -121,7 +123,7 @@ UltiKits 账号：在原账号的设置中解除关联，登录另一个账号�
 
 游戏内可能看到的提示：链接发出时登录倒计时暂停（仍不能移动或聊天）；网页登录成功；网页创建账号后提示用 `/setpassword` 设置游戏
 密码；网页取消（链接在到期前仍可完成）；网页拒绝及原因；链接过期；倒计时恢复（按暂停时剩余的时间，绝不重新计满）；服务器的
-UltiCloud 凭据被拒绝（同时写入控制台）。
+UltiCloud 凭据被拒绝（同时写入控制台）。未登录 UltiCloud 或连接失败时提示“无法生成面板链接。服务器必须先登录 UltiCloud；请服主在控制台运行 'ulticloud login'。若已登录，请检查连接后重试。”，不发链接；创建失败时按剩余时间静默恢复倒计时。
 
 **`/setpassword <新密码> <确认>`。** 网页创建的账号没有游戏密码，无论输入什么 `/login` 都会拒绝，且不计为密码错误。在
 `gui-mode.enabled: true` 下，这样的账号完全不会弹出数字键盘：进入服务器和每次再次提示时都会收到同一条提示，玩家因此可以输入
@@ -131,8 +133,9 @@ UltiCloud 凭据被拒绝（同时写入控制台）。
 **面板不可用时**，若这样的玩家还没有游戏密码：在 `session-enabled: true` 下，于 `session-timeout` 内从同一 IP 重进会自动登录；
 否则由管理员执行 `/logadmin reset <玩家> <密码>` 并把密码告诉玩家。
 
-**旧版 UltiLogin**（1.0.0 及更早）在新面板下仍可使用，但规则受限：其链接只能登录到游戏名已关联的账号，并需要该账号的密码。运行本版本但未登录 UltiCloud 的
-服务器得到的链接同样受限。旧路径将在本版本发布后的某个时间关闭。
+**旧匿名路径立即移除，不设宽限期。** 创建和轮询 `/panel` 链接都必须携带服务器所有者的 UltiCloud 凭据；不再支持未携带该凭据的
+旧插件创建或轮询链接。请更新 UltiLogin，并在服务器控制台执行 `ulticloud login`。运行本版本但未登录 UltiCloud 的服务器不会生成链接，
+请求失败或凭据被拒绝时也绝不改用无凭据请求。正常网站账号登录、浏览器链接验证／完成／取消，以及游戏 `/login` 均保留。
 
 ### Known limitations / 已知限制
 

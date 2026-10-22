@@ -67,12 +67,12 @@ import static org.mockito.Mockito.when;
 
 /**
  * {@code /panel} through the framework helper {@link UltiCloudRequests} (Phase 18 magic-link contract,
- * sections 2, 7, 12 and 13): the server's own credential on create and poll, the anonymous fallback only
- * when the server is not logged in to UltiCloud, and no anonymous retry after the credential was refused
- * or the helper failed.
+ * sections 2, 7, 12 and 13; plan 21-18): the server's own credential on create and poll is the only path.
+ * A server not logged in to UltiCloud, a refused credential and a failed helper call each end the request
+ * visibly, and none is retried without the credential.
  * <p>
- * The helper is statically mocked, so no token exists anywhere in this test; the anonymous path is the
- * framework's {@link SimpleHttpClient}, statically mocked too. The poll task is captured, not scheduled;
+ * The helper is statically mocked, so no token exists anywhere in this test. The framework's
+ * {@link SimpleHttpClient} is statically mocked too, only to prove it is never called. The poll task is captured, not scheduled;
  * asynchronous and main-thread callbacks run inline.
  */
 @DisplayName("/panel through the framework helper")
@@ -107,10 +107,10 @@ class HelperPanelLinkTransportTest {
     private final List<JsonObject> helperBodies = new ArrayList<>();
     /** Query maps the helper's poll carried. */
     private final List<Map<String, String>> helperPollQueries = new ArrayList<>();
-    /** Bodies the anonymous create carried. */
-    private final List<JsonObject> anonymousBodies = new ArrayList<>();
-    /** Anonymous poll answers still to be served; empty answers {@code pending}. */
-    private final Deque<String> anonymousPollScript = new ArrayDeque<>();
+    /** Bodies a plain (uncredentialed) HTTP create would have carried; must stay empty. */
+    private final List<JsonObject> uncredentialedBodies = new ArrayList<>();
+    /** Plain HTTP poll answers; only there so a regression fails an assertion, not the network. */
+    private final Deque<String> plainPollScript = new ArrayDeque<>();
     /** One captured poll runnable per poll started, in order. */
     private final List<Runnable> pollRunnables = new ArrayList<>();
 
@@ -166,11 +166,11 @@ class HelperPanelLinkTransportTest {
 
         http = mockStatic(SimpleHttpClient.class);
         http.when(() -> SimpleHttpClient.post(anyString(), anyMap(), anyString())).thenAnswer(invocation -> {
-            anonymousBodies.add(JsonParser.parseString(invocation.<String>getArgument(2)).getAsJsonObject());
+            uncredentialedBodies.add(JsonParser.parseString(invocation.<String>getArgument(2)).getAsJsonObject());
             return new SimpleHttpClient.Response(200, CREATE_OK);
         });
         http.when(() -> SimpleHttpClient.get(anyString())).thenAnswer(invocation -> {
-            String next = anonymousPollScript.poll();
+            String next = plainPollScript.poll();
             return new SimpleHttpClient.Response(200, next != null ? next : status("pending"));
         });
 
@@ -239,7 +239,7 @@ class HelperPanelLinkTransportTest {
     class Credentialed {
 
         @Test
-        @DisplayName("create goes through UltiCloudRequests.post and the poll through get(requestId); nothing anonymous")
+        @DisplayName("create goes through UltiCloudRequests.post and the poll through get(requestId); nothing without the credential")
         void createAndPollThroughHelper() {
             String requestId = openLink();
             pollScript.add(result(UltiCloudRequests.Outcome.OK, 200, COMPLETED));
@@ -276,31 +276,33 @@ class HelperPanelLinkTransportTest {
         }
     }
 
-    // ==================== Test 2: not connected -> anonymous fallback ====================
+    // ==================== Test 2: not connected -> visible link error, no request (plan 21-18) ====================
 
     @Nested
     @DisplayName("server not logged in to UltiCloud")
     class NotConnected {
 
         @Test
-        @DisplayName("NOT_CONNECTED on create falls back to the anonymous request and the legacy playerUuid poll")
-        void fallsBackToAnonymous() {
+        @DisplayName("NOT_CONNECTED on create says 'link error' on the main thread, cancels the request and sends nothing without the credential")
+        void notConnectedFailsVisiblyWithoutAnyRequest() {
             createScript.add(noExchange(UltiCloudRequests.Outcome.NOT_CONNECTED));
 
-            String requestId = openLink();
-            anonymousPollScript.add(status("completed"));
-            runLastPoll();
+            new PanelCommand(UltiLoginTestHelper.getMockPlugin(), service).openPanel(player);
 
-            assertThat(anonymousBodies).as("the anonymous create carried the same body").hasSize(1);
-            assertThat(anonymousBodies.get(0).get("requestId").getAsString()).isEqualTo(requestId);
-            http.verify(() -> SimpleHttpClient.post(eq("http://ulticloud.test/auth/magic-link"), anyMap(), anyString()));
-            http.verify(() -> SimpleHttpClient.get("http://ulticloud.test/auth/magic-link/poll?playerUuid=" + playerUuid));
+            verify(player).sendMessage(text("panel_link_error"));
+            verify(player, never()).sendMessage(text("panel_error"));
+            assertThat(service.hasPendingPanelRequest(playerUuid)).as("the request was cancelled").isFalse();
+            assertThat(pollRunnables).as("no poll was started").isEmpty();
+            cloud.verify(() -> UltiCloudRequests.post(anyString(), anyString()), times(1));
             cloud.verify(() -> UltiCloudRequests.get(anyString(), anyMap()), never());
-            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+            assertThat(uncredentialedBodies).as("requests sent without the server's credential").isEmpty();
+            http.verify(() -> SimpleHttpClient.post(anyString(), anyMap(), anyString()), never());
+            http.verify(() -> SimpleHttpClient.get(anyString()), never());
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
         }
     }
 
-    // ==================== Tests 3 and 4: refused or failed -> no anonymous retry ====================
+    // ==================== Tests 3 and 4: refused or failed -> no retry without the credential ====================
 
     @Nested
     @DisplayName("credential refused or helper failure")
@@ -312,7 +314,7 @@ class HelperPanelLinkTransportTest {
 
         @ParameterizedTest(name = "HTTP {0}")
         @ValueSource(ints = {401, 403})
-        @DisplayName("a 401 or 403 from create says 'server credential refused', cancels the request, never retries anonymously")
+        @DisplayName("a 401 or 403 from create says 'server credential refused', cancels the request, never retries without the credential")
         void refusedCredentialIsNeverDowngraded(int statusCode) {
             String errorCode = statusCode == 401 ? "invalid_credential" : "not_server_owner";
             createScript.add(result(UltiCloudRequests.Outcome.OK, statusCode,
@@ -330,7 +332,7 @@ class HelperPanelLinkTransportTest {
 
         @ParameterizedTest(name = "HTTP {0}")
         @ValueSource(ints = {429, 500, 503})
-        @DisplayName("429 or 5xx from create is a plain failure and is not retried anonymously")
+        @DisplayName("429 or 5xx from create is a plain failure and is not retried without the credential")
         void rateLimitOrServerErrorIsNotRetried(int statusCode) {
             createScript.add(result(UltiCloudRequests.Outcome.OK, statusCode,
                     "{\"code\":\"" + statusCode + "\",\"msg\":\"busy\"}"));
@@ -345,7 +347,7 @@ class HelperPanelLinkTransportTest {
 
         @ParameterizedTest(name = "{0}")
         @EnumSource(value = UltiCloudRequests.Outcome.class, names = {"IO_ERROR", "PATH_NOT_ALLOWED"})
-        @DisplayName("IO_ERROR or PATH_NOT_ALLOWED on create says 'link error', cancels the request, never retries anonymously")
+        @DisplayName("IO_ERROR or PATH_NOT_ALLOWED on create says 'link error', cancels the request, never retries without the credential")
         void helperFailureIsNotRetried(UltiCloudRequests.Outcome outcome) {
             createScript.add(noExchange(outcome));
 
@@ -356,6 +358,45 @@ class HelperPanelLinkTransportTest {
             assertThat(service.hasPendingPanelRequest(playerUuid)).as("the request was cancelled").isFalse();
             assertThat(pollRunnables).as("no poll was started").isEmpty();
             http.verify(() -> SimpleHttpClient.post(anyString(), anyMap(), anyString()), never());
+        }
+    }
+
+    // ==================== plan 21-18: one credentialed path ====================
+
+    @Nested
+    @DisplayName("one credentialed path (plan 21-18)")
+    class SingleCredentialedPath {
+
+        @Test
+        @DisplayName("credentialed() has no default: every transport states whether it carries the server credential")
+        void credentialedIsNotDefaulted() throws Exception {
+            assertThat(new HelperPanelLinkTransport().credentialed()).as("control: the helper vouches").isTrue();
+            assertThat(PanelLinkTransport.class.getMethod("credentialed").isDefault())
+                    .as("a default would let a transport be read as uncredentialed (or credentialed) by omission")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("the transport seam declares only the credentialed path's outcomes")
+        void seamDeclaresOnlyCredentialedOutcomes() {
+            List<String> nested = new ArrayList<>();
+            for (Class<?> type : PanelLinkTransport.class.getDeclaredClasses()) {
+                nested.add(type.getSimpleName());
+            }
+            assertThat(nested).as("types nested in PanelLinkTransport")
+                    .containsExactlyInAnyOrder("NotConnectedException", "CredentialRefusedException",
+                            "LinkFailedException");
+        }
+
+        @Test
+        @DisplayName("no main source sends a plain HTTP request or reads the API address itself")
+        void noRequestWithoutTheCredentialInMainSources() throws IOException {
+            // Control first: the same scan finds the helper calls the module is known to make.
+            assertThat(scanModuleSources("\\bUltiCloudRequests\\.(post|get)\\("))
+                    .as("control: the scan sees the helper calls").hasSize(2);
+            assertThat(scanModuleSources(
+                    "SimpleHttpClient\\.(post|get|put|delete|request)\\s*\\(|magic-link/poll\\?playerUuid|\"api-url\""))
+                    .as("plain HTTP requests or API-address reads in the module").isEmpty();
         }
     }
 

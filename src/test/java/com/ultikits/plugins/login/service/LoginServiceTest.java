@@ -12,7 +12,7 @@ import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.Query;
 import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.utils.CommonUtils;
-import com.ultikits.ultitools.utils.SimpleHttpClient;
+import com.ultikits.ultitools.utils.UltiCloudRequests;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -124,10 +124,8 @@ class LoginServiceTest {
         when(mockQuery.delete()).thenReturn(0);
 
         service = new LoginService(UltiLoginTestHelper.getMockPlugin(), config);
-        // The /panel tests in this class pin the anonymous request (SimpleHttpClient, statically
-        // mocked per test). The credentialed transport through the framework helper, and the choice
-        // between the two, are covered by HelperPanelLinkTransportTest.
-        service.setPanelLinkTransport(new PanelLinkTransport.Anonymous());
+        // The /panel tests in this class use the production transport, the framework helper
+        // UltiCloudRequests, statically mocked per test (plan 21-18: there is no other transport).
 
         playerUuid = UUID.randomUUID();
         player = UltiLoginTestHelper.createMockPlayer("TestPlayer", playerUuid);
@@ -3383,7 +3381,7 @@ class LoginServiceTest {
             // try/catch around UltiTools.getEnv() refused the request via the unrelated "API
             // URL not configured" branch regardless of whether the fence check above it existed
             // at all -- removing the fence entirely left this test passing unchanged. Stubbing
-            // UltiTools.getEnv(), CommonUtils .getUltiToolsUUID(), and SimpleHttpClient.post()
+            // UltiTools.getEnv(), CommonUtils .getUltiToolsUUID(), and UltiCloudRequests.post()
             // below makes the rest of the publish path succeed, so that with the fence removed
             // this request WOULD be published; the assertions then pin the fence-specific
             // outcome instead of a coincidental one. Verified locally: disabling the "if
@@ -3402,15 +3400,14 @@ class LoginServiceTest {
 
             YamlConfiguration env = mock(YamlConfiguration.class);
             when(env.getString("api-url")).thenReturn("http://ulticloud.test");
-            SimpleHttpClient.Response okResponse =
-                    new SimpleHttpClient.Response(200, "{\"data\":{\"url\":\"http://panel.test/link\"}}");
+            UltiCloudRequests.Result okResponse = cloudOk("{\"data\":{\"url\":\"http://panel.test/link\"}}");
 
             try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
                  MockedStatic<CommonUtils> commonUtils = mockStatic(CommonUtils.class);
-                 MockedStatic<SimpleHttpClient> http = mockStatic(SimpleHttpClient.class)) {
+                 MockedStatic<UltiCloudRequests> http = mockStatic(UltiCloudRequests.class)) {
                 ultiTools.when(UltiTools::getEnv).thenReturn(env);
                 commonUtils.when(CommonUtils::getUltiToolsUUID).thenReturn("server-uuid");
-                http.when(() -> SimpleHttpClient.post(anyString(), anyMap(), anyString()))
+                http.when(() -> UltiCloudRequests.post(anyString(), anyString()))
                         .thenReturn(okResponse);
 
                 LoginService.PanelLinkResult result = service.requestPanelLink(player, capturedGeneration);
@@ -3435,19 +3432,25 @@ class LoginServiceTest {
         @DisplayName("Should still attempt to publish when the captured generation matches the current one")
         void publishesWhenGenerationMatches() {
             // Regression guard: an uncontested request (no invalidation in the gap) must keep
-            // working through the new two-argument overload exactly like before. The API URL is
-            // deliberately left unconfigured so this test can tell the fence apart from the
-            // (unrelated) "API URL not configured" failure without mocking SimpleHttpClient.
+            // working through the new two-argument overload exactly like before.
             when(config.isUlticloudEnabled()).thenReturn(true);
 
             long capturedGeneration = service.getInvalidationGeneration(playerUuid);
+            UltiCloudRequests.Result okResponse = cloudOk("{\"data\":{\"url\":\"http://panel.test/link\"}}");
 
-            LoginService.PanelLinkResult result = service.requestPanelLink(player, capturedGeneration);
+            try (MockedStatic<CommonUtils> commonUtils = mockStatic(CommonUtils.class);
+                 MockedStatic<UltiCloudRequests> cloud = mockStatic(UltiCloudRequests.class)) {
+                commonUtils.when(CommonUtils::getUltiToolsUUID).thenReturn("server-uuid");
+                cloud.when(() -> UltiCloudRequests.post(anyString(), anyString())).thenReturn(okResponse);
 
-            assertThat(result.getError())
-                    .as("a request whose generation still matches must pass the fence and reach"
-                            + " the API-URL lookup, not be refused by the fence itself")
-                    .doesNotContain("invalidated");
+                LoginService.PanelLinkResult result = service.requestPanelLink(player, capturedGeneration);
+
+                assertThat(result.isSuccess())
+                        .as("a request whose generation still matches must pass the fence and be published: %s",
+                                result.getError())
+                        .isTrue();
+                assertThat(result.getRequestId()).isNotNull();
+            }
         }
     }
 
@@ -3463,7 +3466,7 @@ class LoginServiceTest {
             // *before* the blocking HTTP call -- the check and the pendingPanelRequests insert
             // are atomic with each other, but nothing re-checks either afterward. An
             // invalidateSession(...) landing *during* the call (simulated here from inside the
-            // mocked SimpleHttpClient.post() answer, after the pre-POST atomic check-and-insert
+            // mocked UltiCloudRequests.post() answer, after the pre-POST atomic check-and-insert
             // has already run) removes this request's pendingPanelRequests entry and bumps the
             // generation, but neither of those stops this in-flight call from finishing and
             // requestPanelLink() handing back a success result regardless -- unless
@@ -3474,15 +3477,14 @@ class LoginServiceTest {
 
             YamlConfiguration env = mock(YamlConfiguration.class);
             when(env.getString("api-url")).thenReturn("http://ulticloud.test");
-            SimpleHttpClient.Response okResponse =
-                    new SimpleHttpClient.Response(200, "{\"data\":{\"url\":\"http://panel.test/link\"}}");
+            UltiCloudRequests.Result okResponse = cloudOk("{\"data\":{\"url\":\"http://panel.test/link\"}}");
 
             try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
                  MockedStatic<CommonUtils> commonUtils = mockStatic(CommonUtils.class);
-                 MockedStatic<SimpleHttpClient> http = mockStatic(SimpleHttpClient.class)) {
+                 MockedStatic<UltiCloudRequests> http = mockStatic(UltiCloudRequests.class)) {
                 ultiTools.when(UltiTools::getEnv).thenReturn(env);
                 commonUtils.when(CommonUtils::getUltiToolsUUID).thenReturn("server-uuid");
-                http.when(() -> SimpleHttpClient.post(anyString(), anyMap(), anyString()))
+                http.when(() -> UltiCloudRequests.post(anyString(), anyString()))
                         .thenAnswer(invocation -> {
                             // The session is invalidated while this POST is "in flight" -- after
                             // the pre-POST atomic check-and-insert already ran, but before this
@@ -3504,7 +3506,7 @@ class LoginServiceTest {
                         .as("the discarded request must not remain pending -- nothing left for a"
                                 + " caller to poll for")
                         .isFalse();
-                http.verify(() -> SimpleHttpClient.post(anyString(), anyMap(), anyString()), times(1));
+                http.verify(() -> UltiCloudRequests.post(anyString(), anyString()), times(1));
             }
         }
     }
@@ -3878,7 +3880,7 @@ class LoginServiceTest {
          * (async poll -> main-thread completion) dispatch into a single, deterministic call
          * stack, which is what lets the test below inject the race at the exact right point
          * without flaky real threading -- Mockito's static mocks (used for
-         * {@link UltiTools#getEnv()} and {@link SimpleHttpClient#get(String)} below) are
+         * {@link UltiTools#getEnv()} and {@link UltiCloudRequests#get(String, Map)} below) are
          * thread-confined to whichever thread created them, so they would silently not apply at
          * all on a real MockBukkit worker thread.
          */
@@ -3935,12 +3937,12 @@ class LoginServiceTest {
             when(env.getString("api-url")).thenReturn("http://ulticloud.test");
 
             String pollResponseJson = "{\"data\":{\"status\":\"completed\",\"is_server_owner\":false}}";
-            SimpleHttpClient.Response completedResponse = new SimpleHttpClient.Response(200, pollResponseJson);
+            UltiCloudRequests.Result completedResponse = cloudOk(pollResponseJson);
 
             try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
-                 MockedStatic<SimpleHttpClient> http = mockStatic(SimpleHttpClient.class)) {
+                 MockedStatic<UltiCloudRequests> http = mockStatic(UltiCloudRequests.class)) {
                 ultiTools.when(UltiTools::getEnv).thenReturn(env);
-                http.when(() -> SimpleHttpClient.get(anyString())).thenAnswer(invocation -> {
+                http.when(() -> UltiCloudRequests.get(anyString(), anyMap())).thenAnswer(invocation -> {
                     // The account is deleted while this poll's HTTP call is "in flight" -- before
                     // the poll code below gets a chance to notice its pending request is gone.
                     boolean unregistered = service.unregister(playerUuid);
@@ -3984,12 +3986,12 @@ class LoginServiceTest {
             when(env.getString("api-url")).thenReturn("http://ulticloud.test");
 
             String pollResponseJson = "{\"data\":{\"status\":\"completed\",\"is_server_owner\":false}}";
-            SimpleHttpClient.Response completedResponse = new SimpleHttpClient.Response(200, pollResponseJson);
+            UltiCloudRequests.Result completedResponse = cloudOk(pollResponseJson);
 
             try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
-                 MockedStatic<SimpleHttpClient> http = mockStatic(SimpleHttpClient.class)) {
+                 MockedStatic<UltiCloudRequests> http = mockStatic(UltiCloudRequests.class)) {
                 ultiTools.when(UltiTools::getEnv).thenReturn(env);
-                http.when(() -> SimpleHttpClient.get(anyString())).thenReturn(completedResponse);
+                http.when(() -> UltiCloudRequests.get(anyString(), anyMap())).thenReturn(completedResponse);
 
                 service.startAuthPolling(playerUuid.toString(), player, "panel-req-normal");
             }
@@ -4033,12 +4035,12 @@ class LoginServiceTest {
             when(env.getString("api-url")).thenReturn("http://ulticloud.test");
 
             String pollResponseJson = "{\"data\":{\"status\":\"completed\",\"is_server_owner\":false}}";
-            SimpleHttpClient.Response completedResponse = new SimpleHttpClient.Response(200, pollResponseJson);
+            UltiCloudRequests.Result completedResponse = cloudOk(pollResponseJson);
 
             try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
-                 MockedStatic<SimpleHttpClient> http = mockStatic(SimpleHttpClient.class)) {
+                 MockedStatic<UltiCloudRequests> http = mockStatic(UltiCloudRequests.class)) {
                 ultiTools.when(UltiTools::getEnv).thenReturn(env);
-                http.when(() -> SimpleHttpClient.get(anyString())).thenAnswer(invocation -> {
+                http.when(() -> UltiCloudRequests.get(anyString(), anyMap())).thenAnswer(invocation -> {
                     // The original request is cancelled (e.g. by an invalidation) and the player
                     // starts a fresh /panel request, both landing before this poll's "completed"
                     // response is processed on the main thread.
@@ -4120,12 +4122,12 @@ class LoginServiceTest {
             when(env.getString("api-url")).thenReturn("http://ulticloud.test");
 
             String completedJson = "{\"data\":{\"status\":\"completed\",\"is_server_owner\":false}}";
-            SimpleHttpClient.Response completedResponse = new SimpleHttpClient.Response(200, completedJson);
+            UltiCloudRequests.Result completedResponse = cloudOk(completedJson);
 
             try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
-                 MockedStatic<SimpleHttpClient> http = mockStatic(SimpleHttpClient.class)) {
+                 MockedStatic<UltiCloudRequests> http = mockStatic(UltiCloudRequests.class)) {
                 ultiTools.when(UltiTools::getEnv).thenReturn(env);
-                http.when(() -> SimpleHttpClient.get(anyString())).thenAnswer(invocation -> {
+                http.when(() -> UltiCloudRequests.get(anyString(), anyMap())).thenAnswer(invocation -> {
                     // Poll A's HTTP call is "in flight" here -- the player starts a fresh
                     // /panel request while it's blocked, which cancels+replaces A's task with
                     // B's (does not run B's own first tick -- irrelevant to this race).
@@ -4209,12 +4211,12 @@ class LoginServiceTest {
             when(env.getString("api-url")).thenReturn("http://ulticloud.test");
 
             String pollResponseJson = "{\"data\":{\"status\":\"completed\",\"is_server_owner\":false}}";
-            SimpleHttpClient.Response completedResponse = new SimpleHttpClient.Response(200, pollResponseJson);
+            UltiCloudRequests.Result completedResponse = cloudOk(pollResponseJson);
 
             try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
-                 MockedStatic<SimpleHttpClient> http = mockStatic(SimpleHttpClient.class)) {
+                 MockedStatic<UltiCloudRequests> http = mockStatic(UltiCloudRequests.class)) {
                 ultiTools.when(UltiTools::getEnv).thenReturn(env);
-                http.when(() -> SimpleHttpClient.get(anyString())).thenReturn(completedResponse);
+                http.when(() -> UltiCloudRequests.get(anyString(), anyMap())).thenReturn(completedResponse);
 
                 service.startAuthPolling(playerUuid.toString(), player, "panel-req-solo");
                 capturedPollRunnables.get(0).run();
@@ -4630,5 +4632,14 @@ class LoginServiceTest {
         String text = CatalogueText.entries("en").get(key);
         return text == null ? "<lang/en has no " + key + ">"
                 : org.bukkit.ChatColor.translateAlternateColorCodes('&', text);
+    }
+
+    /** A framework-helper answer that carried an HTTP 200 exchange with {@code body}. */
+    private static UltiCloudRequests.Result cloudOk(String body) {
+        UltiCloudRequests.Result result = mock(UltiCloudRequests.Result.class);
+        when(result.getOutcome()).thenReturn(UltiCloudRequests.Outcome.OK);
+        when(result.getStatusCode()).thenReturn(200);
+        when(result.getBody()).thenReturn(body);
+        return result;
     }
 }
