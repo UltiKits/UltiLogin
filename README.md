@@ -142,6 +142,17 @@ UltiCloud 凭据被拒绝（同时写入控制台）。未登录 UltiCloud 或�
 - **A pending link pauses the login countdown for at most its lifetime.** A player who has not logged in can keep the
   countdown paused by running `/panel` again, five minutes per link. They still cannot move, chat or use commands other
   than the allowed ones while it is paused.
+- **Do not run `ulticloud logout` while a delivered `/panel` link is being polled.** While the server is signed out
+  or its UltiCloud session is expired or invalid, polling fails silently: the player receives no immediate failure
+  message and web completion cannot log them into the game until the server is signed in again. An unauthenticated
+  player's countdown stays paused until the link expires (up to five minutes from creation); expiry reports that
+  the link expired and resumes the remaining countdown. Movement and chat stay restricted, but `/login <password>`
+  still works for an account with a game password. The operator should run `ulticloud login` in the server console,
+  complete its browser approval as the same server owner and verify `ulticloud status` is connected. While the old
+  link is still within its roughly five-minute lifetime, have the player keep waiting: polling continues, and a
+  sign-in already completed in the browser is delivered within a few seconds. Do not run `/panel` again early:
+  it cancels the old poll and discards that pending completion. Only after the player is told the link has expired
+  should they run `/panel` for a fresh link. Avoid signing out while players have pending links.
 - **Registering in game while a web registration is pending keeps the in-game account.** If the player runs `/register`
   before the web registration completes, the account they registered in game is kept untouched (with that game
   password) and the web completion simply logs them in.

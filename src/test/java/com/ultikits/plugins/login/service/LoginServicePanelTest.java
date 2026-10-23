@@ -932,15 +932,21 @@ class LoginServicePanelTest {
             service.onPlayerJoin(player);
             advance(55);
             disconnectServer();
+            duringCreate = () -> advance(3);
 
             assertThat(service.requestPanelLink(player).isSuccess()).isFalse();
 
             service.checkTimeouts();
-            advance(4);
+            advance(2);
+            now[0]++; // Just past the original 60 s deadline: the 3 s pause must be credited.
             service.checkTimeouts();
             verify(player, never()).kickPlayer(anyString());
 
-            advance(2);
+            now[0] += 2_999; // Exactly 63 s after joining: timeout uses a strict greater-than check.
+            service.checkTimeouts();
+            verify(player, never()).kickPlayer(anyString());
+
+            now[0]++; // The first millisecond past the deadline shifted by exactly 3 s.
             service.checkTimeouts();
 
             verify(player, times(1)).kickPlayer(anyString());
