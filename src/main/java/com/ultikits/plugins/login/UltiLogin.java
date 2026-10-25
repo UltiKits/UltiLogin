@@ -3,11 +3,14 @@ package com.ultikits.plugins.login;
 import com.ultikits.plugins.login.config.ConfigTextDefaults;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.config.RemovedConfigKeys;
+import com.ultikits.plugins.login.logging.CloudSensitiveCommands;
 import com.ultikits.plugins.login.logging.PasswordCommandMask;
 import com.ultikits.plugins.login.logging.PasswordLogFilterInstaller;
 import com.ultikits.plugins.login.util.Placeholders;
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
+import com.ultikits.ultitools.websocket.SensitiveCommandRegistry;
 
 import java.io.File;
 import java.io.IOException;
@@ -31,6 +34,9 @@ import java.io.IOException;
  * On enable the module installs a filter on the server's Log4j root logger that masks the
  * arguments of its password commands in the console, {@code logs/latest.log} and the framework's
  * panel log mirror ({@link PasswordLogFilterInstaller}); {@link #onUnregister()} removes it.
+ * It also registers every argument-taking command with UltiTools-API 6.3.1's sensitive-command
+ * registry, so their arguments are redacted in everything the framework sends to UltiCloud
+ * ({@link CloudSensitiveCommands}).
  * </p>
  *
  * @author wisdomme
@@ -42,6 +48,7 @@ public class UltiLogin extends UltiToolsPlugin {
     @Override
     public boolean registerSelf() {
         getLogger().info(i18n("login_enabled"));
+        registerSensitiveCommands();
         installPasswordLogFilter();
         // Deleting a key from LoginConfig does nothing to the operator's existing file, so tell
         // them about any key this version no longer reads (UltiKits/UltiLogin#23).
@@ -73,6 +80,17 @@ public class UltiLogin extends UltiToolsPlugin {
         if (problem != null) {
             getLogger().warn(Placeholders.fill(i18n("log_password_filter_removal_failed"), "{REASON}", problem));
         }
+    }
+
+    /**
+     * Registers this module's argument-taking commands with the framework's sensitive-command
+     * registry, so their arguments never reach UltiCloud. Idempotent, so a reload is harmless; the
+     * framework has no unregister, so {@link #onUnregister()} has nothing to undo. No guard is
+     * needed: {@code api-version: 631} makes an older framework, which lacks the registry, refuse
+     * this module before it enables.
+     */
+    private void registerSensitiveCommands() {
+        CloudSensitiveCommands.registerWith(sensitiveCommandRegistry());
     }
 
     /**
@@ -163,5 +181,18 @@ public class UltiLogin extends UltiToolsPlugin {
      */
     File operatorConfigFile() {
         return getConfigFile(operatorConfigPath());
+    }
+
+    /**
+     * The framework's sensitive-command registry.
+     * <p>
+     * A seam, package-private on purpose, like {@link #operatorConfigFile()}: a mocked plugin returns
+     * {@code null} from it, which {@link CloudSensitiveCommands#registerWith} ignores, so tests that
+     * enable a mocked module need no static mock of {@code UltiTools}.
+     *
+     * @return {@code UltiTools.getInstance().getSensitiveCommandRegistry()}
+     */
+    SensitiveCommandRegistry sensitiveCommandRegistry() {
+        return UltiTools.getInstance().getSensitiveCommandRegistry();
     }
 }
