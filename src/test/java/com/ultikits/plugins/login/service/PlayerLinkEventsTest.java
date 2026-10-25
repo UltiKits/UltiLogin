@@ -8,6 +8,7 @@ import com.ultikits.plugins.login.service.PlayerLinkPort.CompletionResult;
 import com.ultikits.plugins.login.service.PlayerLinkPort.LinkCompletion;
 import com.ultikits.plugins.login.service.PlayerLinkPort.LinkCreation;
 import com.ultikits.plugins.login.service.PlayerLinkPort.LinkEventHandler;
+import com.ultikits.plugins.login.service.PlayerLinkPort.LinkExpiry;
 import com.ultikits.plugins.login.service.PlayerLinkPort.LinkProof;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.Query;
@@ -24,6 +25,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.mockito.ArgumentCaptor;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -39,8 +43,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
@@ -72,6 +78,7 @@ class PlayerLinkEventsTest {
     private final long[] now = {1_000_000_000L};
     private FakePort port;
     private final List<Runnable> mainThread = new ArrayList<>();
+    private BukkitScheduler scheduler;
 
     /** A fake player-link API: answers every create with a link and keeps the handler the service installs. */
     private final class FakePort implements PlayerLinkPort {
@@ -133,7 +140,7 @@ class PlayerLinkEventsTest {
         doReturn(player).when(server).getPlayer(playerUuid);
         setAccount("hash", "salt");
 
-        BukkitScheduler scheduler = spy(server.getScheduler());
+        scheduler = spy(server.getScheduler());
         doAnswer(invocation -> {
             mainThread.add(invocation.getArgument(1));
             return mock(BukkitTask.class);
@@ -186,6 +193,51 @@ class PlayerLinkEventsTest {
         runMainThread();
         assertThat(answer).as("the answer is complete once the main-thread work ran").isDone();
         return answer.get();
+    }
+
+    /** One other account registered from the player's address (127.0.0.1); the player's own lookup is unchanged. */
+    @SuppressWarnings("unchecked")
+    private void oneAccountAlreadyFromThisAddress() {
+        AccountData other = UltiLoginTestHelper.createSampleAccount(UUID.randomUUID(), "Other", "h", "s");
+        when(mockQuery.where("register_ip")).thenAnswer(invocation -> {
+            Query<AccountData> byIp = mock(Query.class);
+            when(byIp.eq(any())).thenReturn(byIp);
+            when(byIp.list()).thenReturn(Collections.singletonList(other));
+            return byIp;
+        });
+    }
+
+    private void advance(int seconds) {
+        now[0] += seconds * 1000L;
+    }
+
+    /**
+     * The player joined 55 s into a 60 s timeout before the link was opened; after the link ends the countdown must
+     * continue with the 5 s that were left: no kick 4 s later, a kick 2 s after that.
+     */
+    private void assertCountdownResumedWithTheTimeLeft() {
+        service.checkTimeouts();
+        advance(4);
+        service.checkTimeouts();
+        verify(player, never()).kickPlayer(anyString());
+        advance(2);
+        service.checkTimeouts();
+        verify(player, times(1)).kickPlayer(anyString());
+    }
+
+    /** Join, wait 55 s of the 60 s timeout, open a link and let 100 s pass while it is pending. */
+    private String joinAndOpenLinkLate() {
+        service.onPlayerJoin(player);
+        advance(55);
+        String link = openLink();
+        advance(100);
+        return link;
+    }
+
+    private AccountData inserted() {
+        ArgumentCaptor<AccountData> row = ArgumentCaptor.forClass(AccountData.class);
+        verify(dataOperator, times(1)).insert(row.capture());
+        return row.getValue();
     }
 
     private void markLoggedIn() throws Exception {
@@ -309,5 +361,385 @@ class PlayerLinkEventsTest {
 
             assertThat(service.hasValidSession(player)).isTrue();
         }
+    }
+
+    // ==================== an account requested (web registration, or a retried provision) ====================
+
+    @Nested
+    @DisplayName("completion that requests a game account")
+    class Provisioning {
+
+        @Test
+        @DisplayName("web registration, no account, limit not reached -> one row with empty hash and salt and this address, logged in, created")
+        void webRegistrationCreatesTheAccount() throws Exception {
+            setAccount(null, null);
+            service.onPlayerJoin(player);
+            String link = openLink();
+
+            assertThat(deliver(completion("C1", link, LinkProof.WEB_REGISTRATION, true)))
+                    .isEqualTo(CompletionResult.CREATED);
+
+            AccountData row = inserted();
+            assertThat(row.getPlayerUuid()).isEqualTo(playerUuid.toString());
+            assertThat(row.getPlayerName()).isEqualTo("TestPlayer");
+            assertThat(row.getPasswordHash()).as("no game password yet").isEmpty();
+            assertThat(row.getSalt()).isEmpty();
+            assertThat(row.getRegisterIp()).isEqualTo("127.0.0.1");
+            assertThat(row.getLastIp()).isEqualTo("127.0.0.1");
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+            assertThat(paused()).isFalse();
+            assertMessage("panel_signed_in", 1);
+        }
+
+        @Test
+        @DisplayName("an account made meanwhile with /register is never changed: its credentials stay, the connection is logged in, account_exists")
+        void existingAccountIsNeverOverwritten() throws Exception {
+            setAccount(null, null);
+            service.onPlayerJoin(player);
+            String link = openLink();
+            AccountData existing = setAccount("hash", "salt");
+            existing.setRegisterIp("10.0.0.9");
+
+            assertThat(deliver(completion("C1", link, LinkProof.WEB_REGISTRATION, true)))
+                    .isEqualTo(CompletionResult.ACCOUNT_EXISTS);
+
+            verify(dataOperator, never()).insert(any(AccountData.class));
+            assertThat(existing.getPasswordHash()).isEqualTo("hash");
+            assertThat(existing.getSalt()).isEqualTo("salt");
+            assertThat(existing.getRegisterIp()).isEqualTo("10.0.0.9");
+            assertThat(existing.getPlayerUuid()).isEqualTo(playerUuid.toString());
+            assertThat(service.isLoggedIn(playerUuid)).as("DECISIONS item 11").isTrue();
+        }
+
+        @Test
+        @DisplayName("max-register-per-ip reached by completion time -> nothing created, nobody logged in, the limit line, countdown resumes, registration_rejected")
+        void limitReachedAtCompletion() throws Exception {
+            setAccount(null, null);
+            String link = joinAndOpenLinkLate();
+            when(config.getMaxRegisterPerIp()).thenReturn(1);
+            oneAccountAlreadyFromThisAddress();
+
+            assertThat(deliver(completion("C1", link, LinkProof.WEB_REGISTRATION, true)))
+                    .isEqualTo(CompletionResult.REGISTRATION_REJECTED);
+
+            verify(dataOperator, never()).insert(any(AccountData.class));
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            verify(player).sendMessage(ChatColor.RED + CatalogueText.text("zh", "ip_limit_reached"));
+            assertCountdownResumedWithTheTimeLeft();
+        }
+
+        @Test
+        @DisplayName("the insert throws -> nobody logged in, the create-failed line, countdown resumes, auth_plugin_unavailable")
+        void failedInsertResumesTheCountdown() throws Exception {
+            setAccount(null, null);
+            String link = joinAndOpenLinkLate();
+            doThrow(new RuntimeException("database unavailable")).when(dataOperator).insert(any(AccountData.class));
+
+            assertThat(deliver(completion("C1", link, LinkProof.WEB_REGISTRATION, true)))
+                    .isEqualTo(CompletionResult.AUTH_PLUGIN_UNAVAILABLE);
+
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            assertMessage("panel_account_create_failed", 1);
+            verify(UltiLoginTestHelper.getMockLogger()).error(
+                    CatalogueText.text("zh", "log_web_account_create_failed")
+                            .replace("{PLAYER}", "TestPlayer").replace("{ERROR}", "database unavailable"));
+            assertCountdownResumedWithTheTimeLeft();
+        }
+
+        @Test
+        @DisplayName("ulticloud.enabled turned off before the completion -> nothing created, nobody logged in, auth_plugin_unavailable")
+        void disabledIntegrationCreatesNothing() throws Exception {
+            setAccount(null, null);
+            String link = joinAndOpenLinkLate();
+            when(config.isUlticloudEnabled()).thenReturn(false);
+
+            assertThat(deliver(completion("C1", link, LinkProof.WEB_REGISTRATION, true)))
+                    .isEqualTo(CompletionResult.AUTH_PLUGIN_UNAVAILABLE);
+
+            verify(dataOperator, never()).insert(any(AccountData.class));
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+            assertCountdownResumedWithTheTimeLeft();
+        }
+
+        @Test
+        @DisplayName("no account and none requested -> the not-registered line, nobody logged in, countdown resumes, not_requested")
+        void noAccountAndNoneRequested() throws Exception {
+            setAccount(null, null);
+            String link = joinAndOpenLinkLate();
+
+            assertThat(deliver(completion("C1", link, LinkProof.LINKED_WEB_ACCOUNT, false)))
+                    .isEqualTo(CompletionResult.NOT_REQUESTED);
+
+            verify(dataOperator, never()).insert(any(AccountData.class));
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            assertMessage("panel_not_registered_in_game", 1);
+            assertCountdownResumedWithTheTimeLeft();
+        }
+
+        @Test
+        @DisplayName("a failed last-login write still logs the player in and is logged with its reason")
+        void failedLastLoginWriteStillLogsIn() throws Exception {
+            when(dataOperator.updateCounted(any(AccountData.class))).thenReturn(0);
+            service.onPlayerJoin(player);
+            String link = openLink();
+
+            assertThat(deliver(completion("C1", link, LinkProof.LINKED_WEB_ACCOUNT, false)))
+                    .isEqualTo(CompletionResult.NOT_REQUESTED);
+
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+            verify(UltiLoginTestHelper.getMockLogger()).error(CatalogueText.text("zh",
+                    "log_account_update_after_panel_failed") + ": " + CatalogueText.text("zh", "log_account_row_gone"));
+        }
+    }
+
+    // ==================== at-least-once delivery ====================
+
+    @Nested
+    @DisplayName("redelivered completions (DECISIONS item 9)")
+    class Deduplication {
+
+        @Test
+        @DisplayName("the same completion id twice -> the second creates nothing, logs nobody in, says nothing and answers the first result")
+        void duplicateIsInert() throws Exception {
+            setAccount(null, null);
+            service.onPlayerJoin(player);
+            String link = openLink();
+            LinkCompletion c1 = completion("C1", link, LinkProof.WEB_REGISTRATION, true);
+            assertThat(deliver(c1)).isEqualTo(CompletionResult.CREATED);
+            service.onPlayerQuit(player);
+            clearInvocations(player);
+
+            assertThat(deliver(c1)).isEqualTo(CompletionResult.CREATED);
+
+            verify(dataOperator, times(1)).insert(any(AccountData.class));
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            verify(player, never()).sendMessage(anyString());
+        }
+
+        @Test
+        @DisplayName("an error result is recorded too: a redelivery after a refused registration answers it again and creates nothing")
+        void errorResultIsRecorded() throws Exception {
+            setAccount(null, null);
+            String link = joinAndOpenLinkLate();
+            when(config.getMaxRegisterPerIp()).thenReturn(1);
+            oneAccountAlreadyFromThisAddress();
+            LinkCompletion c1 = completion("C1", link, LinkProof.WEB_REGISTRATION, true);
+            assertThat(deliver(c1)).isEqualTo(CompletionResult.REGISTRATION_REJECTED);
+            when(config.getMaxRegisterPerIp()).thenReturn(0);
+
+            assertThat(deliver(c1)).isEqualTo(CompletionResult.REGISTRATION_REJECTED);
+
+            verify(dataOperator, never()).insert(any(AccountData.class));
+        }
+
+        @Test
+        @DisplayName("300 distinct completions keep the newest 256 ids, which still de-duplicate; an evicted id is handled again")
+        @SuppressWarnings("unchecked")
+        void boundedToTheNewest256() throws Exception {
+            for (int i = 0; i < 300; i++) {
+                deliver(completion("C" + i, "gone-" + i, LinkProof.LINKED_WEB_ACCOUNT, false));
+            }
+            Map<String, CompletionResult> answered = (Map<String, CompletionResult>) field("answeredCompletions");
+            assertThat(answered).hasSize(LoginService.ANSWERED_COMPLETIONS_KEPT).hasSize(256)
+                    .containsKeys("C44", "C299").doesNotContainKeys("C0", "C43");
+            setAccount(null, null);
+
+            assertThat(deliver(completion("C44", "gone-44", LinkProof.LINKED_WEB_ACCOUNT, true)))
+                    .as("a remembered id is answered from the record, even with different content")
+                    .isEqualTo(CompletionResult.NOT_REQUESTED);
+            verify(dataOperator, never()).insert(any(AccountData.class));
+
+            assertThat(deliver(completion("C0", "gone-0", LinkProof.LINKED_WEB_ACCOUNT, true)))
+                    .isEqualTo(CompletionResult.CREATED);
+            verify(dataOperator, times(1)).insert(any(AccountData.class));
+        }
+    }
+
+    // ==================== late completions (DECISIONS item 10) ====================
+
+    @Nested
+    @DisplayName("late completions: the link is no longer pending")
+    class LateCompletions {
+
+        @Test
+        @DisplayName("F1: the player quit and rejoined -> nobody logged in, the account is still created with an empty register IP, the late line")
+        void quitAndRejoin() throws Exception {
+            setAccount(null, null);
+            String link = openLink();
+            service.onPlayerQuit(player);
+            service.onPlayerJoin(player);
+
+            assertThat(deliver(completion("C1", link, LinkProof.WEB_REGISTRATION, true)))
+                    .isEqualTo(CompletionResult.CREATED);
+
+            AccountData row = inserted();
+            assertThat(row.getPasswordHash()).isEmpty();
+            assertThat(row.getRegisterIp()).as("the address of the connection that asked is unknown").isEmpty();
+            assertThat(row.getPlayerName()).isEqualTo("TestPlayer");
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            assertMessage("panel_late_completion", 1);
+        }
+
+        @Test
+        @DisplayName("the per-address limit is not checked without a current connection")
+        void lateProvisionSkipsTheAddressLimit() throws Exception {
+            setAccount(null, null);
+            when(config.getMaxRegisterPerIp()).thenReturn(1);
+            oneAccountAlreadyFromThisAddress();
+            doReturn(null).when(server).getPlayer(playerUuid);
+
+            assertThat(deliver(completion("C1", "from-before-restart", LinkProof.WEB_REGISTRATION, true)))
+                    .isEqualTo(CompletionResult.CREATED);
+            verify(player, never()).sendMessage(anyString());
+        }
+
+        @Test
+        @DisplayName("a restart left no pending link: an account holder is not logged in, not_requested, the late line")
+        void afterRestart() throws Exception {
+            service.onPlayerJoin(player);
+
+            assertThat(deliver(completion("C1", "from-before-restart", LinkProof.LINKED_WEB_ACCOUNT, false)))
+                    .isEqualTo(CompletionResult.NOT_REQUESTED);
+
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            assertMessage("panel_late_completion", 1);
+            assertMessage("panel_signed_in", 0);
+        }
+
+        @Test
+        @DisplayName("F4: an admin password reset dropped the link -> nobody logged in; a requested account that exists answers account_exists")
+        void droppedByAdminReset() throws Exception {
+            service.onPlayerJoin(player);
+            String link = openLink();
+            service.invalidateSession(playerUuid, false);
+
+            assertThat(deliver(completion("C1", link, LinkProof.LINKED_WEB_ACCOUNT, true)))
+                    .isEqualTo(CompletionResult.ACCOUNT_EXISTS);
+
+            verify(dataOperator, never()).insert(any(AccountData.class));
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            assertMessage("panel_late_completion", 1);
+        }
+
+        @Test
+        @DisplayName("an offline player: created silently, nobody logged in")
+        void offlinePlayer() throws Exception {
+            setAccount(null, null);
+            String link = openLink();
+            service.onPlayerQuit(player);
+            doReturn(null).when(server).getPlayer(playerUuid);
+
+            assertThat(deliver(completion("C1", link, LinkProof.WEB_REGISTRATION, true)))
+                    .isEqualTo(CompletionResult.CREATED);
+            verify(player, never()).sendMessage(anyString());
+        }
+
+        @Test
+        @DisplayName("a player already logged in on a new connection is not told anything")
+        void loggedInPlayerIsNotTold() throws Exception {
+            markLoggedIn();
+
+            assertThat(deliver(completion("C1", "gone", LinkProof.LINKED_WEB_ACCOUNT, false)))
+                    .isEqualTo(CompletionResult.NOT_REQUESTED);
+            verify(player, never()).sendMessage(anyString());
+        }
+
+        @Test
+        @DisplayName("a completion naming another player than its link's owner logs nobody in and leaves the link pending")
+        void otherPlayersCompletion() throws Exception {
+            service.onPlayerJoin(player);
+            String link = openLink();
+
+            deliver(new LinkCompletion("C1", link, LinkProof.LINKED_WEB_ACCOUNT, UUID.randomUUID(), "Other", false, null));
+
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isTrue();
+            assertThat(paused()).isTrue();
+        }
+    }
+
+    // ==================== expiry events ====================
+
+    @Nested
+    @DisplayName("expiry events")
+    class Expiry {
+
+        @ParameterizedTest(name = "{0} -> {1}")
+        @CsvSource({
+                "EXPIRED, panel_outcome_expired",
+                "CANCELLED, panel_link_cancelled",
+                "DENIED, panel_outcome_refused",
+                "OTHER, panel_outcome_expired"
+        })
+        @DisplayName("each reason ends the pending link with its line on the main thread and resumes the countdown with the time left")
+        void reasonEndsTheLink(LinkExpiry.Reason reason, String key) {
+            String link = joinAndOpenLinkLate();
+
+            port.handler.onExpired(new LinkExpiry(link, playerUuid, reason));
+            assertThat(service.hasPendingPanelRequest(playerUuid)).as("ended on the main thread, not on the caller's").isTrue();
+            runMainThread();
+
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+            assertMessage(key, 1);
+            assertCountdownResumedWithTheTimeLeft();
+        }
+
+        @Test
+        @DisplayName("an earlier link the newer /panel cancelled ends silently and the newer one keeps the pause")
+        void earlierLinkEndsSilently() throws Exception {
+            service.onPlayerJoin(player);
+            String first = openLink();
+            String second = openLink();
+
+            port.handler.onExpired(new LinkExpiry(first, playerUuid, LinkExpiry.Reason.CANCELLED));
+            runMainThread();
+
+            assertMessage("panel_link_cancelled", 0);
+            assertThat(service.isPanelRequestCurrent(playerUuid, second, service.getInvalidationGeneration(playerUuid)))
+                    .isTrue();
+            assertThat(paused()).isTrue();
+        }
+
+        @Test
+        @DisplayName("an expiry for a link that is not pending, or for another player's link, does nothing")
+        void unknownLinkDoesNothing() throws Exception {
+            service.onPlayerJoin(player);
+            String link = openLink();
+
+            port.handler.onExpired(new LinkExpiry("not-pending", playerUuid, LinkExpiry.Reason.EXPIRED));
+            port.handler.onExpired(new LinkExpiry(link, UUID.randomUUID(), LinkExpiry.Reason.EXPIRED));
+            runMainThread();
+
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isTrue();
+            assertMessage("panel_outcome_expired", 0);
+            assertThat(paused()).isTrue();
+        }
+    }
+
+    @Test
+    @DisplayName("a completion that cannot be scheduled (the plugin is disabling) fails its future, so no result is sent")
+    void unschedulableCompletionFails() {
+        doThrow(new IllegalStateException("disabled")).when(scheduler).runTask(any(Plugin.class), any(Runnable.class));
+
+        assertThat(port.handler.onCompleted(completion("C1", "L1", LinkProof.LINKED_WEB_ACCOUNT, false)))
+                .isCompletedExceptionally();
+        port.handler.onExpired(new LinkExpiry("L1", playerUuid, LinkExpiry.Reason.EXPIRED));
+    }
+
+    @Test
+    @DisplayName("an unexpected failure resumes the countdown and fails the future, so the completion is asked again")
+    void unexpectedFailureFailsTheFuture() throws Exception {
+        service.onPlayerJoin(player);
+        String link = openLink();
+        when(mockQuery.list()).thenThrow(new IllegalStateException("database gone"));
+
+        CompletableFuture<CompletionResult> answer =
+                port.handler.onCompleted(completion("C1", link, LinkProof.LINKED_WEB_ACCOUNT, false));
+        runMainThread();
+
+        assertThat(answer).isCompletedExceptionally();
+        assertThat(paused()).isFalse();
+        assertThat(service.isLoggedIn(playerUuid)).isFalse();
     }
 }

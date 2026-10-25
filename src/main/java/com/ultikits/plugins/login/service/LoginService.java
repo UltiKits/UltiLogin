@@ -554,9 +554,13 @@ public class LoginService {
      * empty password hash and salt.
      */
     private AccountData newAccountRow(Player player, String hash, String salt, String ip) {
+        return newAccountRow(player.getUniqueId(), player.getName(), hash, salt, ip);
+    }
+
+    private AccountData newAccountRow(UUID playerUuid, String playerName, String hash, String salt, String ip) {
         AccountData account = new AccountData();
-        account.setPlayerUuid(player.getUniqueId().toString());
-        account.setPlayerName(player.getName());
+        account.setPlayerUuid(playerUuid.toString());
+        account.setPlayerName(playerName);
         account.setPasswordHash(hash);
         account.setSalt(salt);
         account.setRegisterIp(ip);
@@ -746,7 +750,7 @@ public class LoginService {
      * {@code 0} for a player who has never been invalidated.
      * <p>
      * Callers that schedule work asynchronously after a player-facing action (e.g. {@code
-     * /panel}'s worker, which makes a blocking HTTP call before {@link #requestPanelLink(Player,
+     * /panel}'s worker, which waits for the framework's create before {@link #requestPanelLink(Player,
      * long)} actually publishes anything) should capture this value up front, before scheduling,
      * and pass it back in so the eventual publish can refuse itself if an invalidation landed in
      * the gap. See PR #18.
@@ -1532,7 +1536,7 @@ public class LoginService {
         return config;
     }
     
-    // ==================== Panel Magic Link Methods ====================
+    // ==================== /panel: UltiCloud player links ====================
 
     /**
      * Check if UltiCloud panel integration is enabled.
@@ -1749,10 +1753,10 @@ public class LoginService {
      * Check whether a published panel link request is still current for its player, immediately
      * before acting on a {@link PanelLinkResult} on the main thread.
      * <p>
-     * {@link #requestPanelLink(Player, long)}'s own post-POST re-check only closes the gap up to
+     * {@link #requestPanelLink(Player, long)}'s own post-create re-check only closes the gap up to
      * the moment that method returns.
      * {@code PanelCommand}'s result-delivery callback runs later still -- it is itself scheduled
-     * via {@code Bukkit.getScheduler().runTask(...)} after the worker thread's blocking HTTP call
+     * via {@code Bukkit.getScheduler().runTask(...)} after the worker thread's wait for the create
      * already returned -- so an invalidation landing in that final gap (between {@code
      * requestPanelLink}'s return and this callback actually executing on the main thread) could
      * still let a revoked player receive the link. Calling this at the
@@ -1780,144 +1784,6 @@ public class LoginService {
         if (player.isOnline()) {
             player.sendMessage(ChatColor.translateAlternateColorCodes('&', message));
         }
-    }
-
-    /**
-     * Handle a panel login completion (called when API Worker confirms auth via WebSocket).
-     *
-     * @param requestId the request ID
-     * @return true if the player was successfully logged in
-     */
-    public boolean completePanelLogin(String requestId) {
-        return completePanelLogin(requestId, false);
-    }
-
-    /**
-     * Handle a panel login completion with role information.
-     *
-     * @param requestId the request ID
-     * @param isServerOwner whether the user is a server owner
-     * @return true if the player was successfully logged in
-     */
-    public boolean completePanelLogin(String requestId, boolean isServerOwner) {
-        return completePanelLogin(requestId, isServerOwner, null);
-    }
-
-    /**
-     * Handle a panel login completion, with the proof the Worker reported for a credentialed link
-     * (Phase 18 magic-link contract, sections 7 and 13).
-     * <p>
-     * Proof {@code web_registration} (proof 3: a brand-new name registered on the web) creates the
-     * UltiLogin account with an empty password hash when the player has none, then logs them in and
-     * hints once at {@code /setpassword}. It never overwrites an account: if one exists by the time
-     * this runs -- the player registered in game while the web page was open, a niche interleaving --
-     * the account is left exactly as it is and the player is logged in as for {@code bound_account}.
-     * The existence check and the insert both run here on the main thread, as {@code /register} does,
-     * so they cannot interleave with it. The operator's {@code max-register-per-ip} limit applies to a
-     * web registration as it does to {@code /register}.
-     * <p>
-     * Every other proof keeps the registered-only refusal: without an account the player is told they
-     * are not registered in game and nobody is logged in.
-     *
-     * @param requestId the request ID
-     * @param isServerOwner whether the user is a server owner
-     * @param proof the reported proof ({@code in_game_login}, {@code bound_account},
-     *              {@code web_registration}), or {@code null} when none is trusted
-     * @return true if the player was successfully logged in
-     */
-    public boolean completePanelLogin(String requestId, boolean isServerOwner, String proof) {
-        UUID playerUuid = pendingPanelRequests.get(requestId);
-        if (playerUuid == null) {
-            return false;
-        }
-
-        // Removed without resuming the countdown yet: a successful login below clears the pause
-        // (completeLogin), and only a refusal resumes it.
-        removePanelRequest(requestId);
-
-        Player player = Bukkit.getPlayer(playerUuid);
-        if (player == null || !player.isOnline()) {
-            syncPanelPause(playerUuid);
-            return false;
-        }
-
-        // Second, independent layer of defense against a deleted account logging back in:
-
-        // the account may have been unregistered after this request was created but before
-        // invalidateSession's cancellation reached it (or, in the future, through some other
-        // path that never calls invalidateSession). Refuse to grant the login rather than trust
-        // that the account still exists just because a pending request for it does.
-        boolean webRegistered = false;
-        boolean accountReady = false;
-        try {
-            if (!isRegistered(playerUuid)) {
-                if (!"web_registration".equals(proof)) {
-                    syncPanelPause(playerUuid);
-                    sendPanelMessage(player, i18n("panel_not_registered_in_game"));
-                    return false;
-                }
-                if (!createWebRegisteredAccount(player)) {
-                    syncPanelPause(playerUuid);
-                    return false;
-                }
-                webRegistered = true;
-            }
-            accountReady = true;
-        } finally {
-            // The request is already gone and its poll stopped, so nothing else would end the pause:
-            // a database call that throws here (one failed lookup or insert) must still resume the
-            // countdown with the time that remained. A refusal above has resumed it already, and a
-            // second call changes nothing.
-            if (!accountReady) {
-                syncPanelPause(playerUuid);
-            }
-        }
-
-        // Complete the login
-        completeLogin(player);
-
-        // Send role-specific message
-        String message = isServerOwner
-            ? i18n("panel_auth_success_owner")
-            : i18n("panel_auth_success_player");
-        player.sendMessage(ChatColor.translateAlternateColorCodes('&', message));
-        if (webRegistered) {
-            sendPanelMessage(player, i18n("panel_web_registration_hint"));
-        }
-
-        // Update account last login
-        AccountData account = getAccount(playerUuid);
-        if (account != null) {
-            account.setLastIp(getPlayerIp(player));
-            account.setLastLogin(System.currentTimeMillis());
-            account.setLoginCount(account.getLoginCount() + 1);
-            AccountWrites.update(dataOperator, plugin.getLogger(), account,
-                    i18n("log_account_update_after_panel_failed"), i18n("log_account_row_gone"));
-        }
-
-        // Create session
-        if (config.isSessionEnabled()) {
-            String ip = getPlayerIp(player);
-            sessions.put(ip + ":" + playerUuid, System.currentTimeMillis());
-        }
-
-        return true;
-    }
-
-    /**
-     * Create the account of a player who registered on the web: the row {@code /register} creates,
-     * with an empty password hash and salt. Only called when the player has no account.
-     *
-     * @return {@code false} when the operator's per-address registration limit is reached
-     */
-    private boolean createWebRegisteredAccount(Player player) {
-        String ip = getPlayerIp(player);
-        if (config.getMaxRegisterPerIp() > 0 && countRegistrationsByIp(ip) >= config.getMaxRegisterPerIp()) {
-            player.sendMessage(ChatColor.RED + i18n("ip_limit_reached"));
-            return false;
-        }
-        dataOperator.insert(newAccountRow(player, "", "", ip));
-        return true;
     }
 
     /**
@@ -1963,15 +1829,31 @@ public class LoginService {
     }
 
     /**
-     * Act on one link completion, on the main thread. Completions are delivered at least once: a completion id
-     * answered in this run is answered again with its recorded result and nothing else happens; the result is
-     * recorded before any message is sent or anyone is logged in.
+     * Act on one link completion, on the main thread, and say what was done about a game account. Completions are
+     * delivered at least once (redelivered after every reconnect until answered; the framework's persisted receipts
+     * cover restarts), so a completion id answered in this run is answered again with its recorded result and
+     * nothing else happens. Every result, including the error ones, is recorded before anyone is logged in or told
+     * anything, so a duplicate can never repeat a side effect.
      * <p>
      * <b>Which connection may be logged in.</b> Only the connection that asked: the completion's link must still be
      * pending for the completion's player, which means the player has neither left nor had their credentials changed
-     * since the link was created (both drop every pending link). A completion for any other link logs nobody in.
-     * An {@link PlayerLinkPort.LinkProof#IN_GAME_SESSION} proof never logs a connection in: it proves the web user
-     * by the game session, not the other way round.
+     * since the link was created (both drop every pending link). A completion for any other link is <em>late</em>
+     * (the player left, the server restarted, an administrator reset the password, or the link ended locally): it
+     * still creates a requested account, but logs nobody in. An {@link PlayerLinkPort.LinkProof#IN_GAME_SESSION}
+     * proof never logs a connection in: it proves the web user by the game session, not the other way round.
+     * <p>
+     * <b>Results for the connection that asked.</b>
+     * <ul>
+     *   <li>An account exists: logged in; {@code account_exists} if one was requested (it is never changed),
+     *       otherwise {@code not_requested}.</li>
+     *   <li>No account, none requested: told it is not registered in game; {@code not_requested}.</li>
+     *   <li>No account, one requested (a web registration): the row {@code /register} would create, with an empty
+     *       password hash and salt, then logged in; {@code created}. Over {@code max-register-per-ip}:
+     *       {@code registration_rejected}; a failed insert: {@code auth_plugin_unavailable}.</li>
+     * </ul>
+     * Account reads and writes run here, on the main thread, as {@code /register}'s do. With
+     * {@code ulticloud.enabled: false} nothing is created and nobody is logged in ({@code auth_plugin_unavailable}).
+     * Whenever nobody is logged in, the player's countdown resumes with the time that was left.
      *
      * @param completion what the gateway reported
      * @return the result for the framework
@@ -1984,14 +1866,101 @@ public class LoginService {
         UUID playerUuid = completion.playerUuid();
         Player player = Bukkit.getPlayer(playerUuid);
         boolean current = takePendingLink(completion.linkId(), playerUuid) && player != null && player.isOnline();
-        if (!current || completion.provisionGameAccount()) {
-            record(completion, PlayerLinkPort.CompletionResult.AUTH_PLUGIN_UNAVAILABLE);
-            syncPanelPause(playerUuid);
-            return PlayerLinkPort.CompletionResult.AUTH_PLUGIN_UNAVAILABLE;
+        if (!isPanelEnabled()) {
+            return refuse(completion, PlayerLinkPort.CompletionResult.AUTH_PLUGIN_UNAVAILABLE, null, null);
         }
-        record(completion, PlayerLinkPort.CompletionResult.NOT_REQUESTED);
+        AccountData account = getAccount(playerUuid);
+        if (!current) {
+            return answerLateCompletion(completion, account, player);
+        }
+        boolean provision = completion.provisionGameAccount();
+        if (account != null) {
+            return grant(completion, provision ? PlayerLinkPort.CompletionResult.ACCOUNT_EXISTS
+                    : PlayerLinkPort.CompletionResult.NOT_REQUESTED, player);
+        }
+        if (!provision) {
+            return refuse(completion, PlayerLinkPort.CompletionResult.NOT_REQUESTED, player,
+                    i18n("panel_not_registered_in_game"));
+        }
+        String ip = getPlayerIp(player);
+        if (registrationLimitReached(ip)) {
+            refuse(completion, PlayerLinkPort.CompletionResult.REGISTRATION_REJECTED, null, null);
+            player.sendMessage(ChatColor.RED + i18n("ip_limit_reached"));
+            return PlayerLinkPort.CompletionResult.REGISTRATION_REJECTED;
+        }
+        if (!insertWebAccount(playerUuid, player.getName(), ip)) {
+            return refuse(completion, PlayerLinkPort.CompletionResult.AUTH_PLUGIN_UNAVAILABLE, player,
+                    i18n("panel_account_create_failed"));
+        }
+        return grant(completion, PlayerLinkPort.CompletionResult.CREATED, player);
+    }
+
+    /**
+     * A completion whose link is no longer pending for the connection that asked (DECISIONS item 10): a requested
+     * account is still created, without an address (the asking connection's is unknown, so the per-address limit is
+     * not checked), and nobody is logged in. A player online under another connection and not logged in is told to
+     * run {@code /panel} again.
+     */
+    private PlayerLinkPort.CompletionResult answerLateCompletion(PlayerLinkPort.LinkCompletion completion,
+                                                                  AccountData account, Player player) {
+        PlayerLinkPort.CompletionResult result;
+        if (account != null) {
+            result = completion.provisionGameAccount() ? PlayerLinkPort.CompletionResult.ACCOUNT_EXISTS
+                    : PlayerLinkPort.CompletionResult.NOT_REQUESTED;
+        } else if (!completion.provisionGameAccount()) {
+            result = PlayerLinkPort.CompletionResult.NOT_REQUESTED;
+        } else if (insertWebAccount(completion.playerUuid(), completion.playerName(), "")) {
+            result = PlayerLinkPort.CompletionResult.CREATED;
+        } else {
+            result = PlayerLinkPort.CompletionResult.AUTH_PLUGIN_UNAVAILABLE;
+        }
+        record(completion, result);
+        if (player != null && player.isOnline() && !isLoggedIn(completion.playerUuid())) {
+            sendPanelMessage(player, i18n("panel_late_completion"));
+        }
+        return result;
+    }
+
+    /** Record {@code result}, log the connection that asked in and return the result. */
+    private PlayerLinkPort.CompletionResult grant(PlayerLinkPort.LinkCompletion completion,
+                                                  PlayerLinkPort.CompletionResult result, Player player) {
+        record(completion, result);
         signIn(player, completion.proof());
-        return PlayerLinkPort.CompletionResult.NOT_REQUESTED;
+        if (result == PlayerLinkPort.CompletionResult.CREATED) {
+            sendPanelMessage(player, i18n("panel_web_registration_hint"));
+        }
+        return result;
+    }
+
+    /**
+     * Record {@code result}, resume the countdown (nobody is logged in), tell {@code player} {@code message} when
+     * both are given, and return the result.
+     */
+    private PlayerLinkPort.CompletionResult refuse(PlayerLinkPort.LinkCompletion completion,
+                                                   PlayerLinkPort.CompletionResult result, Player player,
+                                                   String message) {
+        record(completion, result);
+        syncPanelPause(completion.playerUuid());
+        if (player != null && message != null) {
+            sendPanelMessage(player, message);
+        }
+        return result;
+    }
+
+    /**
+     * Create the account of a player who registered on the web: the row {@code /register} creates, with an empty
+     * password hash and salt and the given address. Only called when the player has no account, so it never
+     * overwrites one. A failed write is logged and reported as {@code false}.
+     */
+    private boolean insertWebAccount(UUID playerUuid, String playerName, String ip) {
+        try {
+            dataOperator.insert(newAccountRow(playerUuid, playerName, "", "", ip));
+            return true;
+        } catch (RuntimeException e) {
+            plugin.getLogger().error(i18n("log_web_account_create_failed").replace("{PLAYER}", playerName)
+                    .replace("{ERROR}", String.valueOf(e.getMessage())));
+            return false;
+        }
     }
 
     private void record(PlayerLinkPort.LinkCompletion completion, PlayerLinkPort.CompletionResult result) {
@@ -2047,12 +2016,32 @@ public class LoginService {
     }
 
     /**
-     * A link stopped being usable without completing (called off the main thread).
+     * A link stopped being usable without completing (called off the main thread; at most once per link). The link
+     * ends on the main thread through the same path as a local expiry: the player is told why (expired, cancelled,
+     * refused) only for their latest link, and the countdown resumes with the time that was left. An expiry for a
+     * link that is not pending for its player does nothing.
      *
      * @param expiry the link, its player and the reason
      */
     void onLinkExpired(PlayerLinkPort.LinkExpiry expiry) {
-        // Handled from Plan 01-03 Task 2 on.
+        java.util.function.Supplier<String> message;
+        switch (expiry.reason()) {
+            case CANCELLED:
+                message = () -> i18n("panel_link_cancelled");
+                break;
+            case DENIED:
+                message = () -> i18n("panel_outcome_refused");
+                break;
+            default:
+                message = () -> i18n("panel_outcome_expired");
+                break;
+        }
+        try {
+            Bukkit.getScheduler().runTask(bukkitPlugin,
+                    () -> endPendingLink(expiry.linkId(), expiry.playerUuid(), message));
+        } catch (RuntimeException e) {
+            // The plugin is disabling: every pending link ends with it.
+        }
     }
 
     /**
@@ -2164,17 +2153,27 @@ public class LoginService {
             }
         }
         for (String id : expired) {
-            UUID owner = pendingPanelRequests.get(id);
-            boolean tell = owner != null && !panelCreatesInFlight.contains(id) && id.equals(latestPanelRequest.get(owner));
-            removePanelRequest(id);
-            if (owner != null) {
-                Player player = Bukkit.getPlayer(owner);
-                if (tell && player != null) {
-                    sendPanelMessage(player, i18n("panel_outcome_expired"));
-                }
-                syncPanelPause(owner);
-            }
+            endPendingLink(id, null, () -> i18n("panel_outcome_expired"));
         }
+    }
+
+    /**
+     * End one pending link: tell its player {@code message} if it is their latest link and its create has
+     * answered, and resume their countdown once nothing of theirs is pending. Does nothing for a link that is not
+     * pending, or that is pending for another player than {@code expectedOwner} (when given).
+     */
+    private void endPendingLink(String id, UUID expectedOwner, java.util.function.Supplier<String> message) {
+        UUID owner = pendingPanelRequests.get(id);
+        if (owner == null || (expectedOwner != null && !expectedOwner.equals(owner))) {
+            return;
+        }
+        boolean tell = !panelCreatesInFlight.contains(id) && id.equals(latestPanelRequest.get(owner));
+        removePanelRequest(id);
+        Player player = Bukkit.getPlayer(owner);
+        if (tell && player != null) {
+            sendPanelMessage(player, message.get());
+        }
+        syncPanelPause(owner);
     }
 
     /**

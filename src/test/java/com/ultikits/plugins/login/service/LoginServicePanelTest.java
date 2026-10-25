@@ -560,7 +560,10 @@ class LoginServicePanelTest {
             assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
             assertThat(service.isPanelRequestCurrent(playerUuid, link, service.getInvalidationGeneration(playerUuid)))
                     .isFalse();
-            assertThat(service.completePanelLogin(link, false, null)).isFalse();
+            CompletableFuture<PlayerLinkPort.CompletionResult> answer = service.onLinkCompleted(
+                    new PlayerLinkPort.LinkCompletion("C1", link, LinkProof.LINKED_WEB_ACCOUNT, playerUuid,
+                            "TestPlayer", false, null));
+            assertThat(answer).isCompletedWithValue(PlayerLinkPort.CompletionResult.NOT_REQUESTED);
             assertThat(service.isLoggedIn(playerUuid)).isFalse();
         }
 
@@ -585,13 +588,17 @@ class LoginServicePanelTest {
 
             // Ending the second link alone (a refused completion) leaves the first one holding the countdown.
             setRegistered(false);
-            assertThat(service.completePanelLogin(second, false, null)).isFalse();
+            assertThat(service.onLinkCompleted(new PlayerLinkPort.LinkCompletion("C2", second,
+                    LinkProof.LINKED_WEB_ACCOUNT, playerUuid, "TestPlayer", false, null)))
+                    .isCompletedWithValue(PlayerLinkPort.CompletionResult.NOT_REQUESTED);
             @SuppressWarnings("unchecked")
             Map<UUID, Long> paused = (Map<UUID, Long>) field("panelPausedAt");
             assertThat(paused).containsKey(playerUuid);
             verify(UltiLoginTestHelper.getMockPlugin(), never()).i18n("panel_timeout_resumed");
 
-            assertThat(service.completePanelLogin(first, false, null)).isFalse();
+            assertThat(service.onLinkCompleted(new PlayerLinkPort.LinkCompletion("C1", first,
+                    LinkProof.LINKED_WEB_ACCOUNT, playerUuid, "TestPlayer", false, null)))
+                    .isCompletedWithValue(PlayerLinkPort.CompletionResult.NOT_REQUESTED);
             assertThat(paused).doesNotContainKey(playerUuid);
             assertMessage("panel_timeout_resumed", 1);
         }
@@ -825,128 +832,6 @@ class LoginServicePanelTest {
         }
     }
 
-    // ==================== completion of a pending link (rewritten by Plan 01-03) ====================
-
-    @Nested
-    @DisplayName("completing a pending link (web registration, proof 3)")
-    class WebRegistration {
-
-        @Test
-        @DisplayName("Test 6: web_registration for an unregistered player creates one row with an empty hash, logs in, hints once")
-        void createsAccountWithEmptyHash() {
-            setRegistered(false);
-            String link = openLink();
-
-            assertThat(service.completePanelLogin(link, false, "web_registration")).isTrue();
-
-            ArgumentCaptor<AccountData> inserted = ArgumentCaptor.forClass(AccountData.class);
-            verify(dataOperator, times(1)).insert(inserted.capture());
-            AccountData row = inserted.getValue();
-            assertThat(row.getPlayerUuid()).isEqualTo(playerUuid.toString());
-            assertThat(row.getPlayerName()).isEqualTo("TestPlayer");
-            assertThat(row.getPasswordHash()).as("no game password yet").isEmpty();
-            assertThat(row.getRegisterIp()).isEqualTo("127.0.0.1");
-            assertThat(service.isLoggedIn(playerUuid)).as("the web registration logged the player in").isTrue();
-            assertMessage("panel_auth_success_player", 1);
-            assertMessage("panel_web_registration_hint", 1);
-        }
-
-        @Test
-        @DisplayName("Test 7: the same completion for a player who registered in game meanwhile leaves the row untouched and logs in, no hint")
-        void existingAccountIsNeverOverwritten() {
-            setRegistered(false);
-            String link = openLink();
-            AccountData existing = registerWith("hash", "salt");
-
-            assertThat(service.completePanelLogin(link, false, "web_registration")).isTrue();
-
-            verify(dataOperator, never()).insert(any(AccountData.class));
-            assertThat(existing.getPasswordHash()).as("the game password is untouched").isEqualTo("hash");
-            assertThat(existing.getSalt()).isEqualTo("salt");
-            assertThat(service.isLoggedIn(playerUuid)).isTrue();
-            assertMessage("panel_web_registration_hint", 0);
-        }
-
-        @Test
-        @DisplayName("a bound-account completion for a player with no game account is refused with 'not registered in game'")
-        void boundAccountWithoutGameAccountIsRefused() {
-            setRegistered(false);
-            String link = openLink();
-
-            assertThat(service.completePanelLogin(link, false, "bound_account")).isFalse();
-
-            verify(dataOperator, never()).insert(any(AccountData.class));
-            assertThat(service.isLoggedIn(playerUuid)).isFalse();
-            assertMessage("panel_not_registered_in_game", 1);
-            assertMessage("panel_auth_success_player", 0);
-        }
-
-        @Test
-        @DisplayName("web registration respects max-register-per-ip: over the limit nothing is created and nobody logged in")
-        void webRegistrationRespectsIpLimit() {
-            setRegistered(false);
-            String link = openLink();
-            when(config.getMaxRegisterPerIp()).thenReturn(1);
-            oneAccountAlreadyFromThisAddress();
-
-            assertThat(service.completePanelLogin(link, false, "web_registration")).isFalse();
-
-            verify(dataOperator, never()).insert(any(AccountData.class));
-            assertThat(service.isLoggedIn(playerUuid)).isFalse();
-            verify(player).sendMessage(ChatColor.RED + CatalogueText.text("zh", "ip_limit_reached"));
-        }
-
-        @Test
-        @DisplayName("a completion that arrives after the player's credentials were invalidated logs nobody in")
-        void staleCompletionAfterInvalidationIsDiscarded() {
-            String link = openLink();
-
-            service.invalidateSession(playerUuid, false);
-
-            assertThat(service.completePanelLogin(link, false, null)).isFalse();
-            assertThat(service.isLoggedIn(playerUuid)).isFalse();
-            assertMessage("panel_auth_success_player", 0);
-        }
-
-        @Test
-        @DisplayName("control: without a quit or invalidation the completion logs the player in")
-        void completionLogsIn() {
-            String link = openLink();
-
-            assertThat(service.completePanelLogin(link, false, null)).isTrue();
-
-            assertThat(service.isLoggedIn(playerUuid)).isTrue();
-            assertMessage("panel_auth_success_player", 1);
-        }
-
-        @Test
-        @DisplayName("Codex run 1 P2: a web registration whose database write fails resumes the countdown with the time that remained")
-        void failedWebRegistrationResumesTheCountdown() {
-            setRegistered(false);
-            service.onPlayerJoin(player);
-            advance(55);
-            String link = openLink();
-            doThrow(new RuntimeException("database unavailable")).when(dataOperator).insert(any(AccountData.class));
-
-            try {
-                service.completePanelLogin(link, false, "web_registration");
-            } catch (RuntimeException expected) {
-                // The write failure propagates to the caller; the countdown must still resume.
-            }
-            service.checkTimeouts();
-            advance(4);
-            service.checkTimeouts();
-            verify(player, never()).kickPlayer(anyString());
-
-            advance(2);
-            service.checkTimeouts();
-
-            assertThat(service.isLoggedIn(playerUuid)).isFalse();
-            verify(player, times(1)).kickPlayer(anyString());
-            assertMessage("panel_timeout_resumed", 1);
-        }
-    }
-
     // ==================== an account without a game password ====================
 
     @Nested
@@ -1059,6 +944,15 @@ class LoginServicePanelTest {
             "panel_link_error",
             "panel_create_rate_limited",
             "panel_create_not_permitted",
+            "panel_outcome_refused",
+            "panel_link_cancelled",
+            "panel_signed_in",
+            "panel_web_signin_complete",
+            "panel_account_create_failed",
+            "panel_late_completion",
+            "log_panel_link_handler_unavailable",
+            "log_panel_completion_failed",
+            "log_web_account_create_failed",
             "panel_web_registration_hint",
             "panel_not_registered_in_game",
             "login_no_game_password",
@@ -1072,7 +966,8 @@ class LoginServicePanelTest {
             "panel_credential_refused",
             "log_panel_credential_refused",
             "log_auth_poll_error",
-            "panel_outcome_refused",
+            "panel_auth_success_owner",
+            "panel_auth_success_player",
             "panel_outcome_refused_identity_bound_elsewhere",
             "panel_outcome_refused_game_login_required",
             "panel_outcome_refused_link_not_permitted",
