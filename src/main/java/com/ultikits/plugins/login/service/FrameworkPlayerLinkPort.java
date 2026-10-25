@@ -19,6 +19,10 @@ import java.util.concurrent.CompletableFuture;
  * framework fills in the server's online mode itself. The conversion never blocks and never throws: a framework that
  * has not enabled yet answers {@link LinkFailure#NOT_CONNECTED}, and any exception, either thrown by the create call
  * or completing its future, answers {@link LinkFailure#OTHER}.
+ * <p>
+ * The module's {@link LinkEventHandler} is installed with {@link CloudPlayerLinks#setHandler} with this module as
+ * owner, wrapped so the framework only ever sees its own types. A module handler that throws, or answers no future,
+ * gives the framework a failed future, which sends no result: the gateway redelivers the completion later.
  */
 final class FrameworkPlayerLinkPort implements PlayerLinkPort {
 
@@ -35,8 +39,7 @@ final class FrameworkPlayerLinkPort implements PlayerLinkPort {
     public CompletableFuture<LinkCreation> create(UUID playerUuid, String playerName, boolean authenticated,
                                                   boolean accountExists, Set<LinkProof> offeredProofs) {
         try {
-            UltiTools framework = UltiTools.getInstance();
-            CloudPlayerLinks links = framework == null ? null : framework.getCloudPlayerLinks();
+            CloudPlayerLinks links = links();
             if (links == null) {
                 return CompletableFuture.completedFuture(
                         LinkCreation.failed(LinkFailure.NOT_CONNECTED, "UltiTools player links are not available"));
@@ -52,6 +55,89 @@ final class FrameworkPlayerLinkPort implements PlayerLinkPort {
                     : fromFramework(creation));
         } catch (RuntimeException e) {
             return CompletableFuture.completedFuture(LinkCreation.failed(LinkFailure.OTHER, describe(e)));
+        }
+    }
+
+    @Override
+    public boolean registerHandler(LinkEventHandler handler) {
+        Objects.requireNonNull(handler, "handler");
+        try {
+            CloudPlayerLinks links = links();
+            if (links == null) {
+                return false;
+            }
+            links.setHandler(module, new Bridge(handler));
+            return true;
+        } catch (RuntimeException e) {
+            // Another module owns the handler (IllegalStateException), or the framework refused it otherwise.
+            return false;
+        }
+    }
+
+    @Override
+    public void unregisterHandler() {
+        try {
+            CloudPlayerLinks links = links();
+            if (links != null) {
+                links.removeHandler(module);
+            }
+        } catch (RuntimeException e) {
+            // Unloading: the framework releases a module's handler on unload anyway.
+        }
+    }
+
+    private static CloudPlayerLinks links() {
+        UltiTools framework = UltiTools.getInstance();
+        return framework == null ? null : framework.getCloudPlayerLinks();
+    }
+
+    /** The framework-side handler: translates each event into the module's types and the answer back. */
+    private static final class Bridge implements CloudPlayerLinks.LinkEventHandler {
+        private final LinkEventHandler handler;
+
+        private Bridge(LinkEventHandler handler) {
+            this.handler = handler;
+        }
+
+        @Override
+        public CompletableFuture<CloudPlayerLinks.GameAccountResult> onCompleted(
+                CloudPlayerLinks.LinkCompletion completion) {
+            CompletableFuture<CompletionResult> answer;
+            try {
+                answer = handler.onCompleted(new LinkCompletion(completion.completionId(), completion.linkId(),
+                        LinkProof.valueOf(completion.proof().name()), completion.playerUuid(),
+                        completion.playerName(), completion.provisionGameAccount(), completion.webUsername()));
+            } catch (RuntimeException e) {
+                return failed(e);
+            }
+            if (answer == null) {
+                return failed(new IllegalStateException("the module handler answered no future"));
+            }
+            return answer.thenApply(result -> CloudPlayerLinks.GameAccountResult.valueOf(result.name()));
+        }
+
+        @Override
+        public void onExpired(CloudPlayerLinks.LinkExpiry expiry) {
+            handler.onExpired(new LinkExpiry(expiry.linkId(), expiry.playerUuid(), reasonOf(expiry.reason())));
+        }
+
+        private static <T> CompletableFuture<T> failed(Throwable error) {
+            CompletableFuture<T> future = new CompletableFuture<>();
+            future.completeExceptionally(error);
+            return future;
+        }
+    }
+
+    private static LinkExpiry.Reason reasonOf(CloudPlayerLinks.ExpiryReason reason) {
+        switch (reason) {
+            case EXPIRED:
+                return LinkExpiry.Reason.EXPIRED;
+            case CANCELLED:
+                return LinkExpiry.Reason.CANCELLED;
+            case DENIED:
+                return LinkExpiry.Reason.DENIED;
+            default:
+                return LinkExpiry.Reason.OTHER;
         }
     }
 

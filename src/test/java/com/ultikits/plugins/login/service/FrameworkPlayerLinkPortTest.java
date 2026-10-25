@@ -1,7 +1,12 @@
 package com.ultikits.plugins.login.service;
 
 import com.ultikits.plugins.login.UltiLoginTestHelper;
+import com.ultikits.plugins.login.config.LoginConfig;
+import com.ultikits.plugins.login.service.PlayerLinkPort.CompletionResult;
+import com.ultikits.plugins.login.service.PlayerLinkPort.LinkCompletion;
 import com.ultikits.plugins.login.service.PlayerLinkPort.LinkCreation;
+import com.ultikits.plugins.login.service.PlayerLinkPort.LinkEventHandler;
+import com.ultikits.plugins.login.service.PlayerLinkPort.LinkExpiry;
 import com.ultikits.plugins.login.service.PlayerLinkPort.LinkFailure;
 import com.ultikits.plugins.login.service.PlayerLinkPort.LinkProof;
 import com.ultikits.ultitools.UltiTools;
@@ -14,6 +19,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 
@@ -24,15 +30,20 @@ import java.util.EnumSet;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -200,5 +211,172 @@ class FrameworkPlayerLinkPortTest {
         assertThat(failed.acceptedProofs()).isEmpty();
         assertThat(failed.expiresAt()).isNull();
         assertThat(failed.toString()).contains("RATE_LIMITED");
+    }
+
+    // ==================== the event handler ====================
+
+    /** Install {@code handler} through the adapter and return the framework-side handler the transport received. */
+    private CloudPlayerLinks.LinkEventHandler installed(LinkEventHandler handler) {
+        assertThat(port.registerHandler(handler)).isTrue();
+        ArgumentCaptor<CloudPlayerLinks.LinkEventHandler> captured =
+                ArgumentCaptor.forClass(CloudPlayerLinks.LinkEventHandler.class);
+        verify(transport).setHandler(eq(module), captured.capture());
+        return captured.getValue();
+    }
+
+    /** A handler that records what it receives and answers every completion with {@code result}. */
+    private static final class Recording implements LinkEventHandler {
+        private final AtomicReference<LinkCompletion> completion = new AtomicReference<>();
+        private final AtomicReference<LinkExpiry> expiry = new AtomicReference<>();
+        private final CompletionResult result;
+
+        private Recording(CompletionResult result) {
+            this.result = result;
+        }
+
+        @Override
+        public CompletableFuture<CompletionResult> onCompleted(LinkCompletion received) {
+            completion.set(received);
+            return CompletableFuture.completedFuture(result);
+        }
+
+        @Override
+        public void onExpired(LinkExpiry received) {
+            expiry.set(received);
+        }
+    }
+
+    @Test
+    @DisplayName("LoginService installs exactly one handler, owned by the module, when it initialises and removes it on shutdown")
+    void loginServiceLifecycle() throws Exception {
+        org.bukkit.Server server = UltiLoginTestHelper.bootstrapLiveServer();
+        try {
+            LoginConfig config = UltiLoginTestHelper.createDefaultConfig();
+            LoginService service = new LoginService(module, config);
+
+            service.registerPlayerLinkHandler();
+
+            verify(transport, times(1)).setHandler(eq(module), any(CloudPlayerLinks.LinkEventHandler.class));
+            verify(transport, never()).removeHandler(any());
+
+            service.shutdown();
+
+            verify(transport, times(1)).removeHandler(module);
+            assertThat(server).isNotNull();
+        } finally {
+            UltiLoginTestHelper.tearDownLiveServer();
+        }
+    }
+
+    @Test
+    @DisplayName("a framework completion reaches the module handler with every field copied")
+    void completionIsTranslated() throws Exception {
+        Recording handler = new Recording(CompletionResult.CREATED);
+        CloudPlayerLinks.LinkEventHandler framework = installed(handler);
+
+        framework.onCompleted(new CloudPlayerLinks.LinkCompletion("C1", "L1",
+                CloudPlayerLinks.LinkProof.WEB_REGISTRATION, PLAYER, "Steve", true, "steve-web")).get(5, TimeUnit.SECONDS);
+
+        LinkCompletion received = handler.completion.get();
+        assertThat(received.completionId()).isEqualTo("C1");
+        assertThat(received.linkId()).isEqualTo("L1");
+        assertThat(received.proof()).isEqualTo(LinkProof.WEB_REGISTRATION);
+        assertThat(received.playerUuid()).isEqualTo(PLAYER);
+        assertThat(received.playerName()).isEqualTo("Steve");
+        assertThat(received.provisionGameAccount()).isTrue();
+        assertThat(received.webUsername()).isEqualTo("steve-web");
+        assertThat(received.toString()).contains("C1", "L1", "WEB_REGISTRATION");
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(CompletionResult.class)
+    @DisplayName("each module result maps to the framework's result of the same meaning")
+    void resultsMap(CompletionResult result) throws Exception {
+        CloudPlayerLinks.LinkEventHandler framework = installed(new Recording(result));
+
+        CloudPlayerLinks.GameAccountResult answered = framework.onCompleted(new CloudPlayerLinks.LinkCompletion("C1",
+                "L1", CloudPlayerLinks.LinkProof.LINKED_WEB_ACCOUNT, PLAYER, "Steve", false, null))
+                .get(5, TimeUnit.SECONDS);
+
+        assertThat(answered.name()).isEqualTo(result.name());
+    }
+
+    @ParameterizedTest(name = "{0} -> {1}")
+    @CsvSource({"EXPIRED, EXPIRED", "CANCELLED, CANCELLED", "DENIED, DENIED"})
+    @DisplayName("a framework expiry reaches the module handler with its link, player and reason")
+    void expiryIsTranslated(CloudPlayerLinks.ExpiryReason reason, LinkExpiry.Reason expected) {
+        Recording handler = new Recording(CompletionResult.NOT_REQUESTED);
+        CloudPlayerLinks.LinkEventHandler framework = installed(handler);
+
+        framework.onExpired(new CloudPlayerLinks.LinkExpiry("L7", PLAYER, "Steve", reason));
+
+        LinkExpiry received = handler.expiry.get();
+        assertThat(received.linkId()).isEqualTo("L7");
+        assertThat(received.playerUuid()).isEqualTo(PLAYER);
+        assertThat(received.reason()).isEqualTo(expected);
+        assertThat(received.toString()).contains("L7", expected.name());
+    }
+
+    @Test
+    @DisplayName("a module handler that throws or answers no future gives the framework a failed future: no result is sent")
+    void failingHandlerGivesAFailedFuture() {
+        CloudPlayerLinks.LinkEventHandler throwing = installed(new LinkEventHandler() {
+            @Override
+            public CompletableFuture<CompletionResult> onCompleted(LinkCompletion completion) {
+                throw new IllegalStateException("boom");
+            }
+
+            @Override
+            public void onExpired(LinkExpiry expiry) {
+                // not used
+            }
+        });
+        CloudPlayerLinks.LinkCompletion completion = new CloudPlayerLinks.LinkCompletion("C1", "L1",
+                CloudPlayerLinks.LinkProof.LINKED_WEB_ACCOUNT, PLAYER, "Steve", false, null);
+        assertThatThrownBy(() -> throwing.onCompleted(completion).get(5, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class).hasMessageContaining("boom");
+
+        port.registerHandler(new LinkEventHandler() {
+            @Override
+            public CompletableFuture<CompletionResult> onCompleted(LinkCompletion received) {
+                return null;
+            }
+
+            @Override
+            public void onExpired(LinkExpiry expiry) {
+                // not used
+            }
+        });
+        ArgumentCaptor<CloudPlayerLinks.LinkEventHandler> second =
+                ArgumentCaptor.forClass(CloudPlayerLinks.LinkEventHandler.class);
+        verify(transport, times(2)).setHandler(eq(module), second.capture());
+        assertThat(second.getValue().onCompleted(completion)).isCompletedExceptionally();
+    }
+
+    @Test
+    @DisplayName("registration fails softly: no framework, or another module owning the handler, answers false")
+    void registrationFailsSoftly() {
+        doThrow(new IllegalStateException("owned by another module")).when(transport).setHandler(any(), any());
+        assertThat(port.registerHandler(new Recording(CompletionResult.NOT_REQUESTED))).isFalse();
+
+        when(framework.getCloudPlayerLinks()).thenReturn(null);
+        assertThat(port.registerHandler(new Recording(CompletionResult.NOT_REQUESTED))).isFalse();
+        port.unregisterHandler();
+
+        ultiTools.when(UltiTools::getInstance).thenReturn(null);
+        assertThat(port.registerHandler(new Recording(CompletionResult.NOT_REQUESTED))).isFalse();
+        port.unregisterHandler();
+        verify(transport, never()).removeHandler(any());
+    }
+
+    @Test
+    @DisplayName("unregistering removes only this module's handler and never throws")
+    void unregisterRemovesThisModulesHandler() {
+        port.unregisterHandler();
+        verify(transport).removeHandler(module);
+
+        doThrow(new IllegalStateException("closed")).when(transport).removeHandler(any());
+        port.unregisterHandler();
+        verify(transport, times(2)).removeHandler(module);
     }
 }

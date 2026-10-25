@@ -84,6 +84,8 @@
   "panel_create_not_permitted": "&c网页面板无法在这里为你登录。如果你的账号有游戏密码，请先用 /login 登录，再执行 /panel。",
   "panel_not_registered_in_game": "&c你尚未在本服务器的游戏内注册，网页面板无法为你登录。请先使用 /register <密码> <确认密码> 注册。",
   "panel_web_registration_hint": "&e你的账号是在网页上创建的，还没有游戏密码。请使用 /setpassword <密码> <确认密码> 设置，之后也可以用 /login 登录。",
+  "panel_signed_in": "&a已通过 UltiCloud 登录。",
+  "panel_web_signin_complete": "&a网页面板登录已完成。",
 
   "email_not_enabled": "&c邮件服务未启用！请联系管理员配置。",
   "email_bind_prompt": "&e已向 &f{EMAIL} &e发送验证码，请使用 &f/regs <验证码> &e完成绑定。",
@@ -147,6 +149,8 @@
   "log_account_update_failed": "更新账号失败",
   "log_password_reset_failed": "重置密码失败",
   "log_panel_link_failed": "请求面板链接失败：{ERROR}",
+  "log_panel_link_handler_unavailable": "UltiCloud 玩家链接无法把登录结果交给 UltiLogin（UltiTools 尚未就绪，或由其他模块接收）：在重新加载 UltiLogin 之前，/panel 不会让任何人登录。",
+  "log_panel_completion_failed": "处理网页面板登录失败，UltiCloud 会再次发送：{ERROR}",
   "log_account_update_after_panel_failed": "面板登录后更新账号失败",
   "removed_key_warning": "{FILE} 仍包含 '{KEY}'，此版本的 UltiLogin 已不再读取它。{REASON} 从文件中删除该键即可消除此警告。",
   "removed_key_reason_wrong_password": "它的值从未显示给玩家。输入错误密码时的回复现在来自本模块语言文件（lang/<语言>.json，与 config/login.yml 位于同一模块文件夹）中的 'wrong_password' 条目，因此会跟随服务器的语言设置；要自定义它，请把该文件复制为以其语言代码加连字符开头的文件（例如 lang/zh-myserver.json），在副本中修改 'wrong_password'，并在 plugins/UltiTools/config.yml 中设置 language: zh-myserver；直接修改官方文件的改动会在下次启动或模块重载时被恢复（UltiKits/UltiLogin#23）。",

@@ -84,6 +84,8 @@
   "panel_create_not_permitted": "&cThe web panel cannot sign you in from here. If your account has a game password, log in with /login first, then run /panel again.",
   "panel_not_registered_in_game": "&cYou are not registered in game on this server, so the web panel cannot log you in. Use /register <password> <confirm> first.",
   "panel_web_registration_hint": "&eYour account was created on the web and has no game password yet. Set one with /setpassword <password> <confirm>, so you can also log in with /login.",
+  "panel_signed_in": "&aYou have been logged in via UltiCloud.",
+  "panel_web_signin_complete": "&aThe web panel sign-in is complete.",
 
   "email_not_enabled": "&cEmail service is not enabled! Please contact an administrator.",
   "email_bind_prompt": "&eA verification code has been sent to &f{EMAIL}&e. Use &f/regs <code> &eto complete binding.",
@@ -147,6 +149,8 @@
   "log_account_update_failed": "Failed to update account",
   "log_password_reset_failed": "Failed to reset password",
   "log_panel_link_failed": "Failed to request panel link: {ERROR}",
+  "log_panel_link_handler_unavailable": "UltiCloud player links could not deliver sign-ins to UltiLogin (UltiTools is not ready, or another module receives them): /panel will log nobody in until UltiLogin is loaded again.",
+  "log_panel_completion_failed": "Failed to handle a web panel sign-in; UltiCloud will deliver it again: {ERROR}",
   "log_account_update_after_panel_failed": "Failed to update account after panel login",
   "removed_key_warning": "{FILE} still contains '{KEY}', which this version of UltiLogin no longer reads. {REASON} Delete the key from the file to silence this warning.",
   "removed_key_reason_wrong_password": "Its value was never shown to players. The reply to a wrong password now comes from the 'wrong_password' entry of this module's language file (lang/<language>.json, in the same module folder as config/login.yml), so it follows the server's language setting; to customise it, copy that file to one whose name starts with its language code and a hyphen (for example lang/en-myserver.json), edit 'wrong_password' there and set language: en-myserver in plugins/UltiTools/config.yml; an edit made in the official file itself is restored at the next start or module reload (UltiKits/UltiLogin#23).",

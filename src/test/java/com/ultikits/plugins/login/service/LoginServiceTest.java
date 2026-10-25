@@ -3333,12 +3333,26 @@ class LoginServiceTest {
 
     /** A create stub: answers a link {@code L-<n>}, running {@code during} inside the create first. */
     private static PlayerLinkPort stubPort(Runnable during, java.util.concurrent.atomic.AtomicInteger calls) {
-        return (uuid, name, authenticated, accountExists, proofs) -> {
-            calls.incrementAndGet();
-            during.run();
-            return java.util.concurrent.CompletableFuture.completedFuture(PlayerLinkPort.LinkCreation.created(
-                    "L-" + calls.get(), "http://panel.test/link", java.time.Instant.now().plusSeconds(300),
-                    java.util.EnumSet.of(PlayerLinkPort.LinkProof.LINKED_WEB_ACCOUNT)));
+        return new PlayerLinkPort() {
+            @Override
+            public java.util.concurrent.CompletableFuture<LinkCreation> create(UUID uuid, String name,
+                    boolean authenticated, boolean accountExists, java.util.Set<LinkProof> proofs) {
+                calls.incrementAndGet();
+                during.run();
+                return java.util.concurrent.CompletableFuture.completedFuture(PlayerLinkPort.LinkCreation.created(
+                        "L-" + calls.get(), "http://panel.test/link", java.time.Instant.now().plusSeconds(300),
+                        java.util.EnumSet.of(PlayerLinkPort.LinkProof.LINKED_WEB_ACCOUNT)));
+            }
+
+            @Override
+            public boolean registerHandler(LinkEventHandler handler) {
+                return true;
+            }
+
+            @Override
+            public void unregisterHandler() {
+                // no handler is installed here
+            }
         };
     }
 

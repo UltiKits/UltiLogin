@@ -6,6 +6,7 @@ import com.ultikits.plugins.login.gui.LoginGUIPage;
 import com.ultikits.plugins.login.gui.RegisterGUIPage;
 import com.ultikits.plugins.login.listener.LoginProtectionListener;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.annotations.PostConstruct;
 import com.ultikits.ultitools.annotations.PreDestroy;
 import com.ultikits.ultitools.annotations.Scheduled;
 import com.ultikits.ultitools.interfaces.DataOperator;
@@ -31,6 +32,7 @@ import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -188,6 +190,36 @@ public class LoginService {
     private final java.util.Set<UUID> panelPauseAnnounced = ConcurrentHashMap.newKeySet();
     private final Object panelPauseLock = new Object();
 
+    // How many answered completions are remembered (completion id -> result) so a redelivery in this run repeats
+    // nothing; across restarts the framework's persisted receipts de-duplicate.
+    static final int ANSWERED_COMPLETIONS_KEPT = 256;
+
+    // The results of the completions answered in this run, oldest first, bounded to ANSWERED_COMPLETIONS_KEPT.
+    // Touched only on the main thread, so it needs no lock.
+    private final Map<String, PlayerLinkPort.CompletionResult> answeredCompletions =
+            new LinkedHashMap<String, PlayerLinkPort.CompletionResult>() {
+                private static final long serialVersionUID = 1L;
+
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, PlayerLinkPort.CompletionResult> eldest) {
+                    return size() > ANSWERED_COMPLETIONS_KEPT;
+                }
+            };
+
+    // The handler the framework calls with this server's link outcomes; installed by registerPlayerLinkHandler.
+    private final PlayerLinkPort.LinkEventHandler linkEventHandler = new PlayerLinkPort.LinkEventHandler() {
+        @Override
+        public java.util.concurrent.CompletableFuture<PlayerLinkPort.CompletionResult> onCompleted(
+                PlayerLinkPort.LinkCompletion completion) {
+            return onLinkCompleted(completion);
+        }
+
+        @Override
+        public void onExpired(PlayerLinkPort.LinkExpiry expiry) {
+            onLinkExpired(expiry);
+        }
+    };
+
     /**
      * Constructor with dependency injection.
      */
@@ -239,10 +271,26 @@ public class LoginService {
     }
 
     /**
-     * Cleanup on shutdown.
+     * Install this module's handler for link completions and expiries with the framework's player-link API, once the
+     * service exists. The framework calls it for every completion and expiry of this server's links, including
+     * completions redelivered after a restart. A framework that refuses the handler (not enabled, or another module
+     * owns it) is reported once in the console: {@code /panel} can still create links, but nobody is logged in by
+     * them until the module is loaded again.
+     */
+    @PostConstruct
+    public void registerPlayerLinkHandler() {
+        if (!playerLinkPort.registerHandler(linkEventHandler)) {
+            plugin.getLogger().warn(i18n("log_panel_link_handler_unavailable"));
+        }
+    }
+
+    /**
+     * Cleanup on shutdown. Also removes the player-link handler; the framework removes a module's handler when the
+     * module unloads as well, and removing it twice is harmless.
      */
     @PreDestroy
     public void shutdown() {
+        playerLinkPort.unregisterHandler();
         // Cancel all queued credential-GUI reopen tasks.
         for (BukkitTask task : pendingCredentialGuiReopenTasks.values()) {
             task.cancel();
@@ -264,6 +312,7 @@ public class LoginService {
         latestPanelRequest.clear();
         panelPausedAt.clear();
         panelPauseAnnounced.clear();
+        answeredCompletions.clear();
         invalidationGenerations.clear();
         credentialGuiTransitions.clear();
         openCredentialGuiPlayers.clear();
@@ -1869,6 +1918,141 @@ public class LoginService {
         }
         dataOperator.insert(newAccountRow(player, "", "", ip));
         return true;
+    }
+
+    /**
+     * Answer one link completion the framework delivered (called off the main thread). The work runs in one
+     * main-thread task, as {@code /register} does, so an account check and insert can never interleave with it; the
+     * returned future is completed there. A task that cannot be scheduled (the plugin is disabling) fails the future,
+     * which sends no result: the gateway redelivers the completion later.
+     *
+     * @param completion what the gateway reported
+     * @return the result, completed on the main thread
+     */
+    java.util.concurrent.CompletableFuture<PlayerLinkPort.CompletionResult> onLinkCompleted(
+            PlayerLinkPort.LinkCompletion completion) {
+        java.util.concurrent.CompletableFuture<PlayerLinkPort.CompletionResult> answer =
+                new java.util.concurrent.CompletableFuture<>();
+        try {
+            Bukkit.getScheduler().runTask(bukkitPlugin, () -> answerCompletion(completion, answer));
+        } catch (RuntimeException e) {
+            answer.completeExceptionally(e);
+        }
+        return answer;
+    }
+
+    /**
+     * Run {@link #handleCompletion} and complete {@code answer} with its result. An unexpected failure answers the
+     * result already recorded for this completion, if any; otherwise it fails the future (no result is sent, so the
+     * gateway asks again) after resuming the player's countdown.
+     */
+    private void answerCompletion(PlayerLinkPort.LinkCompletion completion,
+                                  java.util.concurrent.CompletableFuture<PlayerLinkPort.CompletionResult> answer) {
+        try {
+            answer.complete(handleCompletion(completion));
+        } catch (RuntimeException e) {
+            PlayerLinkPort.CompletionResult recorded = answeredCompletions.get(completion.completionId());
+            if (recorded != null) {
+                answer.complete(recorded);
+                return;
+            }
+            syncPanelPause(completion.playerUuid());
+            plugin.getLogger().warn(i18n("log_panel_completion_failed").replace("{ERROR}", String.valueOf(e)));
+            answer.completeExceptionally(e);
+        }
+    }
+
+    /**
+     * Act on one link completion, on the main thread. Completions are delivered at least once: a completion id
+     * answered in this run is answered again with its recorded result and nothing else happens; the result is
+     * recorded before any message is sent or anyone is logged in.
+     * <p>
+     * <b>Which connection may be logged in.</b> Only the connection that asked: the completion's link must still be
+     * pending for the completion's player, which means the player has neither left nor had their credentials changed
+     * since the link was created (both drop every pending link). A completion for any other link logs nobody in.
+     * An {@link PlayerLinkPort.LinkProof#IN_GAME_SESSION} proof never logs a connection in: it proves the web user
+     * by the game session, not the other way round.
+     *
+     * @param completion what the gateway reported
+     * @return the result for the framework
+     */
+    private PlayerLinkPort.CompletionResult handleCompletion(PlayerLinkPort.LinkCompletion completion) {
+        PlayerLinkPort.CompletionResult recorded = answeredCompletions.get(completion.completionId());
+        if (recorded != null) {
+            return recorded;
+        }
+        UUID playerUuid = completion.playerUuid();
+        Player player = Bukkit.getPlayer(playerUuid);
+        boolean current = takePendingLink(completion.linkId(), playerUuid) && player != null && player.isOnline();
+        if (!current || completion.provisionGameAccount()) {
+            record(completion, PlayerLinkPort.CompletionResult.AUTH_PLUGIN_UNAVAILABLE);
+            syncPanelPause(playerUuid);
+            return PlayerLinkPort.CompletionResult.AUTH_PLUGIN_UNAVAILABLE;
+        }
+        record(completion, PlayerLinkPort.CompletionResult.NOT_REQUESTED);
+        signIn(player, completion.proof());
+        return PlayerLinkPort.CompletionResult.NOT_REQUESTED;
+    }
+
+    private void record(PlayerLinkPort.LinkCompletion completion, PlayerLinkPort.CompletionResult result) {
+        answeredCompletions.put(completion.completionId(), result);
+    }
+
+    /**
+     * End the pending link {@code linkId} if it is pending for {@code playerUuid}, under the lock {@link
+     * #invalidateSession(UUID)} takes, without touching the countdown pause.
+     *
+     * @return whether it was pending for that player
+     */
+    private boolean takePendingLink(String linkId, UUID playerUuid) {
+        AtomicLong generationCell = invalidationGenerations.computeIfAbsent(playerUuid, k -> new AtomicLong());
+        synchronized (generationCell) {
+            if (!playerUuid.equals(pendingPanelRequests.get(linkId))) {
+                return false;
+            }
+            removePanelRequest(linkId);
+            return true;
+        }
+    }
+
+    /**
+     * Log the connection that asked in, as {@code /login} does (account last-login fields, remembered session), and
+     * tell it so. A connection already logged in is only told the web sign-in is complete; an in-game-session proof
+     * never logs a connection in, it only resumes its countdown.
+     */
+    private void signIn(Player player, PlayerLinkPort.LinkProof proof) {
+        UUID playerUuid = player.getUniqueId();
+        if (isLoggedIn(playerUuid)) {
+            syncPanelPause(playerUuid);
+            sendPanelMessage(player, i18n("panel_web_signin_complete"));
+            return;
+        }
+        if (proof == PlayerLinkPort.LinkProof.IN_GAME_SESSION) {
+            syncPanelPause(playerUuid);
+            return;
+        }
+        completeLogin(player);
+        AccountData account = getAccount(playerUuid);
+        if (account != null) {
+            account.setLastIp(getPlayerIp(player));
+            account.setLastLogin(System.currentTimeMillis());
+            account.setLoginCount(account.getLoginCount() + 1);
+            AccountWrites.update(dataOperator, plugin.getLogger(), account,
+                    i18n("log_account_update_after_panel_failed"), i18n("log_account_row_gone"));
+        }
+        if (config.isSessionEnabled()) {
+            sessions.put(getPlayerIp(player) + ":" + playerUuid, System.currentTimeMillis());
+        }
+        sendPanelMessage(player, i18n("panel_signed_in"));
+    }
+
+    /**
+     * A link stopped being usable without completing (called off the main thread).
+     *
+     * @param expiry the link, its player and the reason
+     */
+    void onLinkExpired(PlayerLinkPort.LinkExpiry expiry) {
+        // Handled from Plan 01-03 Task 2 on.
     }
 
     /**

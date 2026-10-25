@@ -6,6 +6,7 @@ import com.ultikits.plugins.login.entity.AccountData;
 import com.ultikits.plugins.login.i18n.CatalogueText;
 import com.ultikits.plugins.login.listener.LoginProtectionListener;
 import com.ultikits.plugins.login.service.PlayerLinkPort.LinkCreation;
+import com.ultikits.plugins.login.service.PlayerLinkPort.LinkEventHandler;
 import com.ultikits.plugins.login.service.PlayerLinkPort.LinkFailure;
 import com.ultikits.plugins.login.service.PlayerLinkPort.LinkProof;
 import com.ultikits.ultitools.UltiTools;
@@ -144,6 +145,16 @@ class LoginServicePanelTest {
             creates.add(new Create(playerUuid, playerName, authenticated, accountExists, offeredProofs));
             duringCreate.run();
             return answer.get();
+        }
+
+        @Override
+        public boolean registerHandler(LinkEventHandler handler) {
+            return true;
+        }
+
+        @Override
+        public void unregisterHandler() {
+            // no handler is installed in these tests
         }
     }
 
