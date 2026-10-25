@@ -103,17 +103,22 @@ public class PanelCommand extends BaseCommandExecutor {
     }
 
     /**
-     * The text for a link that was not delivered: a refused server credential and a failed UltiCloud
-     * request each have their own message (Phase 18 magic-link contract, section 13); everything else,
-     * including a result discarded as stale, is the generic failure.
+     * The text for a link that was not delivered: not connected, a rate limit, a refusal to issue links and the
+     * per-address registration limit each have their own message; everything else, including a result discarded as
+     * stale, is the generic failure.
      */
     private String failureMessage(LoginService.PanelLinkResult result) {
         if (!result.isSuccess() && result.getFailure() != null) {
             switch (result.getFailure()) {
-                case CREDENTIAL_REFUSED:
-                    return plugin.i18n("panel_credential_refused");
                 case LINK_ERROR:
                     return plugin.i18n("panel_link_error");
+                case RATE_LIMITED:
+                    return plugin.i18n("panel_create_rate_limited");
+                case NOT_PERMITTED:
+                    return plugin.i18n("panel_create_not_permitted");
+                case IP_LIMIT:
+                    // The same red line /register answers at the limit.
+                    return ChatColor.RED + plugin.i18n("ip_limit_reached");
                 default:
                     break;
             }

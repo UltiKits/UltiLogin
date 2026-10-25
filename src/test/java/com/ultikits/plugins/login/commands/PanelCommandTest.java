@@ -207,6 +207,37 @@ class PanelCommandTest {
             verify(player, times(2)).sendMessage(anyString());
         }
 
+        @org.junit.jupiter.params.ParameterizedTest(name = "{0} -> {1}")
+        @org.junit.jupiter.params.provider.CsvSource({
+                "LINK_ERROR,    panel_link_error",
+                "RATE_LIMITED,  panel_create_rate_limited",
+                "NOT_PERMITTED, panel_create_not_permitted",
+                "GENERIC,       panel_error"
+        })
+        @DisplayName("each failure is answered with its own message and delivers nothing")
+        void failureMessages(LoginService.PanelLinkResult.Failure failure, String key) {
+            Runnable task = captureResultDeliveryTask(
+                    new LoginService.PanelLinkResult(false, null, "failed", null, failure));
+
+            task.run();
+
+            verify(player).sendMessage(ChatColor.translateAlternateColorCodes('&', CatalogueText.text("zh", key)));
+            verify(player, never()).spigot();
+            verify(loginService, never()).announcePanelPause(any());
+        }
+
+        @Test
+        @DisplayName("an address at max-register-per-ip is answered in red with the text /register uses")
+        void ipLimitMessage() {
+            Runnable task = captureResultDeliveryTask(new LoginService.PanelLinkResult(false, null, "limit", null,
+                    LoginService.PanelLinkResult.Failure.IP_LIMIT));
+
+            task.run();
+
+            verify(player).sendMessage(ChatColor.RED + CatalogueText.text("zh", "ip_limit_reached"));
+            verify(player, never()).spigot();
+        }
+
         @Test
         @DisplayName("Should send an error message when the link request fails")
         void sendsErrorMessageOnFailure() {

@@ -1620,6 +1620,12 @@ public class LoginService {
         String playerName = player.getName();
         boolean authenticated = isLoggedIn(playerUuid);
         boolean accountExists = isRegistered(playerUuid);
+        if (!accountExists && registrationLimitReached(getPlayerIp(player))) {
+            // A link for a name without an account may end in a web registration, which this address may not
+            // make any more: refuse here, before the web side could create an UltiKits account in vain.
+            return new PanelLinkResult(false, null, "Registration limit reached for this address", null,
+                    PanelLinkResult.Failure.IP_LIMIT);
+        }
         String requestId = UUID.randomUUID().toString();
 
         AtomicLong generationCell = invalidationGenerations.computeIfAbsent(playerUuid, k -> new AtomicLong());
@@ -1663,8 +1669,16 @@ public class LoginService {
     }
 
     /**
-     * The identity proofs a link may offer, from what UltiLogin knows: the in-game session only for a player logged
-     * in on this connection, the linked web account always.
+     * The identity proofs a link may offer, from what UltiLogin knows (the maintainer's three proofs):
+     * <ul>
+     *   <li>the in-game session only for a player logged in on this connection;</li>
+     *   <li>the UltiKits account already bound to this identity, always (the gateway decides whether one is);</li>
+     *   <li>a web registration only for a name UltiLogin has no account for -- never for a name that has one, so a
+     *       name with a game password must be logged in in game ({@code /login}) before the web can claim it.</li>
+     * </ul>
+     * By (logged in, has account): (yes, yes) in-game session and linked account; (no, yes) linked account;
+     * (no, no) linked account and web registration; (yes, no) -- an administrator's force-login of an unregistered
+     * name -- all three.
      *
      * @param loggedIn   whether the player is logged in on this connection
      * @param hasAccount whether UltiLogin holds an account for the player
@@ -1675,7 +1689,15 @@ public class LoginService {
         if (loggedIn) {
             proofs.add(PlayerLinkPort.LinkProof.IN_GAME_SESSION);
         }
+        if (!hasAccount) {
+            proofs.add(PlayerLinkPort.LinkProof.WEB_REGISTRATION);
+        }
         return proofs;
+    }
+
+    /** Whether the operator's {@code max-register-per-ip} forbids another account from {@code ip}. */
+    private boolean registrationLimitReached(String ip) {
+        return config.getMaxRegisterPerIp() > 0 && countRegistrationsByIp(ip) >= config.getMaxRegisterPerIp();
     }
 
     /**
@@ -1699,11 +1721,30 @@ public class LoginService {
         }
     }
 
-    /** The result of a create that produced no link, after its request was cleaned up; logs to the console. */
+    /**
+     * The result of a create that produced no link, after its request was cleaned up. Not connected, timed out and
+     * any other failure are logged once to the console (they are the operator's to fix); a rate limit and a refusal
+     * to issue links are the player's answer and are not logged.
+     */
     private PanelLinkResult failedCreation(PlayerLinkPort.LinkCreation creation) {
-        plugin.getLogger().warn(i18n("log_panel_link_failed").replace("{ERROR}", String.valueOf(creation.reason())));
-        PanelLinkResult.Failure failure = creation.failure() == PlayerLinkPort.LinkFailure.NOT_CONNECTED
-                ? PanelLinkResult.Failure.LINK_ERROR : PanelLinkResult.Failure.GENERIC;
+        PanelLinkResult.Failure failure;
+        switch (creation.failure()) {
+            case NOT_CONNECTED:
+                failure = PanelLinkResult.Failure.LINK_ERROR;
+                break;
+            case RATE_LIMITED:
+                failure = PanelLinkResult.Failure.RATE_LIMITED;
+                break;
+            case NOT_PERMITTED:
+                failure = PanelLinkResult.Failure.NOT_PERMITTED;
+                break;
+            default:
+                failure = PanelLinkResult.Failure.GENERIC;
+                break;
+        }
+        if (failure == PanelLinkResult.Failure.LINK_ERROR || failure == PanelLinkResult.Failure.GENERIC) {
+            plugin.getLogger().warn(i18n("log_panel_link_failed").replace("{ERROR}", String.valueOf(creation.reason())));
+        }
         return new PanelLinkResult(false, null, "Request failed: " + creation.reason(), null, failure);
     }
 
@@ -2296,15 +2337,19 @@ public class LoginService {
         public enum Failure {
             /** The link was published. */
             NONE,
-            /** Any failure without a message of its own. */
+            /** Timed out, an unexpected answer, or discarded as stale: the generic failure. */
             GENERIC,
-            /** The Worker refused the server's UltiCloud credential (401 or 403); not retried. */
-            CREDENTIAL_REFUSED,
+            /** The server holds no usable UltiCloud connection. */
+            LINK_ERROR,
+            /** The gateway rate-limited the create; a later {@code /panel} may succeed. */
+            RATE_LIMITED,
+            /** The gateway refuses to issue a link for this server or identity. */
+            NOT_PERMITTED,
             /**
-             * The framework helper could not complete the request, or the server is not logged in to
-             * UltiCloud; never retried without the credential.
+             * The player has no account and their address has reached {@code max-register-per-ip}; no link was
+             * requested.
              */
-            LINK_ERROR
+            IP_LIMIT
         }
 
         public PanelLinkResult(boolean success, String url, String error) {

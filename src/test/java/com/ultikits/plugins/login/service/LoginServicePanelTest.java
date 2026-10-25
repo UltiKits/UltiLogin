@@ -1,24 +1,22 @@
 package com.ultikits.plugins.login.service;
 
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.entity.AccountData;
 import com.ultikits.plugins.login.i18n.CatalogueText;
+import com.ultikits.plugins.login.listener.LoginProtectionListener;
+import com.ultikits.plugins.login.service.PlayerLinkPort.LinkCreation;
+import com.ultikits.plugins.login.service.PlayerLinkPort.LinkFailure;
+import com.ultikits.plugins.login.service.PlayerLinkPort.LinkProof;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.Query;
-import com.ultikits.ultitools.utils.CommonUtils;
 import com.ultikits.ultitools.utils.SimpleHttpClient;
 import com.ultikits.ultitools.utils.UltiCloudRequests;
-
-import com.ultikits.plugins.login.listener.LoginProtectionListener;
 
 import org.bukkit.ChatColor;
 import org.bukkit.Location;
 import org.bukkit.Server;
-import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
 import org.bukkit.event.player.PlayerCommandPreprocessEvent;
@@ -32,20 +30,24 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 
-import java.util.ArrayDeque;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Deque;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -53,9 +55,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
@@ -68,22 +68,17 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@code /panel}: the facts the create request carries, the in-game report of every web outcome, and
- * the login-timeout pause while a link is pending (Phase 18 magic-link contract, sections 2, 7 and 13).
+ * {@code /panel} on the framework's player-link API: what the create carries, the per-address precheck, every
+ * failure, the invalidation fences, and the login-timeout pause while a link is pending.
  * <p>
- * The poll task is captured rather than scheduled, so each test runs one poll at a time by hand;
- * main-thread callbacks run inline. Create and poll go through the framework helper
- * {@link UltiCloudRequests}, statically mocked; the server is logged in to UltiCloud unless a test
- * calls {@link #disconnectServer()}. The framework's {@link SimpleHttpClient} is statically mocked
- * too, and every test ends by proving it was never called: {@code /panel} has no request without the
- * server's credential (plan 21-18).
+ * Links are created through a fake {@link PlayerLinkPort}; main-thread callbacks run inline. The framework's
+ * {@link UltiCloudRequests} and {@link SimpleHttpClient} are statically mocked, and every test ends by proving neither
+ * was called: the module makes no HTTP request of its own.
  */
-@DisplayName("LoginService /panel facts, outcomes and timeout pause")
+@DisplayName("LoginService /panel creation, fences and timeout pause")
 class LoginServicePanelTest {
 
-    private static final String LINK_URL = "http://panel.test/auth/magic-link?code=ABCDEFGHJKLM";
-    private static final String CREATE_OK = "{\"code\":\"200\",\"msg\":\"Success\",\"data\":{\"url\":\""
-            + LINK_URL + "\"}}";
+    private static final String LINK_URL = "https://panel.example/link/";
 
     private LoginService service;
     private LoginConfig config;
@@ -97,25 +92,56 @@ class LoginServicePanelTest {
     private UUID playerUuid;
 
     private MockedStatic<UltiTools> ultiTools;
-    private MockedStatic<CommonUtils> commonUtils;
     private MockedStatic<SimpleHttpClient> http;
     private MockedStatic<UltiCloudRequests> cloud;
 
-    /** Outcome the helper reports for create; anything but {@code OK} means no HTTP exchange. */
-    private UltiCloudRequests.Outcome createOutcome = UltiCloudRequests.Outcome.OK;
-    /** Runs inside the helper's create call, while the request is "in flight" (tests set it). */
-    private Runnable duringCreate = () -> { };
-    /** Bodies the create requests carried, in order. */
-    private final List<JsonObject> createdBodies = new ArrayList<>();
-    /** Poll responses still to be served, in order; an empty script answers {@code pending}. */
-    private final Deque<String> pollScript = new ArrayDeque<>();
-    /** One captured poll runnable per {@code startAuthPolling} call, in order. */
-    private final List<Runnable> pollRunnables = new ArrayList<>();
-    /** The task handed back for each captured poll, in the same order. */
-    private final List<BukkitTask> pollTasks = new ArrayList<>();
-
     /** The service's clock, in milliseconds; tests move it with {@link #advance(int)}. */
     private final long[] now = {1_000_000_000L};
+
+    private FakePort port;
+
+    /** One recorded create. */
+    private static final class Create {
+        private final UUID uuid;
+        private final String name;
+        private final boolean authenticated;
+        private final boolean accountExists;
+        private final Set<LinkProof> proofs;
+
+        private Create(UUID uuid, String name, boolean authenticated, boolean accountExists, Set<LinkProof> proofs) {
+            this.uuid = uuid;
+            this.name = name;
+            this.authenticated = authenticated;
+            this.accountExists = accountExists;
+            this.proofs = proofs;
+        }
+    }
+
+    /** A fake player-link API: records every create and answers it with {@link #answer}. */
+    private final class FakePort implements PlayerLinkPort {
+        private final List<Create> creates = new ArrayList<>();
+        private Runnable duringCreate = () -> { };
+        private Supplier<CompletableFuture<LinkCreation>> answer = this::created;
+        private int next = 1;
+
+        CompletableFuture<LinkCreation> created() {
+            return createdExpiringIn(300);
+        }
+
+        CompletableFuture<LinkCreation> createdExpiringIn(long seconds) {
+            String id = "L" + next++;
+            return CompletableFuture.completedFuture(LinkCreation.created(id, LINK_URL + id,
+                    Instant.ofEpochMilli(now[0] + seconds * 1000L), EnumSet.of(LinkProof.LINKED_WEB_ACCOUNT)));
+        }
+
+        @Override
+        public CompletableFuture<LinkCreation> create(UUID playerUuid, String playerName, boolean authenticated,
+                                                      boolean accountExists, Set<LinkProof> offeredProofs) {
+            creates.add(new Create(playerUuid, playerName, authenticated, accountExists, offeredProofs));
+            duringCreate.run();
+            return answer.get();
+        }
+    }
 
     @BeforeEach
     void setUp() throws Exception {
@@ -124,6 +150,7 @@ class LoginServicePanelTest {
 
         config = UltiLoginTestHelper.createDefaultConfig();
         when(config.isUlticloudEnabled()).thenReturn(true);
+        when(config.getMaxRegisterPerIp()).thenReturn(0);
 
         when(UltiLoginTestHelper.getMockPlugin().getDataOperator(AccountData.class)).thenReturn(dataOperator);
         when(dataOperator.query()).thenReturn(mockQuery);
@@ -137,6 +164,8 @@ class LoginServicePanelTest {
 
         service = new LoginService(UltiLoginTestHelper.getMockPlugin(), config);
         service.setClock(() -> now[0]);
+        port = new FakePort();
+        service.setPlayerLinkPort(port);
 
         playerUuid = UUID.randomUUID();
         player = UltiLoginTestHelper.createMockPlayer("TestPlayer", playerUuid);
@@ -146,65 +175,30 @@ class LoginServicePanelTest {
 
         BukkitScheduler scheduler = spy(server.getScheduler());
         doAnswer(invocation -> {
-            pollRunnables.add(invocation.getArgument(1));
-            BukkitTask task = mock(BukkitTask.class);
-            pollTasks.add(task);
-            return task;
-        }).when(scheduler).runTaskTimerAsynchronously(any(Plugin.class), any(Runnable.class), anyLong(), anyLong());
-        doAnswer(invocation -> {
             Runnable runnable = invocation.getArgument(1);
             runnable.run();
             return mock(BukkitTask.class);
         }).when(scheduler).runTask(any(Plugin.class), any(Runnable.class));
         doReturn(scheduler).when(server).getScheduler();
 
-        YamlConfiguration env = mock(YamlConfiguration.class);
-        when(env.getString("api-url")).thenReturn("http://ulticloud.test");
         ultiTools = mockStatic(UltiTools.class);
-        ultiTools.when(UltiTools::getEnv).thenReturn(env);
-        commonUtils = mockStatic(CommonUtils.class);
-        commonUtils.when(CommonUtils::getUltiToolsUUID).thenReturn("server-uuid");
-        // No /panel path may reach the framework's plain HTTP client (tearDown proves it); the stubs
-        // only keep a regression from going out to the network before that check fails the test.
         http = mockStatic(SimpleHttpClient.class);
-        http.when(() -> SimpleHttpClient.post(anyString(), anyMap(), anyString()))
-                .thenReturn(new SimpleHttpClient.Response(200, CREATE_OK));
-        http.when(() -> SimpleHttpClient.get(anyString()))
-                .thenReturn(new SimpleHttpClient.Response(200, status("pending")));
-        // The server is logged in to UltiCloud: create and poll go through the (mocked) framework
-        // helper with the server's own credential.
         cloud = mockStatic(UltiCloudRequests.class);
-        cloud.when(() -> UltiCloudRequests.post(anyString(), anyString())).thenAnswer(invocation -> {
-            createdBodies.add(JsonParser.parseString(invocation.<String>getArgument(1)).getAsJsonObject());
-            duringCreate.run();
-            if (createOutcome != UltiCloudRequests.Outcome.OK) {
-                return noExchange(createOutcome);
-            }
-            return cloudResult(200, CREATE_OK);
-        });
-        cloud.when(() -> UltiCloudRequests.get(anyString(), anyMap())).thenAnswer(invocation -> {
-            String next = pollScript.poll();
-            return cloudResult(200, next != null ? next : status("pending"));
-        });
     }
 
     @AfterEach
     void tearDown() throws Exception {
         try {
-            // Plan 21-18: no request without the server's credential, in any test.
+            // D-04: the module makes no HTTP request to UltiCloud, in any test.
             http.verifyNoInteractions();
+            cloud.verifyNoInteractions();
         } finally {
-            closeStatics();
+            cloud.close();
+            http.close();
+            ultiTools.close();
+            UltiLoginTestHelper.tearDown();
+            UltiLoginTestHelper.tearDownLiveServer();
         }
-    }
-
-    private void closeStatics() throws Exception {
-        cloud.close();
-        http.close();
-        commonUtils.close();
-        ultiTools.close();
-        UltiLoginTestHelper.tearDown();
-        UltiLoginTestHelper.tearDownLiveServer();
     }
 
     // ==================== fixture helpers ====================
@@ -218,251 +212,384 @@ class LoginServicePanelTest {
         }
     }
 
-    private static String status(String status) {
-        return "{\"code\":\"200\",\"msg\":\"Success\",\"data\":{\"status\":\"" + status + "\"}}";
+    private AccountData registerWith(String passwordHash, String salt) {
+        AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", passwordHash, salt);
+        when(mockQuery.list()).thenReturn(Collections.singletonList(account));
+        return account;
     }
 
-    private static String refused(String reason) {
-        return "{\"code\":\"200\",\"msg\":\"Success\",\"data\":{\"status\":\"refused\",\"reason\":\"" + reason + "\"}}";
+    /** One other account registered from the player's address (127.0.0.1); the player's own lookup stays empty. */
+    @SuppressWarnings("unchecked")
+    private void oneAccountAlreadyFromThisAddress() {
+        AccountData other = UltiLoginTestHelper.createSampleAccount(UUID.randomUUID(), "Other", "h", "s");
+        when(mockQuery.where("register_ip")).thenAnswer(invocation -> {
+            Query<AccountData> byIp = mock(Query.class);
+            when(byIp.eq(any())).thenReturn(byIp);
+            when(byIp.list()).thenReturn(Collections.singletonList(other));
+            return byIp;
+        });
     }
 
-    private static String completed() {
-        return "{\"code\":\"200\",\"msg\":\"Success\",\"data\":{\"status\":\"completed\","
-                + "\"proof\":\"bound_account\",\"is_server_owner\":false}}";
-    }
-
-    /** {@code /panel} as the command runs it: publish the link, then start its poll. */
+    /** {@code /panel} as the command's worker runs it: publish the link and return its id. */
     private String openLink() {
         LoginService.PanelLinkResult result = service.requestPanelLink(player);
         assertThat(result.isSuccess()).as("the link was published: %s", result.getError()).isTrue();
-        service.startAuthPolling(playerUuid.toString(), player, result.getLinkId());
+        service.announcePanelPause(player);
         return result.getLinkId();
-    }
-
-    /** Run the most recently started poll once, serving {@code response}. */
-    private void pollOnce(String response) {
-        pollScript.add(response);
-        assertThat(pollRunnables).as("a poll task was scheduled for the link").isNotEmpty();
-        pollRunnables.get(pollRunnables.size() - 1).run();
     }
 
     private void advance(int seconds) {
         now[0] += seconds * 1000L;
     }
 
-    private BukkitTask lastPollTask() {
-        return pollTasks.get(pollTasks.size() - 1);
+    private void failWith(LinkFailure failure) {
+        port.answer = () -> CompletableFuture.completedFuture(LinkCreation.failed(failure, "reason-" + failure));
+    }
+
+    private void markLoggedIn() throws Exception {
+        @SuppressWarnings("unchecked")
+        Map<UUID, Boolean> loggedIn = (Map<UUID, Boolean>) field("loggedInPlayers");
+        loggedIn.put(playerUuid, true);
+    }
+
+    private Object field(String name) throws Exception {
+        java.lang.reflect.Field field = LoginService.class.getDeclaredField(name);
+        field.setAccessible(true);
+        return field.get(service);
     }
 
     /** The player saw {@code key}'s text exactly {@code count} times, and it was looked up that often. */
     private void assertMessage(String key, int count) {
         verify(UltiLoginTestHelper.getMockPlugin(), times(count)).i18n(key);
-        String text = ChatColor.translateAlternateColorCodes('&',
-                CatalogueText.entries("zh").getOrDefault(key, key));
+        String text = ChatColor.translateAlternateColorCodes('&', CatalogueText.text("zh", key));
         verify(player, times(count)).sendMessage(text);
     }
 
-    // ==================== Test 1: facts on create, through the transport seam ====================
+    private String loggedFailure(String reason) {
+        return CatalogueText.text("zh", "log_panel_link_failed").replace("{ERROR}", reason);
+    }
+
+    // ==================== what the create carries ====================
 
     @Nested
-    @DisplayName("create request facts")
+    @DisplayName("create request facts and offered proofs")
     class CreateFacts {
 
-        @Test
-        @DisplayName("a registered player who has not logged in reports inGameLogin=false, registeredInUltiLogin=true")
-        void registeredNotLoggedIn() {
-            setRegistered(true);
+        @ParameterizedTest(name = "logged in {0}, has account {1} -> {2}")
+        @CsvSource({
+                "true,  true,  IN_GAME_SESSION LINKED_WEB_ACCOUNT",
+                "false, true,  LINKED_WEB_ACCOUNT",
+                "false, false, LINKED_WEB_ACCOUNT WEB_REGISTRATION",
+                "true,  false, IN_GAME_SESSION LINKED_WEB_ACCOUNT WEB_REGISTRATION"
+        })
+        @DisplayName("the two facts equal isLoggedIn and isRegistered, and the offered proofs follow the table")
+        void proofTable(boolean loggedIn, boolean hasAccount, String expected) throws Exception {
+            setRegistered(hasAccount);
+            if (loggedIn) {
+                markLoggedIn();
+            }
 
             LoginService.PanelLinkResult result = service.requestPanelLink(player);
 
-            assertThat(createdBodies).hasSize(1);
-            JsonObject body = createdBodies.get(0);
-            assertThat(body.get("requestId").getAsString()).isEqualTo(result.getLinkId());
-            assertThat(body.get("playerUuid").getAsString()).isEqualTo(playerUuid.toString());
-            assertThat(body.get("playerName").getAsString()).isEqualTo("TestPlayer");
-            assertThat(body.get("serverUuid").getAsString()).isEqualTo("server-uuid");
-            assertThat(body.get("inGameLogin")).as("inGameLogin is sent").isNotNull();
-            assertThat(body.get("inGameLogin").getAsBoolean()).isFalse();
-            assertThat(body.get("registeredInUltiLogin")).as("registeredInUltiLogin is sent").isNotNull();
-            assertThat(body.get("registeredInUltiLogin").getAsBoolean()).isTrue();
+            assertThat(result.isSuccess()).isTrue();
+            assertThat(port.creates).hasSize(1);
+            Create create = port.creates.get(0);
+            assertThat(create.uuid).isEqualTo(playerUuid);
+            assertThat(create.name).isEqualTo("TestPlayer");
+            assertThat(create.authenticated).isEqualTo(service.isLoggedIn(playerUuid)).isEqualTo(loggedIn);
+            assertThat(create.accountExists).isEqualTo(service.isRegistered(playerUuid)).isEqualTo(hasAccount);
+            Set<LinkProof> proofs = EnumSet.noneOf(LinkProof.class);
+            for (String name : expected.trim().split("\\s+")) {
+                proofs.add(LinkProof.valueOf(name));
+            }
+            assertThat(create.proofs).isEqualTo(proofs);
         }
 
         @Test
-        @DisplayName("a logged-in player without an UltiLogin account reports inGameLogin=true, registeredInUltiLogin=false")
-        void loggedInNotRegistered() {
-            service.completeLogin(player);
-            setRegistered(false);
-
-            service.requestPanelLink(player);
-
-            assertThat(createdBodies).hasSize(1);
-            JsonObject body = createdBodies.get(0);
-            assertThat(body.get("inGameLogin")).as("inGameLogin is sent").isNotNull();
-            assertThat(body.get("inGameLogin").getAsBoolean()).isTrue();
-            assertThat(body.get("registeredInUltiLogin")).as("registeredInUltiLogin is sent").isNotNull();
-            assertThat(body.get("registeredInUltiLogin").getAsBoolean()).isFalse();
+        @DisplayName("web registration is never offered for a name that already has an account (T-01-05)")
+        void webRegistrationNeverOfferedWithAnAccount() {
+            assertThat(LoginService.offeredProofs(true, true)).doesNotContain(LinkProof.WEB_REGISTRATION);
+            assertThat(LoginService.offeredProofs(false, true)).doesNotContain(LinkProof.WEB_REGISTRATION);
         }
 
         @Test
-        @DisplayName("create and poll go through the injected transport, not straight to HTTP")
-        void transportSeamCarriesCreateAndPoll() {
-            List<JsonObject> seamBodies = new ArrayList<>();
-            List<String> seamPolls = new ArrayList<>();
-            service.setPanelLinkTransport(new PanelLinkTransport() {
-                @Override
-                public SimpleHttpClient.Response create(JsonObject body) {
-                    seamBodies.add(body);
-                    return new SimpleHttpClient.Response(200, CREATE_OK);
-                }
+        @DisplayName("a published link is pending under the gateway's link id, not under a local id")
+        void publishedUnderTheLinkId() {
+            LoginService.PanelLinkResult result = service.requestPanelLink(player);
 
-                @Override
-                public SimpleHttpClient.Response poll(String requestId, UUID uuid) {
-                    seamPolls.add(requestId + "|" + uuid);
-                    return new SimpleHttpClient.Response(200, status("pending"));
-                }
-
-                @Override
-                public boolean credentialed() {
-                    return true;
-                }
-            });
-
-            String requestId = openLink();
-            pollRunnables.get(0).run();
-
-            assertThat(seamBodies).as("the create body reached the transport").hasSize(1);
-            assertThat(seamBodies.get(0).get("requestId").getAsString()).isEqualTo(requestId);
-            assertThat(seamPolls).containsExactly(requestId + "|" + playerUuid);
-            http.verify(() -> SimpleHttpClient.post(anyString(), anyMap(), anyString()), never());
-            http.verify(() -> SimpleHttpClient.get(anyString()), never());
+            assertThat(result.getLinkId()).isEqualTo("L1");
+            assertThat(result.getUrl()).isEqualTo(LINK_URL + "L1");
+            assertThat(service.isPanelRequestCurrent(playerUuid, "L1", service.getInvalidationGeneration(playerUuid)))
+                    .isTrue();
+            @SuppressWarnings("unchecked")
+            Map<String, UUID> pending = (Map<String, UUID>) fieldOrFail("pendingPanelRequests");
+            assertThat(pending).containsOnlyKeys("L1");
         }
 
-        @Test
-        @DisplayName("by default create and poll go through the framework helper: POST /auth/magic-link, poll by requestId")
-        void defaultTransportIsTheCredentialedHelper() {
-            String requestId = openLink();
-            pollOnce(status("pending"));
-
-            cloud.verify(() -> UltiCloudRequests.post(
-                    org.mockito.ArgumentMatchers.eq("/auth/magic-link"), anyString()), times(1));
-            cloud.verify(() -> UltiCloudRequests.get("/auth/magic-link/poll",
-                    Collections.singletonMap("requestId", requestId)), times(1));
+        private Object fieldOrFail(String name) {
+            try {
+                return field(name);
+            } catch (Exception e) {
+                throw new AssertionError(e);
+            }
         }
     }
 
-    // ==================== Tests 2-4: every web outcome in game ====================
+    // ==================== the per-address precheck ====================
 
     @Nested
-    @DisplayName("web outcomes")
-    class Outcomes {
+    @DisplayName("max-register-per-ip precheck")
+    class IpPrecheck {
 
         @Test
-        @DisplayName("cancelled is reported once, keeps the request pending and polling, and a later completed still logs in")
-        void cancelledReportedOnceThenCompletes() {
-            openLink();
+        @DisplayName("a player without an account from an address at the limit is refused locally: no create, nothing pending, no pause")
+        void refusedAtTheLimit() {
+            setRegistered(false);
+            when(config.getMaxRegisterPerIp()).thenReturn(1);
+            oneAccountAlreadyFromThisAddress();
+            service.onPlayerJoin(player);
 
-            pollOnce(status("cancelled"));
-            pollOnce(status("cancelled"));
-            pollOnce(status("cancelled"));
+            LoginService.PanelLinkResult result = service.requestPanelLink(player);
 
-            assertMessage("panel_outcome_cancelled", 1);
-            assertThat(service.hasPendingPanelRequest(playerUuid)).as("a cancelled link stays completable").isTrue();
-            verify(lastPollTask(), never()).cancel();
-            assertThat(service.isLoggedIn(playerUuid)).isFalse();
-
-            pollOnce(completed());
-
-            assertThat(service.isLoggedIn(playerUuid)).as("completed after cancelled logs in").isTrue();
-        }
-
-        @ParameterizedTest(name = "refused / {0}")
-        @ValueSource(strings = {"identity_bound_elsewhere", "game_login_required", "link_not_permitted",
-                "too_many_attempts"})
-        @DisplayName("refused shows its reason, ends the request, stops the poll and never logs in")
-        void refusedShowsReasonAndStops(String reason) {
-            openLink();
-
-            pollOnce(refused(reason));
-
-            assertMessage("panel_outcome_refused_" + reason, 1);
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(result.getFailure()).isEqualTo(LoginService.PanelLinkResult.Failure.IP_LIMIT);
+            assertThat(port.creates).as("no link was requested").isEmpty();
             assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
-            verify(lastPollTask()).cancel();
-            assertThat(service.isLoggedIn(playerUuid)).isFalse();
-
-            // A completed observation that was already in flight cannot log the player in either.
-            pollOnce(completed());
-            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            @SuppressWarnings("unchecked")
+            Map<UUID, Long> paused = (Map<UUID, Long>) fieldOrFail();
+            assertThat(paused).as("the countdown never paused").doesNotContainKey(playerUuid);
+            verify(UltiLoginTestHelper.getMockPlugin(), never()).i18n("panel_timeout_paused");
         }
 
         @Test
-        @DisplayName("refused with a reason this version does not know still reports a refusal")
-        void refusedUnknownReason() {
-            openLink();
+        @DisplayName("control: with the limit at 0 the same player gets a link")
+        void unlimitedGetsALink() {
+            setRegistered(false);
+            oneAccountAlreadyFromThisAddress();
 
-            pollOnce(refused("some_future_reason"));
-
-            assertMessage("panel_outcome_refused", 1);
-            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
-            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            assertThat(service.requestPanelLink(player).isSuccess()).isTrue();
+            assertThat(port.creates).hasSize(1);
         }
 
         @Test
-        @DisplayName("expired is reported, ends the request, stops the poll and never logs in")
-        void expiredReportedAndStops() {
-            openLink();
+        @DisplayName("a player who has an account is never counted against the limit")
+        void accountHolderIsNotPrechecked() {
+            when(config.getMaxRegisterPerIp()).thenReturn(1);
+            oneAccountAlreadyFromThisAddress();
 
-            pollOnce(status("expired"));
-
-            assertMessage("panel_outcome_expired", 1);
-            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
-            verify(lastPollTask()).cancel();
-            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            assertThat(service.requestPanelLink(player).isSuccess()).isTrue();
         }
 
-        @Test
-        @DisplayName("an unknown status keeps polling silently; only completed logs in")
-        void unknownStatusKeepsPolling() {
-            openLink();
-
-            pollOnce(status("on_hold"));
-            pollOnce(status("pending"));
-            pollOnce("{\"code\":\"200\",\"msg\":\"Success\",\"data\":{}}");
-
-            verify(UltiLoginTestHelper.getMockPlugin(), never()).i18n(startsWith("panel_outcome_"));
-            assertThat(service.hasPendingPanelRequest(playerUuid)).isTrue();
-            verify(lastPollTask(), never()).cancel();
-            assertThat(service.isLoggedIn(playerUuid)).isFalse();
-
-            pollOnce(completed());
-
-            assertThat(service.isLoggedIn(playerUuid)).isTrue();
-            assertMessage("panel_auth_success_player", 1);
+        private Object fieldOrFail() {
+            try {
+                return field("panelPausedAt");
+            } catch (Exception e) {
+                throw new AssertionError(e);
+            }
         }
     }
 
-    // ==================== Tests 6-10: the login timeout while a link is pending ====================
+    // ==================== failures ====================
 
-    /** With login-timeout 60 s: joined 55 s before the link, so 5 s remain when the countdown pauses. */
+    @Nested
+    @DisplayName("a create that produces no link")
+    class CreateFailures {
+
+        @ParameterizedTest(name = "{0} -> {1}, logged {2}")
+        @CsvSource({
+                "NOT_CONNECTED, LINK_ERROR,    true",
+                "RATE_LIMITED,  RATE_LIMITED,  false",
+                "NOT_PERMITTED, NOT_PERMITTED, false",
+                "TIMED_OUT,     GENERIC,       true",
+                "OTHER,         GENERIC,       true"
+        })
+        @DisplayName("each failure has its own result, is logged once where the plan says, and leaves nothing pending")
+        void failureMapping(LinkFailure failure, LoginService.PanelLinkResult.Failure expected, boolean logged) {
+            failWith(failure);
+
+            LoginService.PanelLinkResult result = service.requestPanelLink(player);
+
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(result.getFailure()).isEqualTo(expected);
+            assertThat(result.getLinkId()).isNull();
+            assertThat(result.getUrl()).isNull();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+            verify(UltiLoginTestHelper.getMockLogger(), times(logged ? 1 : 0)).warn(loggedFailure("reason-" + failure));
+            verify(UltiLoginTestHelper.getMockLogger(), times(logged ? 1 : 0)).warn(anyString());
+        }
+
+        @Test
+        @DisplayName("a create that never answers ends at the local cap as a timeout: generic failure, logged, nothing pending")
+        void createThatNeverAnswersTimesOut() {
+            service.setPanelCreateCap(50L);
+            port.answer = CompletableFuture::new;
+
+            LoginService.PanelLinkResult result = service.requestPanelLink(player);
+
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(result.getFailure()).isEqualTo(LoginService.PanelLinkResult.Failure.GENERIC);
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+            verify(UltiLoginTestHelper.getMockLogger(), times(1)).warn(loggedFailure("no answer within 50 ms"));
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @EnumSource(LinkFailure.class)
+        @DisplayName("every failure restores the countdown with exactly the time that remained, without a pause or resume line")
+        void failureResumesTheRemainingCountdownSilently(LinkFailure failure) {
+            service.onPlayerJoin(player);
+            advance(55);
+            failWith(failure);
+            port.duringCreate = () -> advance(3);
+
+            assertThat(service.requestPanelLink(player).isSuccess()).isFalse();
+
+            service.checkTimeouts();
+            advance(2);
+            now[0]++; // Just past the original 60 s deadline: the 3 s pause must be credited.
+            service.checkTimeouts();
+            verify(player, never()).kickPlayer(anyString());
+
+            now[0] += 2_999; // Exactly 63 s after joining: timeout uses a strict greater-than check.
+            service.checkTimeouts();
+            verify(player, never()).kickPlayer(anyString());
+
+            now[0]++; // The first millisecond past the deadline shifted by exactly 3 s.
+            service.checkTimeouts();
+
+            verify(player, times(1)).kickPlayer(anyString());
+            verify(UltiLoginTestHelper.getMockPlugin(), never()).i18n("panel_timeout_paused");
+            verify(UltiLoginTestHelper.getMockPlugin(), never()).i18n("panel_timeout_resumed");
+        }
+
+        @Test
+        @DisplayName("a failure cleans only its own request: an earlier link stays pending and current")
+        void failureCleansOnlyItsOwnRequest() {
+            String first = openLink();
+            failWith(LinkFailure.NOT_CONNECTED);
+
+            LoginService.PanelLinkResult second = service.requestPanelLink(player);
+
+            assertThat(second.isSuccess()).isFalse();
+            assertThat(service.isPanelRequestCurrent(playerUuid, first, service.getInvalidationGeneration(playerUuid)))
+                    .as("the earlier link is untouched").isTrue();
+        }
+    }
+
+    // ==================== fences ====================
+
+    @Nested
+    @DisplayName("invalidation and quit fences (T-01-04)")
+    class Fences {
+
+        @Test
+        @DisplayName("an admin reset while the create is in flight: no link delivered and nothing pending")
+        void resetWhileCreateInFlight() {
+            long generation = service.getInvalidationGeneration(playerUuid);
+            port.duringCreate = () -> service.invalidateSession(playerUuid, false);
+
+            LoginService.PanelLinkResult result = service.requestPanelLink(player, generation);
+
+            assertThat(port.creates).hasSize(1);
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(result.getError()).contains("invalidated");
+            assertThat(result.getUrl()).isNull();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+        }
+
+        @Test
+        @DisplayName("an invalidation captured before the worker ran: refused before any create")
+        void invalidationBeforeTheWorker() {
+            long generation = service.getInvalidationGeneration(playerUuid);
+            service.invalidateSession(playerUuid, false);
+
+            LoginService.PanelLinkResult result = service.requestPanelLink(player, generation);
+
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(result.getError()).contains("invalidated");
+            assertThat(port.creates).isEmpty();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+        }
+
+        @Test
+        @DisplayName("an invalidation after the create succeeded but before the main-thread callback: the link is no longer current")
+        void invalidationBeforeTheCallback() {
+            long generation = service.getInvalidationGeneration(playerUuid);
+            LoginService.PanelLinkResult result = service.requestPanelLink(player, generation);
+            assertThat(result.isSuccess()).isTrue();
+
+            service.invalidateSession(playerUuid, false);
+
+            assertThat(service.isPanelRequestCurrent(playerUuid, result.getLinkId(), generation)).isFalse();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+            verify(UltiLoginTestHelper.getMockPlugin(), never()).i18n("panel_timeout_paused");
+        }
+
+        @Test
+        @DisplayName("a quit while the create is in flight: no link delivered and nothing pending")
+        void quitWhileCreateInFlight() {
+            port.duringCreate = () -> service.onPlayerQuit(player);
+
+            LoginService.PanelLinkResult result = service.requestPanelLink(player);
+
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+        }
+
+        @Test
+        @DisplayName("a quit drops the pending link, so it is no longer current and a completion logs nobody in")
+        void quitDropsThePendingLink() {
+            String link = openLink();
+
+            service.onPlayerQuit(player);
+
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+            assertThat(service.isPanelRequestCurrent(playerUuid, link, service.getInvalidationGeneration(playerUuid)))
+                    .isFalse();
+            assertThat(service.completePanelLogin(link, false, null)).isFalse();
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+        }
+
+        @Test
+        @DisplayName("a second /panel while the first link is pending keeps both pending and the countdown paused until neither holds")
+        void secondPanelKeepsBothPending() throws Exception {
+            service.onPlayerJoin(player);
+            advance(55);
+            String first = openLink();
+            advance(10);
+            String second = openLink();
+
+            long generation = service.getInvalidationGeneration(playerUuid);
+            assertThat(first).isNotEqualTo(second);
+            assertThat(service.isPanelRequestCurrent(playerUuid, first, generation)).isTrue();
+            assertThat(service.isPanelRequestCurrent(playerUuid, second, generation)).isTrue();
+            assertMessage("panel_timeout_paused", 1);
+
+            advance(100);
+            service.checkTimeouts();
+            verify(player, never()).kickPlayer(anyString());
+
+            // Ending the second link alone (a refused completion) leaves the first one holding the countdown.
+            setRegistered(false);
+            assertThat(service.completePanelLogin(second, false, null)).isFalse();
+            @SuppressWarnings("unchecked")
+            Map<UUID, Long> paused = (Map<UUID, Long>) field("panelPausedAt");
+            assertThat(paused).containsKey(playerUuid);
+            verify(UltiLoginTestHelper.getMockPlugin(), never()).i18n("panel_timeout_resumed");
+
+            assertThat(service.completePanelLogin(first, false, null)).isFalse();
+            assertThat(paused).doesNotContainKey(playerUuid);
+            assertMessage("panel_timeout_resumed", 1);
+        }
+    }
+
+    // ==================== login timeout while a link is pending ====================
+
     @Nested
     @DisplayName("login timeout while a link is pending")
     class TimeoutPause {
 
-        private void joinThenOpenLinkAt55() {
-            service.onPlayerJoin(player);
-            advance(55);
-            openLink();
-        }
-
-        private void assertNotKicked() {
-            verify(player, never()).kickPlayer(anyString());
-        }
-
-        private void assertKickedOnce() {
-            verify(player, times(1)).kickPlayer(anyString());
-        }
-
         @Test
-        @DisplayName("a pending link holds the countdown: not kicked at 70 s or 300 s; a player without one is kicked at 70 s")
+        @DisplayName("a pending link holds the countdown: not kicked at 70 s or 290 s; a player without one is kicked at 70 s")
         void pendingLinkIsNeverKicked() {
             UUID otherUuid = UUID.randomUUID();
             Player other = UltiLoginTestHelper.createMockPlayer("Other", otherUuid);
@@ -470,87 +597,20 @@ class LoginServicePanelTest {
             doReturn(other).when(server).getPlayer(otherUuid);
             service.onPlayerJoin(other);
 
-            joinThenOpenLinkAt55();
+            service.onPlayerJoin(player);
+            advance(55);
+            openLink();
             advance(15);
             service.checkTimeouts();
 
             verify(other, times(1)).kickPlayer(anyString());
-            assertNotKicked();
+            verify(player, never()).kickPlayer(anyString());
 
-            advance(230);
+            advance(220);
             service.checkTimeouts();
 
-            assertNotKicked();
+            verify(player, never()).kickPlayer(anyString());
             assertMessage("panel_timeout_paused", 1);
-        }
-
-        @Test
-        @DisplayName("cancelled on the web 120 s into the pause: kicked after the 5 s that remained, not at once and not after a fresh 60 s")
-        void cancelResumesWithRemainingTime() {
-            joinThenOpenLinkAt55();
-            advance(120);
-            pollOnce(status("cancelled"));
-
-            service.checkTimeouts();
-            advance(4);
-            service.checkTimeouts();
-            assertNotKicked();
-
-            advance(2);
-            service.checkTimeouts();
-
-            assertKickedOnce();
-            verify(UltiLoginTestHelper.getMockPlugin(), times(1)).i18n("panel_timeout_resumed");
-            verify(lastPollTask(), never()).cancel();
-        }
-
-        @Test
-        @DisplayName("the link expiring (5-minute cleanup) resumes with the remaining time and says so once")
-        void expiryResumesWithRemainingTime() {
-            joinThenOpenLinkAt55();
-            advance(301);
-            service.checkTimeouts();
-
-            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
-            assertNotKicked();
-
-            advance(4);
-            service.checkTimeouts();
-            assertNotKicked();
-
-            advance(2);
-            service.checkTimeouts();
-
-            assertKickedOnce();
-            assertMessage("panel_timeout_resumed", 1);
-            assertMessage("panel_outcome_expired", 1);
-        }
-
-        @Test
-        @DisplayName("two links in sequence: paused while either holds, resumed only when neither does")
-        void pausedWhileAnyLinkHolds() {
-            joinThenOpenLinkAt55();          // link A, created at 55 s
-            advance(10);
-            openLink();                      // link B, created at 65 s; supersedes A's poll, A stays pending
-            advance(100);
-            pollOnce(refused("too_many_attempts"));   // B ends; A still holds
-
-            service.checkTimeouts();
-            advance(150);                    // 315 s after joining
-            service.checkTimeouts();
-            assertNotKicked();
-            verify(UltiLoginTestHelper.getMockPlugin(), never()).i18n("panel_timeout_resumed");
-
-            advance(41);                     // 356 s: A, created at 55 s, is past five minutes and expires
-            service.checkTimeouts();
-            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
-            assertNotKicked();
-
-            advance(6);
-            service.checkTimeouts();
-
-            assertKickedOnce();
-            verify(UltiLoginTestHelper.getMockPlugin(), times(1)).i18n("panel_timeout_resumed");
         }
 
         @Test
@@ -566,7 +626,9 @@ class LoginServicePanelTest {
         @Test
         @DisplayName("every other unauthenticated restriction stays while the link is pending")
         void restrictionsStayWhileLinkIsPending() {
-            joinThenOpenLinkAt55();
+            service.onPlayerJoin(player);
+            advance(55);
+            openLink();
             LoginProtectionListener listener = new LoginProtectionListener(UltiLoginTestHelper.getMockPlugin(), service);
 
             org.bukkit.World world = mock(org.bukkit.World.class);
@@ -588,50 +650,19 @@ class LoginServicePanelTest {
         }
     }
 
-    // ==================== Plan 18-17 Tests 6-10: web registration and the empty game password ====================
-
-    /** The server is not logged in to UltiCloud: the helper's create makes no request. */
-    private void disconnectServer() {
-        createOutcome = UltiCloudRequests.Outcome.NOT_CONNECTED;
-    }
-
-    private static UltiCloudRequests.Result cloudResult(int statusCode, String body) {
-        UltiCloudRequests.Result result = mock(UltiCloudRequests.Result.class);
-        when(result.getOutcome()).thenReturn(UltiCloudRequests.Outcome.OK);
-        when(result.getStatusCode()).thenReturn(statusCode);
-        when(result.getBody()).thenReturn(body);
-        return result;
-    }
-
-    private static UltiCloudRequests.Result noExchange(UltiCloudRequests.Outcome outcome) {
-        UltiCloudRequests.Result result = mock(UltiCloudRequests.Result.class);
-        when(result.getOutcome()).thenReturn(outcome);
-        when(result.getStatusCode()).thenReturn(-1);
-        return result;
-    }
-
-    private static String completedWith(String proof) {
-        return "{\"code\":\"200\",\"msg\":\"Success\",\"data\":{\"status\":\"completed\","
-                + "\"proof\":\"" + proof + "\",\"is_server_owner\":false}}";
-    }
-
-    private AccountData registerWith(String passwordHash, String salt) {
-        AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", passwordHash, salt);
-        when(mockQuery.list()).thenReturn(Collections.singletonList(account));
-        return account;
-    }
+    // ==================== completion of a pending link (rewritten by Plan 01-03) ====================
 
     @Nested
-    @DisplayName("web registration (proof 3)")
+    @DisplayName("completing a pending link (web registration, proof 3)")
     class WebRegistration {
 
         @Test
-        @DisplayName("Test 6: completed + web_registration for an unregistered player creates one row with an empty hash, logs in, hints once")
+        @DisplayName("Test 6: web_registration for an unregistered player creates one row with an empty hash, logs in, hints once")
         void createsAccountWithEmptyHash() {
             setRegistered(false);
-            openLink();
+            String link = openLink();
 
-            pollOnce(completedWith("web_registration"));
+            assertThat(service.completePanelLogin(link, false, "web_registration")).isTrue();
 
             ArgumentCaptor<AccountData> inserted = ArgumentCaptor.forClass(AccountData.class);
             verify(dataOperator, times(1)).insert(inserted.capture());
@@ -646,13 +677,13 @@ class LoginServicePanelTest {
         }
 
         @Test
-        @DisplayName("Test 7: the same outcome for a player who registered in game meanwhile leaves the row untouched and logs in, no hint")
+        @DisplayName("Test 7: the same completion for a player who registered in game meanwhile leaves the row untouched and logs in, no hint")
         void existingAccountIsNeverOverwritten() {
             setRegistered(false);
-            openLink();
+            String link = openLink();
             AccountData existing = registerWith("hash", "salt");
 
-            pollOnce(completedWith("web_registration"));
+            assertThat(service.completePanelLogin(link, false, "web_registration")).isTrue();
 
             verify(dataOperator, never()).insert(any(AccountData.class));
             assertThat(existing.getPasswordHash()).as("the game password is untouched").isEqualTo("hash");
@@ -662,45 +693,12 @@ class LoginServicePanelTest {
         }
 
         @Test
-        @DisplayName("a web_registration proof through a transport that does not vouch for the server credential creates nothing")
-        void proofThroughUncredentialedTransportIsIgnored() {
-            // The proof is trusted only when the transport says the link carries the server
-            // owner's credential (contract sections 7 and 14); the local pending-request map is not
-            // authentication.
-            service.setPanelLinkTransport(new PanelLinkTransport() {
-                @Override
-                public SimpleHttpClient.Response create(JsonObject body) {
-                    return new SimpleHttpClient.Response(200, CREATE_OK);
-                }
-
-                @Override
-                public SimpleHttpClient.Response poll(String requestId, UUID uuid) {
-                    String next = pollScript.poll();
-                    return new SimpleHttpClient.Response(200, next != null ? next : status("pending"));
-                }
-
-                @Override
-                public boolean credentialed() {
-                    return false;
-                }
-            });
-            setRegistered(false);
-            openLink();
-
-            pollOnce(completedWith("web_registration"));
-
-            verify(dataOperator, never()).insert(any(AccountData.class));
-            assertThat(service.isLoggedIn(playerUuid)).isFalse();
-            assertMessage("panel_not_registered_in_game", 1);
-        }
-
-        @Test
-        @DisplayName("completed + bound_account for a player with no game account is refused with 'not registered in game'")
+        @DisplayName("a bound-account completion for a player with no game account is refused with 'not registered in game'")
         void boundAccountWithoutGameAccountIsRefused() {
             setRegistered(false);
-            openLink();
+            String link = openLink();
 
-            pollOnce(completedWith("bound_account"));
+            assertThat(service.completePanelLogin(link, false, "bound_account")).isFalse();
 
             verify(dataOperator, never()).insert(any(AccountData.class));
             assertThat(service.isLoggedIn(playerUuid)).isFalse();
@@ -712,25 +710,69 @@ class LoginServicePanelTest {
         @DisplayName("web registration respects max-register-per-ip: over the limit nothing is created and nobody logged in")
         void webRegistrationRespectsIpLimit() {
             setRegistered(false);
-            openLink();
+            String link = openLink();
             when(config.getMaxRegisterPerIp()).thenReturn(1);
-            AccountData other = UltiLoginTestHelper.createSampleAccount(UUID.randomUUID(), "Other", "h", "s");
-            when(mockQuery.list()).thenAnswer(invocation -> Collections.emptyList());
-            // isRegistered(player) reads player_uuid; the IP count reads register_ip.
-            when(mockQuery.where("register_ip")).thenAnswer(invocation -> {
-                Query<AccountData> byIp = mock(Query.class);
-                when(byIp.eq(any())).thenReturn(byIp);
-                when(byIp.list()).thenReturn(Collections.singletonList(other));
-                return byIp;
-            });
+            oneAccountAlreadyFromThisAddress();
 
-            pollOnce(completedWith("web_registration"));
+            assertThat(service.completePanelLogin(link, false, "web_registration")).isFalse();
 
             verify(dataOperator, never()).insert(any(AccountData.class));
             assertThat(service.isLoggedIn(playerUuid)).isFalse();
             verify(player).sendMessage(ChatColor.RED + CatalogueText.text("zh", "ip_limit_reached"));
         }
+
+        @Test
+        @DisplayName("a completion that arrives after the player's credentials were invalidated logs nobody in")
+        void staleCompletionAfterInvalidationIsDiscarded() {
+            String link = openLink();
+
+            service.invalidateSession(playerUuid, false);
+
+            assertThat(service.completePanelLogin(link, false, null)).isFalse();
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            assertMessage("panel_auth_success_player", 0);
+        }
+
+        @Test
+        @DisplayName("control: without a quit or invalidation the completion logs the player in")
+        void completionLogsIn() {
+            String link = openLink();
+
+            assertThat(service.completePanelLogin(link, false, null)).isTrue();
+
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+            assertMessage("panel_auth_success_player", 1);
+        }
+
+        @Test
+        @DisplayName("Codex run 1 P2: a web registration whose database write fails resumes the countdown with the time that remained")
+        void failedWebRegistrationResumesTheCountdown() {
+            setRegistered(false);
+            service.onPlayerJoin(player);
+            advance(55);
+            String link = openLink();
+            doThrow(new RuntimeException("database unavailable")).when(dataOperator).insert(any(AccountData.class));
+
+            try {
+                service.completePanelLogin(link, false, "web_registration");
+            } catch (RuntimeException expected) {
+                // The write failure propagates to the caller; the countdown must still resume.
+            }
+            service.checkTimeouts();
+            advance(4);
+            service.checkTimeouts();
+            verify(player, never()).kickPlayer(anyString());
+
+            advance(2);
+            service.checkTimeouts();
+
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            verify(player, times(1)).kickPlayer(anyString());
+            assertMessage("panel_timeout_resumed", 1);
+        }
     }
+
+    // ==================== an account without a game password ====================
 
     @Nested
     @DisplayName("an account without a game password")
@@ -807,52 +849,6 @@ class LoginServicePanelTest {
             assertThat(service.hasNoGamePassword(playerUuid)).isFalse();
             assertThat(service.setInitialPassword(playerUuid, "secret123")).isFalse();
         }
-    }
-
-    // ==================== gate-1 fix round (plan 18-20): quit, invalidation, GUI mode ====================
-
-    @Nested
-    @DisplayName("quit, invalidation and GUI mode (gate-1 review of UltiKits/UltiLogin#54)")
-    class QuitInvalidationAndGuiMode {
-
-        @Test
-        @DisplayName("F1: a quit drops the player's pending links, so a completion still in flight logs nobody in")
-        void quitDropsPendingLinks() {
-            openLink();
-
-            service.onPlayerQuit(player);
-            // The poll call that was already in flight when the player left now returns 'completed'.
-            pollOnce(completed());
-
-            assertThat(service.hasPendingPanelRequest(playerUuid)).as("pending links after the quit").isFalse();
-            assertThat(service.isLoggedIn(playerUuid)).as("logged in by a link of a player who left").isFalse();
-            assertMessage("panel_auth_success_player", 0);
-        }
-
-        @Test
-        @DisplayName("control: without a quit the same in-flight completion logs the player in")
-        void completionWithoutQuitLogsIn() {
-            openLink();
-
-            pollOnce(completed());
-
-            assertThat(service.isLoggedIn(playerUuid)).isTrue();
-            assertMessage("panel_auth_success_player", 1);
-        }
-
-        @Test
-        @DisplayName("F4: a completion that arrives after the player's credentials were invalidated logs nobody in")
-        void staleCompletionAfterInvalidationIsDiscarded() {
-            openLink();
-
-            service.invalidateSession(playerUuid, false);
-            // The poll call that was already in flight when the credentials changed now returns.
-            pollOnce(completed());
-
-            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
-            assertThat(service.isLoggedIn(playerUuid)).as("logged in by a link invalidated before it completed").isFalse();
-            assertMessage("panel_auth_success_player", 0);
-        }
 
         @Test
         @DisplayName("F3: in GUI mode an account without a game password is told to use /panel, not prompted for the number pad")
@@ -879,144 +875,16 @@ class LoginServicePanelTest {
         }
     }
 
-    @Test
-    @DisplayName("Codex run 1 P2: a web registration whose database write fails resumes the countdown with the time that remained")
-    void failedWebRegistrationResumesTheCountdown() {
-        setRegistered(false);
-        service.onPlayerJoin(player);
-        advance(55);
-        openLink();
-        doThrow(new RuntimeException("database unavailable")).when(dataOperator).insert(any(AccountData.class));
+    // ==================== catalogue parity ====================
 
-        pollOnce(completedWith("web_registration"));
-        service.checkTimeouts();
-        advance(4);
-        service.checkTimeouts();
-        verify(player, never()).kickPlayer(anyString());
-
-        advance(2);
-        service.checkTimeouts();
-
-        assertThat(service.isLoggedIn(playerUuid)).isFalse();
-        verify(player, times(1)).kickPlayer(anyString());
-        assertMessage("panel_timeout_resumed", 1);
-    }
-
-    // ==================== plan 21-18: no request without the server's credential ====================
-
-    @Nested
-    @DisplayName("server not logged in to UltiCloud (plan 21-18 hard cut)")
-    class NotConnectedHardCut {
-
-        @Test
-        @DisplayName("NOT_CONNECTED fails visibly as a link error, cleans its request and sends nothing without the credential")
-        void notConnectedFailsAsLinkError() {
-            disconnectServer();
-
-            LoginService.PanelLinkResult result = service.requestPanelLink(player);
-
-            assertThat(result.isSuccess()).as("a link was published without the server's credential").isFalse();
-            assertThat(result.getFailure()).isEqualTo(LoginService.PanelLinkResult.Failure.LINK_ERROR);
-            assertThat(result.getLinkId()).as("nothing to poll for").isNull();
-            assertThat(result.getUrl()).isNull();
-            assertThat(service.hasPendingPanelRequest(playerUuid)).as("the request was cleaned up").isFalse();
-            assertThat(pollRunnables).as("no poll was started").isEmpty();
-            cloud.verify(() -> UltiCloudRequests.post(anyString(), anyString()), times(1));
-            cloud.verify(() -> UltiCloudRequests.get(anyString(), anyMap()), never());
-            // tearDown proves SimpleHttpClient (the old request without a credential) was never called.
-        }
-
-        @Test
-        @DisplayName("NOT_CONNECTED resumes the login countdown with exactly the time that remained, silently")
-        void notConnectedResumesTheRemainingCountdownOnce() {
-            service.onPlayerJoin(player);
-            advance(55);
-            disconnectServer();
-            duringCreate = () -> advance(3);
-
-            assertThat(service.requestPanelLink(player).isSuccess()).isFalse();
-
-            service.checkTimeouts();
-            advance(2);
-            now[0]++; // Just past the original 60 s deadline: the 3 s pause must be credited.
-            service.checkTimeouts();
-            verify(player, never()).kickPlayer(anyString());
-
-            now[0] += 2_999; // Exactly 63 s after joining: timeout uses a strict greater-than check.
-            service.checkTimeouts();
-            verify(player, never()).kickPlayer(anyString());
-
-            now[0]++; // The first millisecond past the deadline shifted by exactly 3 s.
-            service.checkTimeouts();
-
-            verify(player, times(1)).kickPlayer(anyString());
-            verify(UltiLoginTestHelper.getMockPlugin(), never()).i18n("panel_timeout_paused");
-            verify(UltiLoginTestHelper.getMockPlugin(), never()).i18n("panel_timeout_resumed");
-        }
-
-        @Test
-        @DisplayName("NOT_CONNECTED cleans only its own request: an earlier credentialed link stays pending and still completes")
-        void notConnectedCleansOnlyItsOwnRequest() {
-            String first = openLink();
-            disconnectServer();
-
-            LoginService.PanelLinkResult second = service.requestPanelLink(player);
-
-            assertThat(second.isSuccess()).isFalse();
-            assertThat(second.getFailure()).isEqualTo(LoginService.PanelLinkResult.Failure.LINK_ERROR);
-            assertThat(service.isPanelRequestCurrent(playerUuid, first, service.getInvalidationGeneration(playerUuid)))
-                    .as("the earlier link is untouched").isTrue();
-
-            pollOnce(completed());
-
-            assertThat(service.isLoggedIn(playerUuid)).as("the earlier credentialed link still logs in").isTrue();
-        }
-
-        @Test
-        @DisplayName("an invalidation while the create was in flight leaves nothing pending when the server is not connected")
-        void invalidationDuringNotConnectedCreateLeavesNothingPending() {
-            disconnectServer();
-            long generation = service.getInvalidationGeneration(playerUuid);
-            duringCreate = () -> service.invalidateSession(playerUuid, false);
-
-            LoginService.PanelLinkResult result = service.requestPanelLink(player, generation);
-
-            assertThat(result.isSuccess()).isFalse();
-            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
-            assertThat(pollRunnables).isEmpty();
-        }
-
-        @Test
-        @DisplayName("LoginService keeps one transport and no per-request transport bookkeeping")
-        void noPerRequestTransportBookkeeping() {
-            List<String> transportFields = new ArrayList<>();
-            for (java.lang.reflect.Field field : LoginService.class.getDeclaredFields()) {
-                if (field.getGenericType().getTypeName().contains(PanelLinkTransport.class.getName())) {
-                    transportFields.add(field.getName());
-                }
-            }
-            // Control: the scan finds the one transport field the service is known to hold.
-            assertThat(transportFields).as("transport-typed fields of LoginService")
-                    .containsExactly("panelLinkTransport");
-        }
-    }
-
-    // ==================== Test 5: catalogue parity ====================
-
-    private static final List<String> NEW_KEYS = Arrays.asList(
-            "panel_outcome_cancelled",
+    private static final List<String> PANEL_KEYS = Arrays.asList(
             "panel_outcome_expired",
             "panel_outcome_refused",
-            "panel_outcome_refused_identity_bound_elsewhere",
-            "panel_outcome_refused_game_login_required",
-            "panel_outcome_refused_link_not_permitted",
-            "panel_outcome_refused_too_many_attempts",
             "panel_timeout_paused",
             "panel_timeout_resumed",
-            // plan 18-17
-            "panel_credential_refused",
             "panel_link_error",
-            "log_panel_credential_refused",
+            "panel_create_rate_limited",
+            "panel_create_not_permitted",
             "panel_web_registration_hint",
             "panel_not_registered_in_game",
             "login_no_game_password",
@@ -1025,6 +893,10 @@ class LoginServicePanelTest {
             "setpassword_success",
             "setpassword_already_set",
             "setpassword_failed");
+
+    private static final List<String> REMOVED_KEYS = Arrays.asList(
+            "panel_credential_refused",
+            "log_panel_credential_refused");
 
     private static final Pattern PLACEHOLDER = Pattern.compile("\\{[A-Za-z_]+}");
 
@@ -1038,14 +910,18 @@ class LoginServicePanelTest {
     }
 
     @Test
-    @DisplayName("every new /panel key exists in en and zh with the same placeholders")
-    void newKeysExistInBothLanguages() {
+    @DisplayName("every /panel key exists in en and zh with the same placeholders, and the retired keys are gone from both")
+    void panelKeysExistInBothLanguages() {
         Map<String, String> en = CatalogueText.entries("en");
         Map<String, String> zh = CatalogueText.entries("zh");
-        for (String key : NEW_KEYS) {
+        for (String key : PANEL_KEYS) {
             assertThat(en).as("lang/en.json").containsKey(key);
             assertThat(zh).as("lang/zh.json").containsKey(key);
             assertThat(placeholders(zh.get(key))).as("placeholders of %s", key).isEqualTo(placeholders(en.get(key)));
+        }
+        for (String key : REMOVED_KEYS) {
+            assertThat(en).as("lang/en.json").doesNotContainKey(key);
+            assertThat(zh).as("lang/zh.json").doesNotContainKey(key);
         }
     }
 }
