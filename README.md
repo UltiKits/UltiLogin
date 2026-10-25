@@ -41,7 +41,7 @@ UltiLogin 是 UltiTools 插件系统的登录验证模块，为 Minecraft 服务
 | `/login <密码>` | `/l` | 无 | 登录账号 |
 | `/register <密码> <确认>` | `/reg` | 无 | 注册账号 |
 | `/changepassword <旧密码> <新密码> <确认>` | `/changepw`, `/cpw` | `ultilogin.changepassword` | 修改密码 |
-| `/setpassword <新密码> <确认>` | `/setpw` | 无 | 为网页创建、尚无游戏密码的账号设置游戏密码 / set the first game password of an account created on the web |
+| `/setpassword <新密码> <确认>` | `/setpw` | 无 | 为网页创建、尚无游戏密码的账号设置备用游戏密码 / set the backup game password of an account created on the web |
 | `/panel` | — | 无 | 获取 UltiCloud 网页面板链接（登录前可用）/ get an UltiCloud web panel link (usable before `/login`) |
 
 ### 管理员命令
@@ -55,10 +55,12 @@ UltiLogin 是 UltiTools 插件系统的登录验证模块，为 Minecraft 服务
 
 ## Web panel sign-in (`/panel`) / 网页面板登录
 
-`/panel` gives the player a clickable UltiCloud link, valid for five minutes, for their own game name on this server.
-It needs `ulticloud.enabled: true` in `login.yml` and the server signed in to UltiCloud (`ulticloud login` in the
-console). Opening the link never logs anyone in by itself: the web page asks for a proof first, and the player is
-logged in in game only after the page completes.
+`/panel` gives the player a clickable UltiCloud link for their own game name on this server. It needs UltiTools-API
+6.3.1 or later, `ulticloud.enabled: true` in `login.yml` and the server signed in to UltiCloud (`ulticloud login` in
+the console). The link is created through UltiTools-API's player-link API and lives for as long as UltiCloud says;
+while it is open the login countdown stays paused, for at most ten minutes. Opening the link never logs anyone in by
+itself: the web page asks for a proof first, and the player is logged in in game only after the page completes. Nothing
+is polled: UltiCloud reports the result and the game acts on it within a few seconds.
 
 The web accepts one of three proofs:
 
@@ -69,46 +71,56 @@ The web accepts one of three proofs:
    itself). Then the player is logged in in game.
 3. **No game account yet.** The name has no UltiLogin account on this server. The page may create a new UltiKits
    account; the game then creates the player's UltiLogin account without a game password and logs them in. A web
-   registration counts as an UltiLogin registration.
+   registration counts as an UltiLogin registration, first come first served.
 
-A name that has an UltiLogin account but is neither logged in in game nor linked is refused: the player runs `/login`
-once, then `/panel` again. To move a game name to another UltiKits account, unlink it in the first account's settings,
-sign in to the other account, and run `/panel` again.
+No password and no password digest is ever sent to UltiCloud by this module. A name that has an UltiLogin account but is
+neither logged in in game nor linked cannot sign in this way: the player runs `/login` once, then `/panel` again. To
+move a game name to another UltiKits account, unlink it in the first account's settings, sign in to the other account,
+and run `/panel` again.
 
 What the player sees in game:
 
 | Situation | Message (`language: en`) |
 |---|---|
 | Link delivered to a player who has not logged in | "Your login countdown is paused while the web panel link is open. You still cannot move or chat until you are logged in." |
-| Signed in on the page | "You have been logged in via UltiCloud! (Player)" or "(Server Owner)" |
-| Account created on the web | the line above, then "Your account was created on the web and has no game password yet. Set one with /setpassword <password> <confirm>, so you can also log in with /login." |
-| Cancelled on the page | "You cancelled the web panel sign-in. The link stays valid until it expires, so you can still finish it in the browser." |
-| Refused by the web | "The web panel refused this sign-in: …" with the reason |
+| Signed in on the page | "You have been logged in via UltiCloud." |
+| A player who was already logged in finishes a web sign-in | "The web panel sign-in is complete." |
+| Signed in to an account that has no game password (always the case for one created on the web) | the line above, then "Your account has no game password yet. Set a backup password with /setpassword <password> <confirm>: it lets you log in with /login when UltiCloud cannot be reached. Use a password different from your UltiKits account." |
+| `/login` or a join, for such an account that is not logged in | "This account was created on the web and has no game password yet. Log in with /panel, then set a backup password with /setpassword <password> <confirm> for when UltiCloud cannot be reached (different from your UltiKits account)." |
+| Cancelled on the page, or a newer `/panel` replaced the link | "You cancelled the web panel sign-in. Run /panel again for a new link." |
+| Refused by the page | "The web panel refused this sign-in." |
 | Link expired | "Your web panel link has expired. Run /panel again for a new one." |
 | Countdown running again | "Your login countdown has resumed. Log in before it runs out." (with the time that was left, never a fresh full timeout) |
-| The server is not signed in to UltiCloud, or the link request cannot connect | "Could not create a panel link. The server must be signed in to UltiCloud; ask the server owner to run 'ulticloud login' in the console. If already signed in, check the connection and try again." (no link; a failed creation restores the remaining login countdown silently) |
-| The server's UltiCloud credential is refused | "UltiCloud refused this server's credential, so no panel link was created. Ask the server owner to run 'ulticloud login' in the console." (also logged to the console) |
+| UltiCloud rate-limited the request | "Too many panel links were requested just now. Wait a minute, then run /panel again." |
+| UltiCloud will not issue a link here | "The web panel cannot sign you in from here. If your account has a game password, log in with /login first, then run /panel again." |
+| The address has reached `max-register-per-ip` (at `/panel`, and again if it reached it before the web sign-in finished) | "This IP has reached the maximum registration limit!" |
+| The server is not signed in to UltiCloud | "Could not create a panel link. The server must be signed in to UltiCloud; ask the server owner to run 'ulticloud login' in the console. If already signed in, check the connection and try again." (no link; the remaining login countdown is restored silently) |
+| Any other failure to create the link | "Failed to generate panel link. Please try again later." |
+| The web sign-in finished but the game account could not be created | "Your game account could not be created. Run /panel again to retry." |
+| The web sign-in finished after the link you used had ended (you left, the server restarted, or your password changed) and you are online | "Your web panel sign-in finished after the link you used had ended. Run /panel again to log in." |
+| The web sign-in finished for a name with no UltiLogin account, and no account was asked for | "You are not registered in game on this server, so the web panel cannot log you in. Use /register <password> <confirm> first." |
 
-**`/setpassword <new> <confirm>`.** An account created on the web has no game password, and `/login` refuses it
-whatever is typed ("This account was created on the web and has no game password yet. …"); a refused try is not
-counted as a wrong password. With `gui-mode.enabled: true` such an account is not shown the number pad at all: it
-gets the same message on joining and whenever it is prompted again, so the player can type `/panel` (which is in the
-shipped `allowed-commands`). While logged in, the player sets one with `/setpassword`, which follows the same password
-rules as `/register`. Afterwards `/login` works. An account that already has a password uses `/changepassword`.
+**The backup password, `/setpassword <new> <confirm>`.** An account created on the web has no game password, and
+`/login` refuses it whatever is typed; a refused try is not counted as a wrong password. The game password of such an
+account is a backup for when UltiCloud cannot be reached: the player sets it once, while logged in, with `/setpassword`
+(the same password rules as `/register`), and afterwards `/login` works. The player is reminded after every web sign-in
+of such an account and on every join or `/login` while not logged in, and should use a password different from the UltiKits account's. A player who never
+sets one cannot log in while UltiCloud is unreachable. With `gui-mode.enabled: true` such an account is not shown the number pad at all: it gets the same
+message on joining and whenever it is prompted again, so the player can type `/panel` (which is in the shipped
+`allowed-commands`). An account that already has a password uses `/changepassword`.
 
-**If the panel is unavailable** and such a player has no game password yet: with `session-enabled: true` they are
+**If the panel is unavailable** and such a player has no backup password yet: with `session-enabled: true` they are
 logged in automatically when they rejoin from the same IP within `session-timeout`; otherwise an administrator runs
 `/logadmin reset <player> <password>` and tells them the password.
 
-**The old anonymous path is removed immediately, with no grace period.** Creating and polling `/panel` links now
-requires the server owner's UltiCloud credential. Older plugins that create or poll links without that credential are
-not supported; update UltiLogin and run `ulticloud login` in the server console. This build creates no link when the
-server is not signed in, and never retries a failed or refused request without the credential. Normal website account
-login, browser link verification/completion/cancellation, and game `/login` remain available.
+**Updating.** UltiLogin 2.0.0's `/panel` does not work on UltiTools-API 6.3.1, which replaced the request path that
+version used. Update to UltiLogin 2.1.0; until then players can still log in with `/login`. UltiLogin 2.1.0 does not load on
+older UltiTools-API versions.
 
-`/panel` 为玩家提供一个可点击的 UltiCloud 链接，有效期五分钟，对应其在本服务器上的游戏名。需要在 `login.yml` 中设置
-`ulticloud.enabled: true`，并且服务器已登录 UltiCloud（在控制台执行 `ulticloud login`）。仅打开链接不会让任何人登录：网页会先要求
-一项证明，只有网页完成后玩家才会在游戏内登录。
+`/panel` 为玩家提供一个可点击的 UltiCloud 链接，对应其在本服务器上的游戏名。需要 UltiTools-API 6.3.1 或更高版本，在
+`login.yml` 中设置 `ulticloud.enabled: true`，并且服务器已登录 UltiCloud（在控制台执行 `ulticloud login`）。链接通过 UltiTools-API
+的玩家链接接口创建，有效期由 UltiCloud 决定；链接打开期间登录倒计时保持暂停，最长十分钟。仅打开链接不会让任何人登录：网页会先要求一项
+证明，只有网页完成后玩家才会在游戏内登录。不再轮询：UltiCloud 报告结果，游戏在几秒内处理。
 
 网页接受以下三种证明之一：
 
@@ -116,48 +128,50 @@ login, browser link verification/completion/cancellation, and game `/login` rema
 2. **已关联。** 该游戏名在本服务器上已关联某个 UltiKits 账号。网页要求输入该账号的密码，或提供账号持有人让其记住的设备
    （需点击一次；不会自动登录）。之后玩家在游戏内登录。
 3. **尚无游戏账号。** 该名字在本服务器上没有 UltiLogin 账号。网页可以新建 UltiKits 账号；随后游戏为玩家创建一个没有游戏密码的
-   UltiLogin 账号并让其登录。网页注册视同 UltiLogin 注册。
+   UltiLogin 账号并让其登录。网页注册视同 UltiLogin 注册，先到先得。
 
-已有 UltiLogin 账号、但既未在游戏内登录也未关联的名字会被拒绝：玩家先执行一次 `/login`，再执行 `/panel`。要把游戏名移到另一个
-UltiKits 账号：在原账号的设置中解除关联，登录另一个账号，再执行 `/panel`。
+本模块不会向 UltiCloud 发送任何密码或密码摘要。已有 UltiLogin 账号、但既未在游戏内登录也未关联的名字不能这样登录：玩家先执行一次
+`/login`，再执行 `/panel`。要把游戏名移到另一个 UltiKits 账号：在原账号的设置中解除关联，登录另一个账号，再执行 `/panel`。
 
-游戏内可能看到的提示：链接发出时登录倒计时暂停（仍不能移动或聊天）；网页登录成功；网页创建账号后提示用 `/setpassword` 设置游戏
-密码；网页取消（链接在到期前仍可完成）；网页拒绝及原因；链接过期；倒计时恢复（按暂停时剩余的时间，绝不重新计满）；服务器的
-UltiCloud 凭据被拒绝（同时写入控制台）。未登录 UltiCloud 或连接失败时提示“无法生成面板链接。服务器必须先登录 UltiCloud；请服主在控制台运行 'ulticloud login'。若已登录，请检查连接后重试。”，不发链接；创建失败时按剩余时间静默恢复倒计时。
+游戏内可能看到的提示：链接发出时登录倒计时暂停（仍不能移动或聊天）；网页登录成功；已登录的玩家完成网页登录；没有游戏密码的账号登录后提示
+用 `/setpassword` 设置备用密码（UltiCloud 连不上时可用 `/login` 登录，请使用与 UltiKits 账号不同的密码）；网页取消，或被新的 `/panel` 替换
+（需要重新执行 `/panel`）；网页拒绝；链接过期；倒计时恢复（按暂停时剩余的时间，绝不重新计满）；请求太频繁；UltiCloud 不允许在此生成链接；
+同一 IP 注册数已达上限；服务器未登录 UltiCloud（不发链接，静默恢复倒计时）或其他创建失败；网页登录已完成但游戏账号创建失败；网页登录在所用链接结束后才完成
+（需重新执行 `/panel`）。具体文字见上表（`language: en`）及 `lang/zh.json`。
 
-**`/setpassword <新密码> <确认>`。** 网页创建的账号没有游戏密码，无论输入什么 `/login` 都会拒绝，且不计为密码错误。在
-`gui-mode.enabled: true` 下，这样的账号完全不会弹出数字键盘：进入服务器和每次再次提示时都会收到同一条提示，玩家因此可以输入
-`/panel`（它在出厂的 `allowed-commands` 中）。玩家登录后用
-`/setpassword` 设置游戏密码，规则与 `/register` 相同，之后即可用 `/login` 登录。已有密码的账号请使用 `/changepassword`。
+**备用密码 `/setpassword <新密码> <确认>`。** 网页创建的账号没有游戏密码，无论输入什么 `/login` 都会拒绝，且不计为密码错误。这类账号的游戏密码是
+UltiCloud 连不上时用的备用密码：玩家登录后用 `/setpassword` 设置一次（规则与 `/register` 相同），之后即可用 `/login` 登录。每次这类账号经网页登录后、
+以及每次未登录时进服或执行 `/login` 都会提醒玩家，并提示使用与 UltiKits 账号不同的密码。始终不设备用密码的玩家，在 UltiCloud 不可达时无法登录。在 `gui-mode.enabled: true` 下，
+这样的账号完全不会弹出数字键盘：进入服务器和每次再次提示时都会收到同一条提示，玩家因此可以输入 `/panel`（它在出厂的 `allowed-commands` 中）。已有密码的账号请使用
+`/changepassword`。
 
-**面板不可用时**，若这样的玩家还没有游戏密码：在 `session-enabled: true` 下，于 `session-timeout` 内从同一 IP 重进会自动登录；
+**面板不可用时**，若这样的玩家还没有备用密码：在 `session-enabled: true` 下，于 `session-timeout` 内从同一 IP 重进会自动登录；
 否则由管理员执行 `/logadmin reset <玩家> <密码>` 并把密码告诉玩家。
 
-**旧匿名路径立即移除，不设宽限期。** 创建和轮询 `/panel` 链接都必须携带服务器所有者的 UltiCloud 凭据；不再支持未携带该凭据的
-旧插件创建或轮询链接。请更新 UltiLogin，并在服务器控制台执行 `ulticloud login`。运行本版本但未登录 UltiCloud 的服务器不会生成链接，
-请求失败或凭据被拒绝时也绝不改用无凭据请求。正常网站账号登录、浏览器链接验证／完成／取消，以及游戏 `/login` 均保留。
+**升级。** UltiLogin 2.0.0 的 `/panel` 在 UltiTools-API 6.3.1 上不能使用，因为后者替换了该版本所用的请求路径。请更新到 UltiLogin 2.1.0；在此之前玩家仍可用 `/login` 登录。
+UltiLogin 2.1.0 不会在更旧的 UltiTools-API 版本上加载。
 
 ### Known limitations / 已知限制
 
-- **A pending link pauses the login countdown for at most its lifetime.** A player who has not logged in can keep the
-  countdown paused by running `/panel` again, five minutes per link. They still cannot move, chat or use commands other
-  than the allowed ones while it is paused.
-- **Do not run `ulticloud logout` while a delivered `/panel` link is being polled.** While the server is signed out
-  or its UltiCloud session is expired or invalid, polling fails silently: the player receives no immediate failure
-  message and web completion cannot log them into the game until the server is signed in again. An unauthenticated
-  player's countdown stays paused until the link expires (up to five minutes from creation); expiry reports that
-  the link expired and resumes the remaining countdown. Movement and chat stay restricted, but `/login <password>`
-  still works for an account with a game password. The operator should run `ulticloud login` in the server console,
-  complete its browser approval as the same server owner and verify `ulticloud status` is connected. While the old
-  link is still within its roughly five-minute lifetime, have the player keep waiting: polling continues, and a
-  sign-in already completed in the browser is delivered within a few seconds. Do not run `/panel` again early:
-  it cancels the old poll and discards that pending completion. Only after the player is told the link has expired
-  should they run `/panel` for a fresh link. Avoid signing out while players have pending links.
+- **A pending link pauses the login countdown for at most ten minutes.** A player who has not logged in can keep the
+  countdown paused by running `/panel` again; each link holds it for at most ten minutes. They still cannot move, chat
+  or use commands other than the allowed ones while it is paused.
+- **A web sign-in that arrives late creates an account if one was asked for, but logs nobody in.** If the player left,
+  the server restarted, their password changed or the link had already ended locally, the account is still created (with
+  no game password), nobody is logged in, and a player who is online and not logged in is told to run `/panel` again.
+  The address of such an account is empty, so it is not counted against `max-register-per-ip`.
+- **A crash between creating the account and UltiTools-API recording the answer makes UltiCloud's redelivery answer
+  "account exists".** The account itself is untouched; only the answer UltiCloud receives differs.
+- **An existing account that completes a web sign-in keeps its password hash, salt and identity.** Its last IP, last login
+  time and login count are updated, as a `/login` would.
 - **Registering in game while a web registration is pending keeps the in-game account.** If the player runs `/register`
   before the web registration completes, the account they registered in game is kept untouched (with that game
-  password) and the web completion simply logs them in.
-- **A per-IP registration limit also applies to web registrations** (see below): over the limit the web page reports
-  the registration, but the game refuses the account and does not log the player in.
+  password), the web sign-in is answered "account exists" and the player is logged in.
+- **A per-IP registration limit also applies to web registrations** (see below). It is checked when `/panel` creates the
+  link, so the web page is not offered a registration the game would refuse, and again when the web sign-in finishes: if
+  the address reached the limit in between, nothing is created, nobody is logged in and the player sees the limit
+  message. A sign-in finished after the player left creates the account without counting its address (see the first
+  item above).
 - **A session auto-login counts as "logged in in game" for `/panel`.** With `session-enabled: true` (the default), a
   player who rejoins from the same IP within `session-timeout` is logged in without a password, and may then link the
   name to an UltiKits account on the web. On an offline-mode server where players share a public IP, someone else
@@ -167,19 +181,26 @@ UltiCloud 凭据被拒绝（同时写入控制台）。未登录 UltiCloud 或�
   the panel's remote console runs to the server log as `[Remote command] > <command>` and records it in its
   remote-action audit log. `logadmin reset <player> <password>` sent that way therefore puts the password in the
   console, `logs/latest.log`, the panel log stream and that audit log; UltiLogin's log filter (see "Passwords in the
-  server log" below) only covers the line Paper writes for a player's command. Reset passwords in game instead
-  (UltiKits/UltiLogin#57).
+  server log" below) only covers the line Paper writes for a player's command, and the registration with
+  UltiTools-API 6.3.1 does not cover this echo either, because the echo has no leading `/` (see the same section).
+  Reset passwords in game instead (UltiKits/UltiLogin#57).
 - **A password reset run from the server console shows the new password in its reply.** `logadmin reset <player>`
   (a generated password) and `logadmin reset <player> <password>` both reply with the new password, so the operator
   can pass it on. Run from the server console or the panel's remote console, that reply is written to
   `logs/latest.log` and mirrored to the panel log stream. Run the reset in game: the reply goes only to the operator
   who ran it, and the command line itself is logged as `/logadmin reset ******` (UltiKits/UltiLogin#57).
 
-- **待处理的链接最多按其有效期暂停登录倒计时。** 未登录的玩家可以再次执行 `/panel` 让倒计时继续暂停，每个链接五分钟；暂停期间仍
+
+- **待处理的链接最多暂停登录倒计时十分钟。** 未登录的玩家可以再次执行 `/panel` 让倒计时继续暂停，每个链接最多十分钟；暂停期间仍
   不能移动、聊天或执行未放行的命令。
+- **迟到的网页登录：要求建号就建号，但不让任何人登录。** 若玩家已退出、服务器重启过、其密码已改，或链接已在本地结束，账号仍会创建
+  （没有游戏密码），但不会让任何人登录；此刻在线且未登录的玩家会被提示重新执行 `/panel`。这类账号的地址为空，不计入 `max-register-per-ip`。
+- **建号成功后、UltiTools-API 记下回执前服务器崩溃，UltiCloud 重投时会被回执为"账号已存在"。** 账号本身不受影响，只是 UltiCloud 收到的回执不同。
+- **已有账号完成网页登录时，密码哈希、盐和身份保持不变。** 其最后登录 IP、最后登录时间和登录次数会像 `/login` 一样更新。
 - **网页注册尚未完成时在游戏内注册，会保留游戏内账号。** 若玩家在网页注册完成前执行了 `/register`，游戏内注册的账号（及其游戏密码）
-  保持不变，网页完成后只会让其登录。
-- **同一 IP 注册数限制同样适用于网页注册**（见下文）：超出限制时网页显示注册成功，但游戏拒绝创建账号且不会让玩家登录。
+  保持不变，网页登录回执"账号已存在"，玩家被登录。
+- **同一 IP 注册数限制同样适用于网页注册**（见下文）：创建链接时就会检查，网页不会被提供游戏会拒绝的注册；网页登录完成时再检查一次，若这段时间内
+  该地址已达上限，则不建号、不登录，玩家看到上限提示。玩家退出后才完成的登录会创建不计地址的账号（见第一条）。
 - **会话自动登录在 `/panel` 中视为"已在游戏内登录"。** 在 `session-enabled: true`（默认）下，于 `session-timeout` 内从同一 IP
   重进的玩家无需密码即被登录，随后可在网页上把该名字关联到 UltiKits 账号。在玩家共用公网 IP 的离线模式服务器上，他人若在这段
   时间内从该 IP 以尚未关联的名字进入，就可能把它关联到自己的账号。此类服务器请关闭会话（`session-enabled: false`），或尽早关联
@@ -187,7 +208,8 @@ UltiCloud 凭据被拒绝（同时写入控制台）。未登录 UltiCloud 或�
 - **通过面板远程控制台发送的密码重置会以明文记录。** UltiTools 会把面板远程控制台执行的每条命令以
   `[Remote command] > <命令>` 写入服务器日志，并记入其远程操作审计日志。因此以这种方式发送的
   `logadmin reset <玩家> <密码>` 会把密码写入控制台、`logs/latest.log`、面板日志流和该审计日志；UltiLogin 的日志过滤器
-  （见下文"服务器日志中的密码"）只处理 Paper 为玩家命令写的那一行。请改为在游戏内重置密码（UltiKits/UltiLogin#57）。
+  （见下文"服务器日志中的密码"）只处理 Paper 为玩家命令写的那一行；登记到 UltiTools-API 6.3.1 也覆盖不到这条回显，因为它没有前导 `/`（见同一节）。
+  请改为在游戏内重置密码（UltiKits/UltiLogin#57）。
 - **在服务器控制台执行的密码重置会在回复中显示新密码。** `logadmin reset <玩家>`（随机生成密码）和
   `logadmin reset <玩家> <密码>` 都会在回复中给出新密码，以便管理员转告玩家。在服务器控制台或面板远程控制台执行时，这条回复
   会写入 `logs/latest.log` 并同步到面板日志流。请在游戏内执行重置：回复只发给执行命令的管理员，命令行本身记录为
@@ -413,6 +435,10 @@ UltiLogin 启用期间会在服务器日志（Log4j 根日志器）上挂一个�
 ### 未发布 / Unreleased
 
 - 需要 UltiTools-API 6.3.1 或更高版本（`api-version: 631`）
+- `/panel` 改用 UltiTools-API 的玩家链接接口：不再轮询，结果以事件送达；三种证明、完成结果、重复投递去重、迟到的完成、按原因区分的结束提示
+- 网页创建的账号：提示设置“备用游戏密码”（UltiCloud 连不上时使用，不要与 UltiKits 密码相同）
+- 建链接前先检查同一 IP 注册数上限
+- 敏感命令登记到框架，上云内容中参数被遮蔽
 
 ### v1.0.0 (2026-02-15)
 
