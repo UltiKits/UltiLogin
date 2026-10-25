@@ -1,6 +1,6 @@
 # UltiLogin
 
-[![UltiTools-API](https://img.shields.io/badge/UltiTools--API-6.3.0%2B-blue)](https://github.com/UltiKits/UltiTools-Reborn)
+[![UltiTools-API](https://img.shields.io/badge/UltiTools--API-6.3.1%2B-blue)](https://github.com/UltiKits/UltiTools-Reborn)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 UltiLogin 是 UltiTools 插件系统的登录验证模块，为 Minecraft 服务器提供安全的玩家认证系统。
@@ -391,9 +391,10 @@ UltiLogin 启用期间会在服务器日志（Log4j 根日志器）上挂一个�
 
 ## 依赖
 
-- **UltiTools-API** 6.3.0 or later / 6.3.0 或更高版本 (required / 必需).
-  This module declares `api-version: 630`, so an older framework refuses to load it with a warning that the
-  UltiTools version is outdated. 本模块声明 `api-version: 630`，更早的框架会拒绝加载它，并警告 UltiTools 版本过旧。
+- **UltiTools-API** 6.3.1 or later / 6.3.1 或更高版本 (required / 必需).
+  This module declares `api-version: 631`, so UltiTools-API 6.3.0 and older refuse to load it with a warning that
+  the UltiTools version is outdated. 本模块声明 `api-version: 631`，UltiTools-API 6.3.0 及更早版本会拒绝加载它，并警告
+  UltiTools 版本过旧。
 - Install: put `UltiLogin-<version>.jar` into `plugins/UltiTools/plugins/` and restart the server (`/ul reload` only
   reloads configuration; it does not load a new module jar). 安装：将 JAR 放入 `plugins/UltiTools/plugins/` 并重启服务器
   （`/ul reload` 只重载配置，不会加载新的模块 JAR）。
@@ -402,7 +403,7 @@ UltiLogin 启用期间会在服务器日志（Log4j 根日志器）上挂一个�
 
 ### 未发布 / Unreleased
 
-- 需要 UltiTools-API 6.3.0 或更高版本（`api-version: 630`）
+- 需要 UltiTools-API 6.3.1 或更高版本（`api-version: 631`）
 
 ### v1.0.0 (2026-02-15)
 
