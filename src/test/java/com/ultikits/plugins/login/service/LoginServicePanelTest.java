@@ -235,8 +235,8 @@ class LoginServicePanelTest {
     private String openLink() {
         LoginService.PanelLinkResult result = service.requestPanelLink(player);
         assertThat(result.isSuccess()).as("the link was published: %s", result.getError()).isTrue();
-        service.startAuthPolling(playerUuid.toString(), player, result.getRequestId());
-        return result.getRequestId();
+        service.startAuthPolling(playerUuid.toString(), player, result.getLinkId());
+        return result.getLinkId();
     }
 
     /** Run the most recently started poll once, serving {@code response}. */
@@ -277,7 +277,7 @@ class LoginServicePanelTest {
 
             assertThat(createdBodies).hasSize(1);
             JsonObject body = createdBodies.get(0);
-            assertThat(body.get("requestId").getAsString()).isEqualTo(result.getRequestId());
+            assertThat(body.get("requestId").getAsString()).isEqualTo(result.getLinkId());
             assertThat(body.get("playerUuid").getAsString()).isEqualTo(playerUuid.toString());
             assertThat(body.get("playerName").getAsString()).isEqualTo("TestPlayer");
             assertThat(body.get("serverUuid").getAsString()).isEqualTo("server-uuid");
@@ -917,7 +917,7 @@ class LoginServicePanelTest {
 
             assertThat(result.isSuccess()).as("a link was published without the server's credential").isFalse();
             assertThat(result.getFailure()).isEqualTo(LoginService.PanelLinkResult.Failure.LINK_ERROR);
-            assertThat(result.getRequestId()).as("nothing to poll for").isNull();
+            assertThat(result.getLinkId()).as("nothing to poll for").isNull();
             assertThat(result.getUrl()).isNull();
             assertThat(service.hasPendingPanelRequest(playerUuid)).as("the request was cleaned up").isFalse();
             assertThat(pollRunnables).as("no poll was started").isEmpty();

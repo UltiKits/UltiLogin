@@ -3,20 +3,38 @@ package com.ultikits.plugins.login.commands;
 import com.ultikits.plugins.login.i18n.LoginSeams;
 import com.ultikits.plugins.login.UltiLogin;
 import com.ultikits.plugins.login.UltiLoginTestHelper;
+import com.ultikits.plugins.login.config.LoginConfig;
+import com.ultikits.plugins.login.entity.AccountData;
+import com.ultikits.plugins.login.i18n.CatalogueText;
 import com.ultikits.plugins.login.service.LoginService;
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.interfaces.DataOperator;
+import com.ultikits.ultitools.interfaces.Query;
+import com.ultikits.ultitools.websocket.CloudPlayerLinks;
 
 import net.md_5.bungee.api.chat.BaseComponent;
+import net.md_5.bungee.api.chat.ClickEvent;
+import net.md_5.bungee.api.chat.TextComponent;
 
 import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
 import org.bukkit.Server;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitScheduler;
 import org.junit.jupiter.api.*;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 
 import java.lang.reflect.Field;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -30,6 +48,7 @@ class PanelCommandTest {
     private Player player;
     private UUID playerUuid;
     private BukkitScheduler mockScheduler;
+    private Server mockServer;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -42,7 +61,7 @@ class PanelCommandTest {
         // installed on the shared static field.
         Field serverField = Bukkit.class.getDeclaredField("server");
         serverField.setAccessible(true);
-        Server mockServer = mock(Server.class);
+        mockServer = mock(Server.class);
         org.bukkit.plugin.PluginManager mockPm = mock(org.bukkit.plugin.PluginManager.class);
         mockScheduler = mock(BukkitScheduler.class);
         when(mockServer.getPluginManager()).thenReturn(mockPm);
@@ -140,25 +159,25 @@ class PanelCommandTest {
             task.run();
 
             verify(player, never()).spigot();
-            verify(loginService, never()).startAuthPolling(anyString(), any(), anyString());
+            verify(loginService, never()).announcePanelPause(any());
         }
 
         @Test
-        @DisplayName("Should send a clickable panel link and start auth polling, keyed on the result's request id, when the link request succeeds")
-        void sendsClickableLinkAndStartsPollingOnSuccess() {
-            // startAuthPolling must be keyed on the exact request id requestPanelLink() published, not
-            // re-derived from "whatever is pending now" -- so this result's requestId ("req-1") must
-            // reach startAuthPolling unchanged.
+        @DisplayName("Should send a clickable panel link and announce the countdown pause, checked against the result's link id, when the link request succeeds")
+        void sendsClickableLinkAndAnnouncesThePauseOnSuccess() {
+            // The main-thread re-check is keyed on the exact link id requestPanelLink() published, not
+            // re-derived from "whatever is pending now"; no poll is started (the outcome arrives as an event).
             Runnable task = captureResultDeliveryTask(
-                    new LoginService.PanelLinkResult(true, "https://panel.example/link", null, "req-1"));
+                    new LoginService.PanelLinkResult(true, "https://panel.example/link", null, "link-1"));
 
             Player.Spigot spigot = mock(Player.Spigot.class);
             when(player.spigot()).thenReturn(spigot);
 
             task.run();
 
+            verify(loginService).isPanelRequestCurrent(eq(playerUuid), eq("link-1"), anyLong());
             verify(spigot).sendMessage(any(BaseComponent.class));
-            verify(loginService).startAuthPolling(playerUuid.toString(), player, "req-1");
+            verify(loginService).announcePanelPause(player);
         }
 
         @Test
@@ -170,7 +189,7 @@ class PanelCommandTest {
             // that method returns. This callback is itself scheduled via runTask(...) after that
             // method already returned a success result -- an invalidateSession(...) landing in
             // that final gap must still be caught here, or the revoked player would receive the
-            // magic link and start a new poll for it anyway.
+            // link anyway.
             Runnable task = captureResultDeliveryTask(
                     new LoginService.PanelLinkResult(true, "https://panel.example/link", null, "req-1"));
             when(loginService.isPanelRequestCurrent(eq(playerUuid), eq("req-1"), anyLong()))
@@ -182,7 +201,7 @@ class PanelCommandTest {
             task.run();
 
             verify(spigot, never()).sendMessage(any(BaseComponent.class));
-            verify(loginService, never()).startAuthPolling(anyString(), any(), anyString());
+            verify(loginService, never()).announcePanelPause(any());
             // Once for openPanel()'s own "generating" message, once for the discarded result's
             // failure message -- same count as the pre-existing sendsErrorMessageOnFailure case.
             verify(player, times(2)).sendMessage(anyString());
@@ -198,7 +217,112 @@ class PanelCommandTest {
 
             verify(player, times(2)).sendMessage(anyString());
             verify(player, never()).spigot();
-            verify(loginService, never()).startAuthPolling(anyString(), any(), anyString());
+            verify(loginService, never()).announcePanelPause(any());
+        }
+    }
+
+    /**
+     * Tracer for plan 01-02: {@code /panel} for a registered, logged-in player goes through the real
+     * {@link LoginService} and its production player-link adapter to the framework's {@link CloudPlayerLinks}
+     * (mocked; Mockito 5 mocks the final class), and the link the framework answers reaches the player as one
+     * clickable line. The asynchronous task runs on its own thread, so "not on the main thread" is observed,
+     * not assumed.
+     */
+    @Nested
+    @DisplayName("end to end through the framework's player-link API")
+    class EndToEnd {
+
+        private CloudPlayerLinks links;
+        private final List<Boolean> createdOnPrimaryThread = new ArrayList<>();
+        private Thread mainThread;
+
+        // The framework is installed in UltiTools' real static field, not through mockStatic: a static
+        // mock is visible only on the thread that created it, and the create runs on the worker thread.
+        @BeforeEach
+        void setUpFramework() throws Exception {
+            mainThread = Thread.currentThread();
+            when(mockServer.isPrimaryThread()).thenAnswer(invocation -> Thread.currentThread() == mainThread);
+
+            links = mock(CloudPlayerLinks.class);
+            UltiTools framework = mock(UltiTools.class);
+            when(framework.getCloudPlayerLinks()).thenReturn(links);
+            UltiLoginTestHelper.setStaticField(UltiTools.class, "ultiTools", framework);
+        }
+
+        @AfterEach
+        void tearDownFramework() throws Exception {
+            UltiLoginTestHelper.setStaticField(UltiTools.class, "ultiTools", null);
+        }
+
+        @SuppressWarnings("unchecked")
+        private LoginService realServiceWithAccount() throws Exception {
+            LoginConfig config = UltiLoginTestHelper.createDefaultConfig();
+            when(config.isUlticloudEnabled()).thenReturn(true);
+            DataOperator<AccountData> dataOperator = mock(DataOperator.class);
+            Query<AccountData> query = mock(Query.class);
+            when(UltiLoginTestHelper.getMockPlugin().getDataOperator(AccountData.class)).thenReturn(dataOperator);
+            when(dataOperator.query()).thenReturn(query);
+            when(query.where(anyString())).thenReturn(query);
+            when(query.eq(any())).thenReturn(query);
+            when(query.list()).thenReturn(Collections.singletonList(
+                    UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt")));
+            LoginService service = new LoginService(UltiLoginTestHelper.getMockPlugin(), config);
+            Field loggedIn = LoginService.class.getDeclaredField("loggedInPlayers");
+            loggedIn.setAccessible(true);
+            ((Map<UUID, Boolean>) loggedIn.get(service)).put(playerUuid, true);
+            return service;
+        }
+
+        @Test
+        @DisplayName("a logged-in player's /panel creates one link off the main thread and receives it as a clickable line")
+        void loggedInPlayerGetsAClickableLink() throws Exception {
+            String url = "https://panel.example/link/L1";
+            when(links.create(any(), any(), anyString(), any(), any())).thenAnswer(invocation -> {
+                createdOnPrimaryThread.add(Bukkit.isPrimaryThread());
+                return CompletableFuture.completedFuture(CloudPlayerLinks.LinkCreation.created("L1", url,
+                        Instant.now().plusSeconds(300),
+                        Collections.singletonList(CloudPlayerLinks.LinkProof.IN_GAME_SESSION)));
+            });
+            LoginService service = realServiceWithAccount();
+            PanelCommand panel = new PanelCommand(UltiLoginTestHelper.getMockPlugin(), service);
+            Player.Spigot spigot = mock(Player.Spigot.class);
+            when(player.spigot()).thenReturn(spigot);
+
+            panel.openPanel(player);
+
+            ArgumentCaptor<Runnable> asyncCaptor = ArgumentCaptor.forClass(Runnable.class);
+            verify(mockScheduler).runTaskAsynchronously(any(), asyncCaptor.capture());
+            Thread worker = new Thread(asyncCaptor.getValue(), "panel-test-async");
+            worker.start();
+            worker.join(10_000L);
+            assertThat(worker.isAlive()).as("the async /panel task finished within 10 s").isFalse();
+
+            ArgumentCaptor<Runnable> syncCaptor = ArgumentCaptor.forClass(Runnable.class);
+            verify(mockScheduler).runTask(any(), syncCaptor.capture());
+            syncCaptor.getValue().run();
+
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Set<CloudPlayerLinks.LinkProof>> proofs = ArgumentCaptor.forClass(Set.class);
+            ArgumentCaptor<CloudPlayerLinks.GameAuth> auth = ArgumentCaptor.forClass(CloudPlayerLinks.GameAuth.class);
+            verify(links, times(1)).create(eq(UltiLoginTestHelper.getMockPlugin()), eq(playerUuid), eq("TestPlayer"),
+                    auth.capture(), proofs.capture());
+            assertThat(auth.getValue().isAuthPlugin()).isTrue();
+            assertThat(auth.getValue().authenticated()).as("authenticated").isTrue();
+            assertThat(auth.getValue().accountExists()).as("account exists").isTrue();
+            assertThat(proofs.getValue()).containsExactlyInAnyOrder(CloudPlayerLinks.LinkProof.IN_GAME_SESSION,
+                    CloudPlayerLinks.LinkProof.LINKED_WEB_ACCOUNT);
+            assertThat(createdOnPrimaryThread).as("create ran off the main thread").containsExactly(false);
+
+            ArgumentCaptor<BaseComponent> line = ArgumentCaptor.forClass(BaseComponent.class);
+            InOrder order = inOrder(player, spigot);
+            order.verify(player).sendMessage(
+                    ChatColor.translateAlternateColorCodes('&', CatalogueText.text("zh", "panel_generating")));
+            order.verify(spigot).sendMessage(line.capture());
+            TextComponent sent = (TextComponent) line.getValue();
+            assertThat(sent.getText()).isEqualTo(ChatColor.translateAlternateColorCodes('&',
+                    CatalogueText.text("zh", "panel_link_sent").replace("{URL}", url)));
+            assertThat(sent.getClickEvent().getAction()).isEqualTo(ClickEvent.Action.OPEN_URL);
+            assertThat(sent.getClickEvent().getValue()).isEqualTo(url);
         }
     }
 

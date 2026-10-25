@@ -3449,7 +3449,7 @@ class LoginServiceTest {
                         .as("a request whose generation still matches must pass the fence and be published: %s",
                                 result.getError())
                         .isTrue();
-                assertThat(result.getRequestId()).isNotNull();
+                assertThat(result.getLinkId()).isNotNull();
             }
         }
     }
@@ -3501,7 +3501,7 @@ class LoginServiceTest {
                         .isFalse();
                 assertThat(result.getError()).contains("invalidated");
                 assertThat(result.getUrl()).isNull();
-                assertThat(result.getRequestId()).isNull();
+                assertThat(result.getLinkId()).isNull();
                 assertThat(service.hasPendingPanelRequest(playerUuid))
                         .as("the discarded request must not remain pending -- nothing left for a"
                                 + " caller to poll for")
@@ -4402,7 +4402,7 @@ class LoginServiceTest {
             LoginService.PanelLinkResult result =
                     new LoginService.PanelLinkResult(true, "https://panel.example.com/login", null);
 
-            assertThat(result.getRequestId()).isNull();
+            assertThat(result.getLinkId()).isNull();
         }
 
         @Test
@@ -4411,7 +4411,7 @@ class LoginServiceTest {
             LoginService.PanelLinkResult result = new LoginService.PanelLinkResult(
                     true, "https://panel.example.com/login", null, "req-42");
 
-            assertThat(result.getRequestId()).isEqualTo("req-42");
+            assertThat(result.getLinkId()).isEqualTo("req-42");
         }
     }
 

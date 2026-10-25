@@ -219,8 +219,8 @@ class HelperPanelLinkTransportTest {
     private String openLink() {
         LoginService.PanelLinkResult published = service.requestPanelLink(player);
         assertThat(published.isSuccess()).as("the link was published: %s", published.getError()).isTrue();
-        service.startAuthPolling(playerUuid.toString(), player, published.getRequestId());
-        return published.getRequestId();
+        service.startAuthPolling(playerUuid.toString(), player, published.getLinkId());
+        return published.getLinkId();
     }
 
     private void runLastPoll() {

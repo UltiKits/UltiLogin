@@ -38,7 +38,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.ultikits.ultitools.utils.CommonUtils;
 import com.ultikits.ultitools.utils.SimpleHttpClient;
 
 /**
@@ -182,11 +181,16 @@ public class LoginService {
     // every 10 ticks indefinitely.
     private final Map<UUID, BukkitTask> pendingCredentialGuiReopenTasks = new ConcurrentHashMap<>();
 
-    // The /panel HTTP seam (see PanelLinkTransport). /panel creates and polls its link only with the
-    // server's own UltiCloud credential, through the framework helper. A server that is not logged in
-    // to UltiCloud gets a visible link error; there is no request without the credential (plan 21-18;
-    // the Worker refuses such a request since the same hard cut).
+    // The poll transport of the 2.0.0 flow, still read by startAuthPolling; links are created through
+    // playerLinkPort below.
     private volatile PanelLinkTransport panelLinkTransport = new HelperPanelLinkTransport();
+
+    // /panel creates its link only through the framework's player-link API (see PlayerLinkPort); tests
+    // replace it with a fake.
+    private volatile PlayerLinkPort playerLinkPort;
+
+    // How long /panel's asynchronous worker waits for a create to answer (tests shorten it).
+    private volatile long panelCreateCapMillis = 45_000L;
 
     // Pending panel requests whose link the web has reported cancelled (requestId). A cancelled link
     // stays completable until it expires, so the request stays pending and its poll goes on; this set
@@ -214,6 +218,7 @@ public class LoginService {
         this.config = config;
         this.dataOperator = plugin.getDataOperator(AccountData.class);
         this.bukkitPlugin = Bukkit.getPluginManager().getPlugin("UltiTools");
+        this.playerLinkPort = new FrameworkPlayerLinkPort(plugin);
     }
 
     /**
@@ -235,6 +240,25 @@ public class LoginService {
      */
     void setPanelLinkTransport(PanelLinkTransport transport) {
         this.panelLinkTransport = transport;
+    }
+
+    /**
+     * Replace the player-link API {@code /panel} creates its links through (tests only; production always uses
+     * {@link FrameworkPlayerLinkPort}).
+     *
+     * @param port the port to use from now on
+     */
+    void setPlayerLinkPort(PlayerLinkPort port) {
+        this.playerLinkPort = port;
+    }
+
+    /**
+     * Shorten how long {@code /panel}'s worker waits for a create to answer (tests only; 45 seconds otherwise).
+     *
+     * @param millis the cap in milliseconds
+     */
+    void setPanelCreateCap(long millis) {
+        this.panelCreateCapMillis = millis;
     }
 
     /**
@@ -1543,89 +1567,62 @@ public class LoginService {
     }
 
     /**
-     * Request a panel magic link for a player, without fencing against an invalidation racing
-     * the request itself.
+     * Request a panel link for a player, without fencing against an invalidation racing the request itself.
      * <p>
-     * Equivalent to {@link #requestPanelLink(Player, long)} called with the player's
-     * <em>current</em> invalidation generation, captured at the start of this call -- which
-     * means it can never observe itself as stale. Suitable only for a caller on the same,
-     * uninterrupted call stack as the eventual publish (e.g. tests). {@code /panel}'s own
-     * worker uses the two-argument overload instead, capturing the generation before it
-     * schedules any asynchronous work. See {@link #requestPanelLink(Player, long)}.
-     * <p>
-     * Package-private rather than {@code public} -- its safety depends entirely on the caller
-     * staying on the same, uninterrupted call stack as the eventual publish, and nothing in the
-     * signature enforces that. A future caller wrapping this overload in its own asynchronous
-     * scheduling (as {@code PanelCommand} used to do before this fence existed) would silently
-     * reintroduce the very race {@link #requestPanelLink(Player, long)} exists to close,
-     * because the generation would then be captured inside the async worker instead of before
-     * it was scheduled. No caller outside this class needs it -- only this package's tests do.
+     * Equivalent to {@link #requestPanelLink(Player, long)} called with the player's <em>current</em> invalidation
+     * generation, captured at the start of this call -- which means it can never observe itself as stale. Suitable
+     * only for a caller on the same, uninterrupted call stack as the eventual publish (tests). {@code /panel}'s own
+     * worker uses the two-argument overload, capturing the generation before it schedules any asynchronous work.
+     * Package-private for that reason: wrapping this overload in asynchronous scheduling would capture the
+     * generation inside the worker and reopen the race the two-argument overload closes.
      *
      * @param player the player requesting the link
-     * @return PanelLinkResult with the URL or error message
+     * @return the result, with the URL and link id on success
      */
     PanelLinkResult requestPanelLink(Player player) {
         return requestPanelLink(player, getInvalidationGeneration(player.getUniqueId()));
     }
 
     /**
-     * Request a panel magic link for a player, refusing to publish it if the invalidation
-     * generation the caller captured before starting no longer matches the player's current
-     * one.
+     * Ask the framework's player-link API for a one-time panel link for a player, on the calling (asynchronous)
+     * thread, refusing to publish it if the invalidation generation the caller captured before scheduling no longer
+     * matches.
      * <p>
-     * See {@link #invalidateSession(UUID)}: {@code /panel} (see {@code PanelCommand}) captures
-     * {@link #getInvalidationGeneration(UUID)} before scheduling its asynchronous worker; this
-     * method runs later, on that worker thread, after a blocking HTTP call. An administrator's
-     * reset/unregister landing in the gap between those two points calls {@link
-     * #invalidateSession(UUID)}, which bumps the generation and calls {@link
-     * #cancelPendingPanelRequest(UUID)} -- but that cancellation finds nothing yet, since this
-     * request has not been inserted into {@code pendingPanelRequests} at that point.
-     * Without this check, the worker would go on to publish the (already-stale) request, send
-     * the link, and start polling; since a password reset or change does not remove the
-     * account, {@link #completePanelLogin(String, boolean)}'s registration check would later
-     * pass and re-authenticate the revoked connection. Checking the generation immediately
-     * before publishing closes that gap; once a request has been inserted, any subsequent
-     * invalidation is already covered by {@link #cancelPendingPanelRequest(UUID)} and, for a
-     * poll already in flight past that point, by {@link #handlePanelPollCompleted(Player, String,
-     * boolean)}'s request-id-keyed lookup -- so this is the one remaining fence, not a duplicate
-     * of either.
+     * <b>What is sent.</b> The player's UUID and name, whether the player is logged in on this connection and
+     * whether UltiLogin holds an account for them, and the identity proofs those two facts allow (see {@link
+     * #offeredProofs(boolean, boolean)}); never a password or a digest. The module makes no HTTP request: the
+     * framework sends the create over its UltiCloud connection ({@link PlayerLinkPort}).
      * <p>
-     * The generation check and the {@code pendingPanelRequests} insert below now run inside a
-     * {@code synchronized} block keyed on the same per-player {@link AtomicLong} generation cell
-     * {@link #invalidateSession(UUID)} synchronizes on. This closes the narrow window a plain
-     * read-then-insert left open: the check and the insert are now one atomic step from {@code
-     * invalidateSession}'s point of view, so an invalidation landing "in between" is impossible
-     * -- it either happens completely before this block (and the check sees it) or completely
-     * after (and {@code invalidateSession}'s own cancellation finds the entry this block just
-     * inserted). Only the publish decision and the map insert are inside the lock; the blocking
-     * HTTP call and everything after it run outside it.
+     * <b>Fences.</b> The request is published locally (inserted into {@code pendingPanelRequests} under a local id)
+     * only if the captured generation still matches; that check and the insert run inside a block synchronized on the
+     * player's generation cell, the lock {@link #invalidateSession(UUID)} takes around its bump-and-cancel, so an
+     * invalidation either lands before (the check refuses) or after (its cancellation finds the entry). The create is
+     * then awaited outside the lock, for at most the local create cap (45 seconds). When it succeeds, the generation
+     * and the local entry are checked again under the same lock: an invalidation or a quit while the create was in
+     * flight discards the link. A current link is re-keyed in that same step from the local id to the gateway's link
+     * id, the id its completion and expiry carry, so nothing is ever pending under both. {@code PanelCommand} checks
+     * once more on the main thread ({@link #isPanelRequestCurrent(UUID, String, long)}).
      * <p>
-     * An invalidation racing an in-flight publish was still able to slip through, because nothing
-     * re-checked the generation or the pending-request entry after this method's own blocking
-     * HTTP call returned -- the method would hand back a success result (URL included) even
-     * though {@link #cancelPendingPanelRequest(UUID)} had already removed the entry and the
-     * generation had already moved on. This method now performs that re-check, under the same
-     * lock, immediately before returning a success result (see below); a stale result is
-     * discarded there rather than being returned. The returned {@link PanelLinkResult} also now
-     * carries the {@code requestId} it was published under, so a caller that goes on to poll for
-     * completion (see {@link #startAuthPolling(String, Player, String)}) keys its poll on the exact
-     * request this call published -- never on "whatever is currently pending" for the player, which
-     * a review also found could pick up an unrelated, newer request.
+     * The login countdown pauses from the local insert; every failure removes the request again and resumes the
+     * countdown silently, with exactly the time that was left.
      *
-     * @param player the player requesting the link
-     * @param expectedGeneration the invalidation generation the caller captured before issuing
-     *                           this request, from {@link #getInvalidationGeneration(UUID)}
-     * @return PanelLinkResult with the URL, request id, or error message
+     * @param player             the player requesting the link
+     * @param expectedGeneration the invalidation generation the caller captured before scheduling this call, from
+     *                           {@link #getInvalidationGeneration(UUID)}
+     * @return the result: on success the URL and the link id the request is now pending under
      */
     public PanelLinkResult requestPanelLink(Player player, long expectedGeneration) {
         if (!isPanelEnabled()) {
             return new PanelLinkResult(false, null, "Panel integration not enabled");
         }
 
-        UUID playerUuidRaw = player.getUniqueId();
+        UUID playerUuid = player.getUniqueId();
+        String playerName = player.getName();
+        boolean authenticated = isLoggedIn(playerUuid);
+        boolean accountExists = isRegistered(playerUuid);
         String requestId = UUID.randomUUID().toString();
 
-        AtomicLong generationCell = invalidationGenerations.computeIfAbsent(playerUuidRaw, k -> new AtomicLong());
+        AtomicLong generationCell = invalidationGenerations.computeIfAbsent(playerUuid, k -> new AtomicLong());
         synchronized (generationCell) {
             if (generationCell.get() != expectedGeneration) {
                 return new PanelLinkResult(false, null,
@@ -1633,108 +1630,81 @@ public class LoginService {
             }
             // Track the pending request -- this insert and the generation check above must stay
             // atomic with each other (see javadoc above); nothing else belongs inside this lock.
-            pendingPanelRequests.put(requestId, playerUuidRaw);
+            pendingPanelRequests.put(requestId, playerUuid);
             pendingPanelTimestamps.put(requestId, clock.getAsLong());
             // The countdown pauses from the moment the request exists; the player is told once the
-            // link is actually delivered (startAuthPolling), so a failed request resumes silently.
-            syncPanelPause(playerUuidRaw);
+            // link is actually delivered (announcePanelPause), so a failed request resumes silently.
+            syncPanelPause(playerUuid);
         }
 
-        String code = generateVerificationCode();
-        String playerUuid = playerUuidRaw.toString();
-        String playerName = player.getName();
+        PlayerLinkPort.LinkCreation creation = awaitCreation(playerLinkPort.create(playerUuid, playerName,
+                authenticated, accountExists, offeredProofs(authenticated, accountExists)));
 
-        String serverUuid;
-        try {
-            serverUuid = CommonUtils.getUltiToolsUUID();
-        } catch (Exception e) {
+        if (!creation.isSuccess()) {
             cleanupPanelRequest(requestId);
-            return new PanelLinkResult(false, null, "Server UUID not available");
+            return failedCreation(creation);
         }
 
-        try {
-            // Phase 18 magic-link contract, section 2: the plugin reports two facts and the Worker
-            // decides which proofs they allow. The Worker honours them only on a request that
-            // carries the server owner's credential, and treats a missing one as the unsafe value.
-            JsonObject body = new JsonObject();
-            body.addProperty("requestId", requestId);
-            body.addProperty("code", code);
-            body.addProperty("playerUuid", playerUuid);
-            body.addProperty("playerName", playerName);
-            body.addProperty("serverUuid", serverUuid);
-            body.addProperty("inGameLogin", isLoggedIn(playerUuidRaw));
-            body.addProperty("registeredInUltiLogin", isRegistered(playerUuidRaw));
-
-            // Only with the server's credential. Not logged in to UltiCloud, a refused credential and a
-            // failed helper call each end this request below; none is retried without the credential.
-            // Every branch below that does not publish the link removes this request again
-            // (cleanupPanelRequest).
-            SimpleHttpClient.Response response = panelLinkTransport.create(body);
-
-            if (response.isOk()) {
-                JsonObject responseBody = JsonParser.parseString(response.getBody()).getAsJsonObject();
-                // API returns wrapped response: {"code":"200","data":{"url":"..."}}
-                String url = null;
-                if (responseBody.has("data") && responseBody.get("data").isJsonObject()) {
-                    JsonObject data = responseBody.getAsJsonObject("data");
-                    url = data.has("url") ? data.get("url").getAsString() : null;
-                } else if (responseBody.has("url")) {
-                    url = responseBody.get("url").getAsString();
-                }
-                if (url != null) {
-                    // The generation check and the pendingPanelRequests insert above only fence
-                    // the gap *before* this blocking POST. An invalidateSession(...) landing
-                    // anywhere *during* the POST (which can run for an arbitrary, unbounded
-                    // amount of time) removes this request's pendingPanelRequests entry and
-                    // bumps the generation, but neither of those stops this in-flight HTTP call
-                    // from finishing and this method from handing back a success result
-                    // regardless -- the caller (PanelCommand) would then send the now-stale
-                    // magic link and start a poll for it. Re-checking both, under the same
-                    // per-player lock invalidateSession synchronizes on, closes that: either
-                    // this re-check runs completely before invalidateSession's own
-                    // bump-and-cancel (so it still sees the matching generation and the request
-                    // still pending, and the result is safe to publish), or completely after (so
-                    // it observes the bumped generation or the already-removed entry, and
-                    // discards the result instead).
-                    synchronized (generationCell) {
-                        if (generationCell.get() != expectedGeneration
-                                || !pendingPanelRequests.containsKey(requestId)) {
-                            cleanupPanelRequest(requestId);
-                            return new PanelLinkResult(false, null,
-                                    "Session was invalidated before the request completed");
-                        }
-                    }
-                    return new PanelLinkResult(true, url, null, requestId);
-                }
+        String linkId = creation.linkId();
+        synchronized (generationCell) {
+            // The checks before the create only fence the gap before it. An invalidation (or a quit) while the
+            // create was in flight removed the local entry and/or bumped the generation; neither stops the create
+            // from answering, so the answer is discarded here, under the lock invalidateSession takes.
+            if (generationCell.get() != expectedGeneration || !pendingPanelRequests.containsKey(requestId)) {
                 cleanupPanelRequest(requestId);
-                return new PanelLinkResult(false, null, "Invalid response from API");
-            } else {
-                cleanupPanelRequest(requestId);
-                return new PanelLinkResult(false, null, "API returned status " + response.getStatus());
+                return new PanelLinkResult(false, null,
+                        "Session was invalidated before the request completed");
             }
-        } catch (PanelLinkTransport.NotConnectedException e) {
-            // The server is not logged in to UltiCloud. Since plan 21-18 there is no request without
-            // the server's credential, so this is a visible failure, never a fallback.
-            cleanupPanelRequest(requestId);
-            plugin.getLogger().warn(i18n("log_panel_link_failed").replace("{ERROR}", String.valueOf(e.getMessage())));
-            return new PanelLinkResult(false, null, "Request failed: " + e.getMessage(), null,
-                    PanelLinkResult.Failure.LINK_ERROR);
-        } catch (PanelLinkTransport.CredentialRefusedException e) {
-            cleanupPanelRequest(requestId);
-            plugin.getLogger().warn(i18n("log_panel_credential_refused")
-                    .replace("{STATUS}", String.valueOf(e.getStatus())));
-            return new PanelLinkResult(false, null, "Server credential refused", null,
-                    PanelLinkResult.Failure.CREDENTIAL_REFUSED);
-        } catch (PanelLinkTransport.LinkFailedException e) {
-            cleanupPanelRequest(requestId);
-            plugin.getLogger().warn(i18n("log_panel_link_failed").replace("{ERROR}", String.valueOf(e.getMessage())));
-            return new PanelLinkResult(false, null, "Request failed: " + e.getMessage(), null,
-                    PanelLinkResult.Failure.LINK_ERROR);
-        } catch (Exception e) {
-            cleanupPanelRequest(requestId);
-            plugin.getLogger().warn(i18n("log_panel_link_failed").replace("{ERROR}", String.valueOf(e.getMessage())));
-            return new PanelLinkResult(false, null, "Request failed: " + e.getMessage());
+            pendingPanelRequests.put(linkId, playerUuid);
+            pendingPanelTimestamps.put(linkId, pendingPanelTimestamps.getOrDefault(requestId, clock.getAsLong()));
+            removePanelRequest(requestId);
         }
+        return new PanelLinkResult(true, creation.url(), null, linkId);
+    }
+
+    /**
+     * The identity proofs a link may offer, from what UltiLogin knows: the in-game session only for a player logged
+     * in on this connection, the linked web account always.
+     *
+     * @param loggedIn   whether the player is logged in on this connection
+     * @param hasAccount whether UltiLogin holds an account for the player
+     * @return the proofs to offer, never empty
+     */
+    static java.util.Set<PlayerLinkPort.LinkProof> offeredProofs(boolean loggedIn, boolean hasAccount) {
+        java.util.Set<PlayerLinkPort.LinkProof> proofs = java.util.EnumSet.of(PlayerLinkPort.LinkProof.LINKED_WEB_ACCOUNT);
+        if (loggedIn) {
+            proofs.add(PlayerLinkPort.LinkProof.IN_GAME_SESSION);
+        }
+        return proofs;
+    }
+
+    /**
+     * Wait for a create's answer on the calling (asynchronous) thread, for at most the local create cap. A create
+     * that has not answered by then counts as timed out; an interrupted wait counts as a failure.
+     */
+    private PlayerLinkPort.LinkCreation awaitCreation(java.util.concurrent.CompletableFuture<PlayerLinkPort.LinkCreation> answer) {
+        try {
+            PlayerLinkPort.LinkCreation creation = answer.get(panelCreateCapMillis,
+                    java.util.concurrent.TimeUnit.MILLISECONDS);
+            return creation != null ? creation
+                    : PlayerLinkPort.LinkCreation.failed(PlayerLinkPort.LinkFailure.OTHER, "no answer");
+        } catch (java.util.concurrent.TimeoutException e) {
+            return PlayerLinkPort.LinkCreation.failed(PlayerLinkPort.LinkFailure.TIMED_OUT,
+                    "no answer within " + panelCreateCapMillis + " ms");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return PlayerLinkPort.LinkCreation.failed(PlayerLinkPort.LinkFailure.OTHER, "interrupted");
+        } catch (java.util.concurrent.ExecutionException | RuntimeException e) {
+            return PlayerLinkPort.LinkCreation.failed(PlayerLinkPort.LinkFailure.OTHER, String.valueOf(e.getMessage()));
+        }
+    }
+
+    /** The result of a create that produced no link, after its request was cleaned up; logs to the console. */
+    private PanelLinkResult failedCreation(PlayerLinkPort.LinkCreation creation) {
+        plugin.getLogger().warn(i18n("log_panel_link_failed").replace("{ERROR}", String.valueOf(creation.reason())));
+        PanelLinkResult.Failure failure = creation.failure() == PlayerLinkPort.LinkFailure.NOT_CONNECTED
+                ? PanelLinkResult.Failure.LINK_ERROR : PanelLinkResult.Failure.GENERIC;
+        return new PanelLinkResult(false, null, "Request failed: " + creation.reason(), null, failure);
     }
 
     /**
@@ -1754,8 +1724,8 @@ public class LoginService {
      * the result outright -- no link sent, no poll started.
      *
      * @param playerUuid the player the request was made for
-     * @param requestId the request id published in the {@link PanelLinkResult}, from {@link
-     *                  PanelLinkResult#getRequestId()}
+     * @param requestId the link id published in the {@link PanelLinkResult}, from {@link
+     *                  PanelLinkResult#getLinkId()}
      * @param expectedGeneration the invalidation generation the caller captured before scheduling
      *                           its asynchronous work, from {@link #getInvalidationGeneration
      *                           (UUID)}
@@ -1773,8 +1743,8 @@ public class LoginService {
      * Polls every 3 seconds for up to 5 minutes, then auto-cancels.
      * <p>
      * {@code requestId} is the exact pending request this poll exists to confirm -- captured by
-     * the caller from {@link PanelLinkResult#getUrl()} '}s sibling {@link
-     * PanelLinkResult#getRequestId()} at the moment the link was published, not re-derived here.
+     * the caller from {@link PanelLinkResult#getUrl()}'s sibling {@link
+     * PanelLinkResult#getLinkId()} at the moment the link was published, not re-derived here.
      * {@link #handlePanelPollCompleted(Player, String, boolean)} passes it straight through to
      * {@link #completePanelLogin(String, boolean)}, which only ever resolves this exact id.
      * Before this round, completion was resolved by scanning {@code pendingPanelRequests} for
@@ -1794,7 +1764,7 @@ public class LoginService {
      *                   {@code requestId} through {@link PanelLinkTransport#poll(String, UUID)}
      * @param player the online player
      * @param requestId the pending request id this poll is confirming, from {@link
-     *                  PanelLinkResult#getRequestId()}
+     *                  PanelLinkResult#getLinkId()}
      */
     public void startAuthPolling(String playerUuid, Player player, String requestId) {
         UUID uuid = player.getUniqueId();
@@ -2253,8 +2223,13 @@ public class LoginService {
         }
     }
 
-    /** Tell a paused player, once per pause, that the countdown waits for the web link. */
-    private void announcePanelPause(Player player) {
+    /**
+     * Tell a paused player, once per pause, that the countdown waits for the web link. {@code PanelCommand} calls it
+     * right after delivering a link, so a request that fails never announces a pause.
+     *
+     * @param player the player who just received a link
+     */
+    public void announcePanelPause(Player player) {
         boolean announce;
         synchronized (panelPauseLock) {
             UUID uuid = player.getUniqueId();
@@ -2312,7 +2287,7 @@ public class LoginService {
         private final boolean success;
         private final String url;
         private final String error;
-        private final String requestId;
+        private final String linkId;
         private final Failure failure;
 
         /**
@@ -2337,26 +2312,23 @@ public class LoginService {
         }
 
         /**
-         * @param requestId the pending-request id this result was published under, so a caller
-         *                  that goes on to poll for completion (see {@link #startAuthPolling
-         *                  (String, Player, String)}) keys its poll on the exact request this
-         *                  result corresponds to -- never on "whatever is currently pending" for
-         *                  the player. A review of PR #18 found the latter
-         *                  could pick up an unrelated, newer request. {@code null} for a failed
-         *                  result, since there is nothing to poll for.
+         * @param linkId the link id this result is pending under, so the main-thread re-check
+         *               ({@link #isPanelRequestCurrent(UUID, String, long)}) is keyed on this exact link --
+         *               never on "whatever is currently pending" for the player, which a review of PR #18
+         *               found could pick up an unrelated, newer request. {@code null} for a failed result.
          */
-        public PanelLinkResult(boolean success, String url, String error, String requestId) {
-            this(success, url, error, requestId, success ? Failure.NONE : Failure.GENERIC);
+        public PanelLinkResult(boolean success, String url, String error, String linkId) {
+            this(success, url, error, linkId, success ? Failure.NONE : Failure.GENERIC);
         }
 
         /**
          * @param failure why the link was not published ({@link Failure#NONE} for a published link)
          */
-        public PanelLinkResult(boolean success, String url, String error, String requestId, Failure failure) {
+        public PanelLinkResult(boolean success, String url, String error, String linkId, Failure failure) {
             this.success = success;
             this.url = url;
             this.error = error;
-            this.requestId = requestId;
+            this.linkId = linkId;
             this.failure = failure;
         }
 
@@ -2372,8 +2344,9 @@ public class LoginService {
             return error;
         }
 
-        public String getRequestId() {
-            return requestId;
+        /** @return the gateway's id of the published link, or {@code null} for a failed result */
+        public String getLinkId() {
+            return linkId;
         }
 
         public Failure getFailure() {

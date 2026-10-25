@@ -17,9 +17,9 @@ import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 
 /**
- * Panel command — opens the UltiCloud web panel with magic link authentication.
- * Players can use /panel to get a clickable link that opens the web management panel.
- * 面板命令 - 通过魔法链接认证打开UltiCloud网页面板。
+ * Panel command: asks the framework's UltiCloud player-link API for a one-time link that signs the player in to the
+ * web panel, and sends it as a clickable chat line. The link's completion and expiry arrive later as events.
+ * 面板命令：通过框架的 UltiCloud 玩家链接接口生成一次性网页面板登录链接。
  *
  * @author wisdomme
  * @version 1.0.0
@@ -60,7 +60,7 @@ public class PanelCommand extends BaseCommandExecutor {
         // generation no longer matches. See PR #18.
         long invalidationGeneration = loginService.getInvalidationGeneration(player.getUniqueId());
 
-        // Run async to avoid blocking the main thread (HTTP call)
+        // Run async: the worker waits for the framework's answer to the create, never on the main thread
         Bukkit.getScheduler().runTaskAsynchronously(bukkitPlugin, () -> {
             LoginService.PanelLinkResult result = loginService.requestPanelLink(player, invalidationGeneration);
 
@@ -70,14 +70,14 @@ public class PanelCommand extends BaseCommandExecutor {
                     return;
                 }
 
-                // Revalidate the request one last time, right here, before acting on it. This
-                // callback is itself scheduled -- requestPanelLink()'s own post-POST re-check only closes the gap up to the moment that method returned; an
-                // invalidation landing between that return and this callback actually running on
-                // the main thread would otherwise still let a revoked player receive the magic
-                // link and start a new poll for it. See PR #18.
+                // Revalidate the link one last time, right here, before acting on it. This
+                // callback is itself scheduled -- requestPanelLink()'s own re-check after the create
+                // only closes the gap up to the moment that method returned; an invalidation landing
+                // between that return and this callback actually running on the main thread would
+                // otherwise still let a revoked player receive the link. See PR #18.
                 boolean current = result.isSuccess()
                         && loginService.isPanelRequestCurrent(player.getUniqueId(),
-                                result.getRequestId(), invalidationGeneration);
+                                result.getLinkId(), invalidationGeneration);
 
                 if (current) {
                     String url = result.getUrl();
@@ -92,11 +92,9 @@ public class PanelCommand extends BaseCommandExecutor {
                             plugin.i18n("panel_hover"))).create()));
                     player.spigot().sendMessage(message);
 
-                    // Start polling for auth completion, keyed on the exact request id this
-                    // result was published under -- never on "whatever is currently pending" for
-                    // this player (PR #18).
-                    loginService.startAuthPolling(player.getUniqueId().toString(), player,
-                            result.getRequestId());
+                    // The countdown has been paused since the request existed; say so now that the
+                    // player actually holds a link. The outcome arrives as an event, nothing polls.
+                    loginService.announcePanelPause(player);
                 } else {
                     player.sendMessage(ChatColor.translateAlternateColorCodes('&', failureMessage(result)));
                 }
