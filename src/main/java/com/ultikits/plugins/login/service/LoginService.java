@@ -571,7 +571,7 @@ public class LoginService {
 
     /**
      * Whether a stored password hash means "no game password": the account was created by a web
-     * registration (Phase 18 magic-link contract, section 13) and {@code /setpassword} has not run yet.
+     * registration through {@code /panel} and {@code /setpassword} has not set its backup password yet.
      */
     private static boolean isEmptyHash(String passwordHash) {
         return passwordHash == null || passwordHash.isEmpty();
@@ -601,7 +601,7 @@ public class LoginService {
         // no password can ever match it (fails closed), and do not count it as a wrong password: the
         // player is told to use /panel and then /setpassword (contract section 13).
         if (isEmptyHash(account.getPasswordHash())) {
-            return new LoginResult(false, i18n("login_no_game_password"));
+            return new LoginResult(false, i18n("login_no_game_password_backup"));
         }
         
         // Verify password
@@ -1076,11 +1076,12 @@ public class LoginService {
         // Send prompt based on mode
         if (isRegistered(uuid)) {
             String message;
-            if (config.isGuiModeEnabled() && hasNoGamePassword(uuid)) {
-                // GUI mode never shows the number pad to an account created on the web: no digits
-                // can match its empty password, and the pad would keep the player from typing
-                // /panel (maintainer decision 2026-10-09).
-                message = i18n("login_no_game_password");
+            if (hasNoGamePassword(uuid)) {
+                // An account created on the web has no game password: no password can match it, so
+                // it is pointed at /panel and reminded to set a backup password, in both modes (GUI
+                // mode never shows it the number pad, maintainer decision 2026-10-09; the reminder
+                // on every join is the maintainer's answer to DECISIONS question 1).
+                message = i18n("login_no_game_password_backup");
             } else {
                 message = config.isGuiModeEnabled()
                     ? config.getLoginPromptGui()
@@ -1400,7 +1401,7 @@ public class LoginService {
 
     /**
      * Whether the player has an account and it has no game password -- it was created by a web
-     * registration through {@code /panel} (Phase 18 magic-link contract, section 13).
+     * registration through {@code /panel} and has no backup password yet.
      *
      * @param playerUuid the player
      * @return {@code true} only for an existing account with an empty password hash
@@ -1925,10 +1926,7 @@ public class LoginService {
     private PlayerLinkPort.CompletionResult grant(PlayerLinkPort.LinkCompletion completion,
                                                   PlayerLinkPort.CompletionResult result, Player player) {
         record(completion, result);
-        signIn(player, completion.proof());
-        if (result == PlayerLinkPort.CompletionResult.CREATED) {
-            sendPanelMessage(player, i18n("panel_web_registration_hint"));
-        }
+        signIn(player, completion.proof(), result == PlayerLinkPort.CompletionResult.CREATED);
         return result;
     }
 
@@ -1988,12 +1986,21 @@ public class LoginService {
      * Log the connection that asked in, as {@code /login} does (account last-login fields, remembered session), and
      * tell it so. A connection already logged in is only told the web sign-in is complete; an in-game-session proof
      * never logs a connection in, it only resumes its countdown.
+     * <p>
+     * An account without a game password (one the web created) is reminded after the sign-in line, every time, to
+     * set a backup password with {@code /setpassword} for when UltiCloud cannot be reached, different from the
+     * UltiKits password (maintainer's answer to DECISIONS question 1, option A).
+     *
+     * @param created whether the account was created by this completion (it has no game password)
      */
-    private void signIn(Player player, PlayerLinkPort.LinkProof proof) {
+    private void signIn(Player player, PlayerLinkPort.LinkProof proof, boolean created) {
         UUID playerUuid = player.getUniqueId();
         if (isLoggedIn(playerUuid)) {
             syncPanelPause(playerUuid);
             sendPanelMessage(player, i18n("panel_web_signin_complete"));
+            if (created || hasNoGamePassword(playerUuid)) {
+                sendPanelMessage(player, i18n("panel_backup_password_hint"));
+            }
             return;
         }
         if (proof == PlayerLinkPort.LinkProof.IN_GAME_SESSION) {
@@ -2002,7 +2009,9 @@ public class LoginService {
         }
         completeLogin(player);
         AccountData account = getAccount(playerUuid);
+        boolean noGamePassword = created;
         if (account != null) {
+            noGamePassword = isEmptyHash(account.getPasswordHash());
             account.setLastIp(getPlayerIp(player));
             account.setLastLogin(System.currentTimeMillis());
             account.setLoginCount(account.getLoginCount() + 1);
@@ -2013,6 +2022,9 @@ public class LoginService {
             sessions.put(getPlayerIp(player) + ":" + playerUuid, System.currentTimeMillis());
         }
         sendPanelMessage(player, i18n("panel_signed_in"));
+        if (noGamePassword) {
+            sendPanelMessage(player, i18n("panel_backup_password_hint"));
+        }
     }
 
     /**

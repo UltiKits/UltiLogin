@@ -848,8 +848,8 @@ class LoginServicePanelTest {
             assertThat(result.isSuccess()).isFalse();
             assertThat(service.isLoggedIn(playerUuid)).isFalse();
             assertThat(service.getRemainingAttempts(player)).as("not counted as a wrong password").isEqualTo(5);
-            verify(UltiLoginTestHelper.getMockPlugin()).i18n("login_no_game_password");
-            assertThat(result.getMessage()).isEqualTo(CatalogueText.text("zh", "login_no_game_password"));
+            verify(UltiLoginTestHelper.getMockPlugin()).i18n("login_no_game_password_backup");
+            assertThat(result.getMessage()).isEqualTo(CatalogueText.text("zh", "login_no_game_password_backup"));
         }
 
         @Test
@@ -861,8 +861,8 @@ class LoginServicePanelTest {
 
             assertThat(result.isSuccess()).isFalse();
             assertThat(service.getRemainingAttempts(player)).as("not counted as a wrong password").isEqualTo(5);
-            verify(UltiLoginTestHelper.getMockPlugin()).i18n("login_no_game_password");
-            assertThat(result.getMessage()).isEqualTo(CatalogueText.text("zh", "login_no_game_password"));
+            verify(UltiLoginTestHelper.getMockPlugin()).i18n("login_no_game_password_backup");
+            assertThat(result.getMessage()).isEqualTo(CatalogueText.text("zh", "login_no_game_password_backup"));
         }
 
         @Test
@@ -919,7 +919,31 @@ class LoginServicePanelTest {
             service.onPlayerJoin(player);
 
             verify(player, never()).sendMessage(ChatColor.translateAlternateColorCodes('&', config.getLoginPromptGui()));
-            assertMessage("login_no_game_password", 1);
+            assertMessage("login_no_game_password_backup", 1);
+        }
+
+        @Test
+        @DisplayName("in command mode the join prompt of an account without a game password names /panel and the backup password")
+        void commandModeWebAccountIsPointedAtPanel() {
+            when(config.isGuiModeEnabled()).thenReturn(false);
+            registerWith("", "");
+
+            service.onPlayerJoin(player);
+
+            verify(player, never()).sendMessage(ChatColor.translateAlternateColorCodes('&', config.getLoginPrompt()));
+            assertMessage("login_no_game_password_backup", 1);
+        }
+
+        @Test
+        @DisplayName("control: in command mode an account with a game password gets the configured login prompt")
+        void commandModeAccountWithPasswordGetsLoginPrompt() {
+            when(config.isGuiModeEnabled()).thenReturn(false);
+            registerWith("hash", "salt");
+
+            service.onPlayerJoin(player);
+
+            verify(player).sendMessage(ChatColor.translateAlternateColorCodes('&', config.getLoginPrompt()));
+            assertMessage("login_no_game_password_backup", 0);
         }
 
         @Test
@@ -931,7 +955,7 @@ class LoginServicePanelTest {
             service.onPlayerJoin(player);
 
             verify(player).sendMessage(ChatColor.translateAlternateColorCodes('&', config.getLoginPromptGui()));
-            assertMessage("login_no_game_password", 0);
+            assertMessage("login_no_game_password_backup", 0);
         }
     }
 
@@ -953,11 +977,11 @@ class LoginServicePanelTest {
             "log_panel_link_handler_unavailable",
             "log_panel_completion_failed",
             "log_web_account_create_failed",
-            "panel_web_registration_hint",
+            "panel_backup_password_hint",
             "panel_not_registered_in_game",
-            "login_no_game_password",
+            "login_no_game_password_backup",
             "command_setpassword_description",
-            "help_setpassword",
+            "help_setpassword_backup",
             "setpassword_success",
             "setpassword_already_set",
             "setpassword_failed");
@@ -968,6 +992,9 @@ class LoginServicePanelTest {
             "log_auth_poll_error",
             "panel_auth_success_owner",
             "panel_auth_success_player",
+            "panel_web_registration_hint",
+            "login_no_game_password",
+            "help_setpassword",
             "panel_outcome_refused_identity_bound_elsewhere",
             "panel_outcome_refused_game_login_required",
             "panel_outcome_refused_link_not_permitted",
@@ -998,6 +1025,20 @@ class LoginServicePanelTest {
         for (String key : REMOVED_KEYS) {
             assertThat(en).as("lang/en.json").doesNotContainKey(key);
             assertThat(zh).as("lang/zh.json").doesNotContainKey(key);
+        }
+    }
+
+    @Test
+    @DisplayName("D-12: the three backup-password texts name UltiCloud and ask for a password other than the UltiKits one, in both languages")
+    void backupPasswordTextsNameUltiCloudAndTheDifferentPassword() {
+        Map<String, String> en = CatalogueText.entries("en");
+        Map<String, String> zh = CatalogueText.entries("zh");
+        for (String key : Arrays.asList("panel_backup_password_hint", "login_no_game_password_backup",
+                "help_setpassword_backup")) {
+            assertThat(en.get(key)).as("en %s", key).contains("UltiCloud", "backup", "UltiKits");
+            assertThat(en.get(key)).as("en %s asks for a different password", key)
+                    .containsAnyOf("different from your UltiKits", "not your UltiKits");
+            assertThat(zh.get(key)).as("zh %s", key).contains("UltiCloud", "备用", "不要", "UltiKits");
         }
     }
 }

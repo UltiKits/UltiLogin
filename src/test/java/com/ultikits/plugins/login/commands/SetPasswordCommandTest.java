@@ -26,7 +26,8 @@ import static org.mockito.Mockito.when;
 
 /**
  * {@code /setpassword <new> <confirm>}: a player whose account was created on the web (empty game
- * password) sets their first game password while logged in (Phase 18 magic-link contract, section 13).
+ * password) sets their first game password, the backup password for when UltiCloud cannot be reached, while
+ * logged in.
  */
 @DisplayName("SetPasswordCommand")
 class SetPasswordCommandTest {
@@ -161,7 +162,7 @@ class SetPasswordCommandTest {
 
             command.help(player);
 
-            verify(player).sendMessage(contains("/setpassword"));
+            verify(player).sendMessage(contains(text("help_setpassword_backup")));
             verify(player).sendMessage(contains("6-32"));
         }
     }

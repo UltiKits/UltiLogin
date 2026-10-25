@@ -627,10 +627,10 @@ public class LoginProtectionListener implements Listener {
                     UUID uuid = player.getUniqueId();
                     // An account created on the web has no game password, so the number pad can
                     // never succeed and would keep the player from typing /panel: tell them to
-                    // log in with /panel instead (maintainer decision 2026-10-09).
+                    // log in with /panel and set a backup password (maintainer decision 2026-10-09).
                     if (loginService.isRegistered(uuid) && loginService.hasNoGamePassword(uuid)) {
                         player.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                            loginService.i18n("login_no_game_password")));
+                            loginService.i18n("login_no_game_password_backup")));
                         return;
                     }
                     // Mark this player as mid-transition before opening the new credential GUI.
@@ -671,7 +671,13 @@ public class LoginProtectionListener implements Listener {
                 // already-authenticated player. Re-check exactly what the GUI branch checks
                 // before sending anything.
                 if (player.isOnline() && !loginService.isLoggedIn(player.getUniqueId())) {
-                    if (loginService.isRegistered(player.getUniqueId())) {
+                    UUID uuid = player.getUniqueId();
+                    if (loginService.isRegistered(uuid) && loginService.hasNoGamePassword(uuid)) {
+                        // No password can match an account created on the web: point it at /panel
+                        // and the backup password, as the GUI branch does.
+                        player.sendMessage(ChatColor.translateAlternateColorCodes('&',
+                            loginService.i18n("login_no_game_password_backup")));
+                    } else if (loginService.isRegistered(uuid)) {
                         player.sendMessage(ChatColor.translateAlternateColorCodes('&',
                             loginService.getConfig().getLoginPrompt()));
                     } else {

@@ -256,6 +256,22 @@ class LoginProtectionListenerTest {
         }
 
         @Test
+        @DisplayName("text mode: an account created on the web is re-prompted with the backup-password line, not the login prompt")
+        void textModeWebAccountGetsTheBackupPasswordLine() {
+            when(mockServer.isPrimaryThread()).thenReturn(true);
+            when(config.isGuiModeEnabled()).thenReturn(false);
+            when(loginService.isRegistered(playerUuid)).thenReturn(true);
+            when(loginService.hasNoGamePassword(playerUuid)).thenReturn(true);
+            when(loginService.i18n("login_no_game_password_backup")).thenReturn("&cUse /panel, then /setpassword");
+
+            LoginProtectionListener.presentCredentialPrompt(
+                    player, UltiLoginTestHelper.getMockPlugin(), loginService, mockBukkitPlugin);
+
+            verify(player).sendMessage(ChatColor.translateAlternateColorCodes('&', "&cUse /panel, then /setpassword"));
+            verify(player, times(1)).sendMessage(anyString());
+        }
+
+        @Test
         @DisplayName("Should skip the prompt and log a warning, without throwing, when the plugin is disabling")
         void skipsWhenPluginDisabling() {
             when(mockServer.isPrimaryThread()).thenReturn(false);
@@ -1415,7 +1431,7 @@ class LoginProtectionListenerTest {
             Runnable task = captureReopenTask();
             when(loginService.isRegistered(playerUuid)).thenReturn(true);
             when(loginService.hasNoGamePassword(playerUuid)).thenReturn(true);
-            when(loginService.i18n("login_no_game_password")).thenReturn("&cUse /panel, then /setpassword");
+            when(loginService.i18n("login_no_game_password_backup")).thenReturn("&cUse /panel, then /setpassword");
 
             try (MockedStatic<LoginGUIPage> loginGui = mockStatic(LoginGUIPage.class);
                  MockedStatic<RegisterGUIPage> registerGui = mockStatic(RegisterGUIPage.class)) {

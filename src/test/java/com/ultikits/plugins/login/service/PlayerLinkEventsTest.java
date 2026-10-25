@@ -28,6 +28,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -47,6 +48,7 @@ import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
@@ -741,5 +743,63 @@ class PlayerLinkEventsTest {
         assertThat(answer).isCompletedExceptionally();
         assertThat(paused()).isFalse();
         assertThat(service.isLoggedIn(playerUuid)).isFalse();
+    }
+
+    // ==================== the backup-password reminder (maintainer's answer to DECISIONS question 1: A) ====================
+
+    @Nested
+    @DisplayName("backup-password reminder after a sign-in")
+    class BackupPasswordHint {
+
+        private void assertSignedInThenHint() {
+            InOrder order = inOrder(player);
+            order.verify(player).sendMessage(
+                    ChatColor.translateAlternateColorCodes('&', CatalogueText.text("zh", "panel_signed_in")));
+            order.verify(player).sendMessage(
+                    ChatColor.translateAlternateColorCodes('&', CatalogueText.text("zh", "panel_backup_password_hint")));
+        }
+
+        @Test
+        @DisplayName("a web registration: signed-in line, then the backup-password hint")
+        void afterWebRegistration() throws Exception {
+            setAccount(null, null);
+            service.onPlayerJoin(player);
+            String link = openLink();
+
+            deliver(completion("C1", link, LinkProof.WEB_REGISTRATION, true));
+
+            assertSignedInThenHint();
+            assertMessage("panel_backup_password_hint", 1);
+        }
+
+        @Test
+        @DisplayName("every later /panel login of an account still without a game password gets the hint again")
+        void afterEveryLaterLogin() throws Exception {
+            when(config.isSessionEnabled()).thenReturn(false);
+            setAccount("", "");
+            service.onPlayerJoin(player);
+            String first = openLink();
+            deliver(completion("C1", first, LinkProof.LINKED_WEB_ACCOUNT, false));
+            service.onPlayerQuit(player);
+            service.onPlayerJoin(player);
+            String second = openLink();
+
+            deliver(completion("C2", second, LinkProof.LINKED_WEB_ACCOUNT, false));
+
+            assertMessage("panel_signed_in", 2);
+            assertMessage("panel_backup_password_hint", 2);
+        }
+
+        @Test
+        @DisplayName("an account with a game password never gets the hint")
+        void accountWithPasswordGetsNoHint() throws Exception {
+            service.onPlayerJoin(player);
+            String link = openLink();
+
+            deliver(completion("C1", link, LinkProof.LINKED_WEB_ACCOUNT, false));
+
+            assertMessage("panel_signed_in", 1);
+            assertMessage("panel_backup_password_hint", 0);
+        }
     }
 }
