@@ -364,8 +364,7 @@ IP 计数在该地址最近一次失败的 `lockout-duration` 秒后过期；BOT
 
 ### Passwords in the server log / 服务器日志中的密码
 
-Paper writes every player command line to the console and `logs/latest.log`, and UltiTools-API 6.3.0 also mirrors the
-console to the UltiPanel log stream. While UltiLogin is enabled it keeps a filter on the server's log (Log4j's root
+Paper writes every player command line to the server's own console and `logs/latest.log`. While UltiLogin is enabled it keeps a filter on the server's log (Log4j's root
 logger) that replaces the arguments of its password commands with `******`: `/login`, `/l`, `/register`, `/reg`,
 `/changepassword`, `/changepw`, `/cpw`, `/setpassword`, `/setpw`, `/recover`, and `/logadmin reset` (also
 `/loginadmin reset`), in any letter case and with or without a namespace such as `ultitools:`. The console then shows
@@ -375,13 +374,23 @@ commands' own declarations, so a new alias is covered automatically. The filter 
 unloaded. If the server's logging is not Log4j Core, the module logs a warning at start-up and these lines are not
 masked. Two cases the filter cannot cover are listed under "Known limitations" above.
 
-Paper 会把玩家输入的每条命令写入控制台和 `logs/latest.log`，UltiTools-API 6.3.0 还会把控制台同步到 UltiPanel 面板日志流。
+On UltiTools-API 6.3.1 the module also registers `/login`, `/l`, `/register`, `/reg`, `/changepassword`, `/changepw`,
+`/cpw`, `/setpassword`, `/setpw`, `/recover`, `/logadmin`, `/loginadmin` and `/regs` with the framework, which replaces
+their arguments with `***` in everything it sends to UltiCloud (the panel console, error reports, chat). The local
+console and log files keep the module's own `******` mask, and `/regs` stays readable locally.
+
+Paper 会把玩家输入的每条命令写入服务器本地的控制台和 `logs/latest.log`。
 UltiLogin 启用期间会在服务器日志（Log4j 根日志器）上挂一个过滤器，把其密码类命令的参数替换为 `******`：`/login`、`/l`、
 `/register`、`/reg`、`/changepassword`、`/changepw`、`/cpw`、`/setpassword`、`/setpw`、`/recover` 以及 `/logadmin reset`
 （也包括 `/loginadmin reset`），不区分大小写，带或不带 `ultitools:` 之类的命名空间前缀均可。控制台上显示为
 `Steve issued server command: /login ******`，登录尝试仍然可见，但看不到密码。其他命令照常记录（其他插件中同名的命令也会被遮蔽）。
 命令列表取自命令本身的声明，新增别名会自动覆盖。模块卸载时过滤器随之移除。若服务器的日志系统不是 Log4j Core，模块会在启动时
 输出一条警告，这些命令行不会被遮蔽。过滤器无法覆盖的两种情况见上文"已知限制"。
+
+在 UltiTools-API 6.3.1 上，模块还会把 `/login`、`/l`、`/register`、`/reg`、`/changepassword`、`/changepw`、`/cpw`、
+`/setpassword`、`/setpw`、`/recover`、`/logadmin`、`/loginadmin` 和 `/regs` 登记到框架，框架发往 UltiCloud 的所有内容
+（面板控制台、错误报告、聊天）中，这些命令的参数都会被替换为 `***`。本地控制台与日志文件仍使用模块自己的 `******` 遮蔽，
+`/regs` 在本地照常可见。
 
 ### 会话保持
 

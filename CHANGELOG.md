@@ -5,6 +5,28 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 本文件记录本项目的所有重要更改，格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)。
 
+## [Unreleased]
+
+### Added
+
+- On UltiTools-API 6.3.1 the module registers `/login`, `/l`, `/register`, `/reg`, `/changepassword`, `/changepw`,
+  `/cpw`, `/setpassword`, `/setpw`, `/recover`, `/logadmin`, `/loginadmin` and `/regs` with the framework's
+  sensitive-command registry when it is enabled, so their arguments are replaced with `***` in everything the
+  framework sends to UltiCloud (the panel console, error reports and chat). The list is taken from the commands' own
+  declarations: every alias of every command that takes arguments. The local console and log files keep the module's
+  own `******` mask, which is unchanged.
+- 在 UltiTools-API 6.3.1 上，模块启用时会把 `/login`、`/l`、`/register`、`/reg`、`/changepassword`、`/changepw`、`/cpw`、
+  `/setpassword`、`/setpw`、`/recover`、`/logadmin`、`/loginadmin` 和 `/regs` 登记到框架的敏感命令表，框架发往 UltiCloud 的所有内容
+  （面板控制台、错误报告、聊天）中，这些命令的参数都会被替换为 `***`。列表取自命令本身的声明：凡是带参数的命令，其全部别名都会登记。
+  本地控制台与日志文件仍使用模块自己的 `******` 遮蔽，规则不变。
+
+### Changed
+
+- Requires UltiTools-API 6.3.1 or later. `api-version` rises from 630 to 631, so UltiTools-API 6.3.0 refuses this
+  version at load with a warning that the UltiTools version is outdated.
+- 需要 UltiTools-API 6.3.1 或更高版本。`api-version` 从 630 提高到 631，UltiTools-API 6.3.0 会在加载时拒绝此版本，并警告
+  UltiTools 版本过旧。
+
 ## [2.0.0] - 2026-10-21
 
 ### Added
