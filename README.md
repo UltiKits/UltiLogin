@@ -86,7 +86,7 @@ What the player sees in game:
 | Signed in on the page | "You have been logged in via UltiCloud." |
 | A player who was already logged in finishes a web sign-in | "The web panel sign-in is complete." |
 | Signed in to an account that has no game password (always the case for one created on the web) | the line above, then "Your account has no game password yet. Set a backup password with /setpassword <password> <confirm>: it lets you log in with /login when UltiCloud cannot be reached. Use a password different from your UltiKits account." |
-| `/login` or a join, for such an account that is not logged in | "This account was created on the web and has no game password yet. Log in with /panel, then set a backup password with /setpassword <password> <confirm> for when UltiCloud cannot be reached (different from your UltiKits account)." |
+| `/login` or a join, for such an account that is not logged in | "This account was created on the web and has no game password yet. Log in with /panel, then set a backup password with /setpassword <password> <confirm> for when UltiCloud cannot be reached (different from your UltiKits password)." |
 | Cancelled on the page, or a newer `/panel` replaced the link | "You cancelled the web panel sign-in. Run /panel again for a new link." |
 | Refused by the page | "The web panel refused this sign-in." |
 | Link expired | "Your web panel link has expired. Run /panel again for a new one." |
