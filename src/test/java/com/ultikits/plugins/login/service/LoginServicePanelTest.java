@@ -47,6 +47,9 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -99,6 +102,7 @@ class LoginServicePanelTest {
     private final long[] now = {1_000_000_000L};
 
     private FakePort port;
+    private BukkitScheduler scheduler;
 
     /** One recorded create. */
     private static final class Create {
@@ -173,7 +177,7 @@ class LoginServicePanelTest {
         doReturn(player).when(server).getPlayer(playerUuid);
         setRegistered(true);
 
-        BukkitScheduler scheduler = spy(server.getScheduler());
+        scheduler = spy(server.getScheduler());
         doAnswer(invocation -> {
             Runnable runnable = invocation.getArgument(1);
             runnable.run();
@@ -582,6 +586,166 @@ class LoginServicePanelTest {
         }
     }
 
+    // ==================== local expiry at expiresAt (D-10) ====================
+
+    @Nested
+    @DisplayName("a link ends locally at its clamped expiresAt")
+    class LocalExpiry {
+
+        private void assertKicked(int times) {
+            verify(player, times(times)).kickPlayer(anyString());
+        }
+
+        @Test
+        @DisplayName("expiresAt = now + 300 s: pending at 299 s, ended at 301 s with one expiry line, countdown resumes with the time that was left")
+        void endsAtExpiresAt() {
+            service.onPlayerJoin(player);
+            advance(55);
+            openLink();                       // expires at 355 s; 5 s of the countdown were left
+
+            advance(299);                     // 354 s
+            service.checkTimeouts();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isTrue();
+            assertKicked(0);
+
+            advance(2);                       // 356 s
+            service.checkTimeouts();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+            assertMessage("panel_outcome_expired", 1);
+            assertMessage("panel_timeout_resumed", 1);
+            assertKicked(0);
+
+            advance(4);                       // 4 s after the resume
+            service.checkTimeouts();
+            assertKicked(0);
+
+            advance(2);                       // 6 s after the resume: past the 5 s that were left
+            service.checkTimeouts();
+            assertKicked(1);
+            assertMessage("panel_outcome_expired", 1);
+        }
+
+        @Test
+        @DisplayName("expiresAt in the past counts as now + 60 s")
+        void pastExpiryIsClampedToSixtySeconds() {
+            port.answer = () -> port.createdExpiringIn(-10);
+            openLink();
+
+            advance(59);
+            service.checkTimeouts();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isTrue();
+
+            advance(2);
+            service.checkTimeouts();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+            assertMessage("panel_outcome_expired", 1);
+        }
+
+        @Test
+        @DisplayName("expiresAt two hours ahead counts as now + 600 s")
+        void farExpiryIsClampedToTenMinutes() {
+            port.answer = () -> port.createdExpiringIn(7200);
+            openLink();
+
+            advance(599);
+            service.checkTimeouts();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isTrue();
+
+            advance(2);
+            service.checkTimeouts();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+            assertMessage("panel_outcome_expired", 1);
+        }
+
+        @Test
+        @DisplayName("a request whose create has not answered ends at the 45-second local cap, silently, and its late answer is discarded")
+        void inFlightCreateEndsAtTheLocalCap() throws Exception {
+            CompletableFuture<LinkCreation> inFlight = new CompletableFuture<>();
+            CountDownLatch created = new CountDownLatch(1);
+            port.answer = () -> inFlight;
+            port.duringCreate = created::countDown;
+            AtomicReference<LoginService.PanelLinkResult> result = new AtomicReference<>();
+            Thread worker = new Thread(() -> result.set(service.requestPanelLink(player)), "panel-test-worker");
+            worker.start();
+            assertThat(created.await(10, TimeUnit.SECONDS)).as("the worker reached the create").isTrue();
+
+            advance(44);
+            service.checkTimeouts();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isTrue();
+
+            advance(2);
+            service.checkTimeouts();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+
+            inFlight.complete(LinkCreation.created("LATE", LINK_URL + "LATE", Instant.ofEpochMilli(now[0] + 300_000L),
+                    EnumSet.of(LinkProof.LINKED_WEB_ACCOUNT)));
+            worker.join(10_000L);
+            assertThat(worker.isAlive()).as("the worker returned").isFalse();
+            assertThat(result.get().isSuccess()).as("the late link is discarded").isFalse();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+            assertMessage("panel_outcome_expired", 0);
+        }
+
+        @Test
+        @DisplayName("two links: the earlier ends silently, only the player's latest link announces its expiry")
+        void onlyTheLatestLinkAnnounces() {
+            openLink();                       // A, expires at +300 s
+            advance(10);
+            openLink();                       // B, expires at +310 s
+
+            advance(291);                     // A is past its expiry, B is not
+            service.checkTimeouts();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).as("B is still pending").isTrue();
+            assertMessage("panel_outcome_expired", 0);
+
+            advance(10);
+            service.checkTimeouts();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+            assertMessage("panel_outcome_expired", 1);
+        }
+
+        @Test
+        @DisplayName("an earlier link that outlives the latest one still ends silently")
+        void earlierLinkOutlivingTheLatestStaysSilent() {
+            port.answer = () -> port.createdExpiringIn(600);
+            openLink();                       // A, expires at +600 s
+            port.answer = () -> port.createdExpiringIn(100);
+            openLink();                       // B (latest), expires at +100 s
+
+            advance(101);
+            service.checkTimeouts();
+            assertMessage("panel_outcome_expired", 1);
+
+            advance(500);
+            service.checkTimeouts();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+            assertMessage("panel_outcome_expired", 1);
+        }
+
+        @Test
+        @DisplayName("/panel starts no repeating scheduler task")
+        void noRepeatingTask() {
+            service.onPlayerJoin(player);
+            openLink();
+            advance(30);
+            service.checkTimeouts();
+
+            verify(scheduler, never()).runTaskTimerAsynchronously(any(Plugin.class), any(Runnable.class), anyLong(),
+                    anyLong());
+            verify(scheduler, never()).runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(), anyLong());
+        }
+
+        @Test
+        @DisplayName("shutdown forgets every pending link")
+        void shutdownForgetsPendingLinks() {
+            openLink();
+
+            service.shutdown();
+
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+        }
+    }
+
     // ==================== login timeout while a link is pending ====================
 
     @Nested
@@ -879,7 +1043,6 @@ class LoginServicePanelTest {
 
     private static final List<String> PANEL_KEYS = Arrays.asList(
             "panel_outcome_expired",
-            "panel_outcome_refused",
             "panel_timeout_paused",
             "panel_timeout_resumed",
             "panel_link_error",
@@ -896,7 +1059,14 @@ class LoginServicePanelTest {
 
     private static final List<String> REMOVED_KEYS = Arrays.asList(
             "panel_credential_refused",
-            "log_panel_credential_refused");
+            "log_panel_credential_refused",
+            "log_auth_poll_error",
+            "panel_outcome_refused",
+            "panel_outcome_refused_identity_bound_elsewhere",
+            "panel_outcome_refused_game_login_required",
+            "panel_outcome_refused_link_not_permitted",
+            "panel_outcome_refused_too_many_attempts",
+            "panel_outcome_cancelled");
 
     private static final Pattern PLACEHOLDER = Pattern.compile("\\{[A-Za-z_]+}");
 

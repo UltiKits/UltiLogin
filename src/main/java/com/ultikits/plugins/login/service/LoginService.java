@@ -36,9 +36,6 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
-import com.ultikits.ultitools.utils.SimpleHttpClient;
 
 /**
  * Service for managing player login and registration.
@@ -124,36 +121,22 @@ public class LoginService {
     // Random generator for password generation
     private final SecureRandom random = new SecureRandom();
 
-    // Pending panel login requests (requestId -> player UUID)
+    // Pending /panel requests (id -> player UUID). A request is pending under a local id while its create is in
+    // flight and under the gateway's link id once the link exists (requestPanelLink re-keys it under the
+    // invalidation lock), never under both.
     private final Map<String, UUID> pendingPanelRequests = new ConcurrentHashMap<>();
 
-    // Pending panel request timestamps (requestId -> creation time)
-    private final Map<String, Long> pendingPanelTimestamps = new ConcurrentHashMap<>();
+    // When each pending request ends locally (id -> clock millis): the local create cap while the create is in
+    // flight, then the link's expiresAt clamped to 60 s .. 10 min from receipt (cleanupExpiredPanelRequests).
+    private final Map<String, Long> pendingPanelDeadlines = new ConcurrentHashMap<>();
 
-    // Active polling tasks per pending panel-link request (requestId -> task).
-    //
-    // This map used to be keyed by player UUID.
-    // Starting a new poll (B) for a player always cancels+replaces whatever task was previously
-    // stored under that UUID -- correct, since a new /panel request supersedes an old one. But
-    // BukkitTask#cancel() only prevents a task's *future* scheduled executions; it does not
-    // interrupt an execution already blocked inside its own HTTP call. If poll A's HTTP call was
-    // still in flight when B started and replaced A's map entry, A's own "completed" observation
-    // -- arriving later, on the same in-flight invocation -- would still run its cleanup step,
-    // which removed and cancelled *whatever task the map currently held for that UUID*: B's, not
-    // A's. handlePanelPollCompleted correctly refused to complete A's own (already-superseded)
-    // request, but B's task was killed anyway, permanently stalling B's still-valid magic link.
-    // Keying this map by request id instead means each poll's own cleanup can only ever touch
-    // its own entry, never a replacement's, regardless of which HTTP call returns first. See
-    // currentPollingRequestId below for how a player's *current* poll is still resolved for the
-    // unconditional-cancellation callers (cancelPendingPanelRequest, onPlayerQuit).
-    private final Map<String, BukkitTask> pollingTasks = new ConcurrentHashMap<>();
+    // Local ids of pending requests whose create has not answered yet; such a request ends silently.
+    private final java.util.Set<String> panelCreatesInFlight = ConcurrentHashMap.newKeySet();
 
-    // The request id of whichever poll is currently active for a player (playerUUID ->
-    // requestId), maintained alongside pollingTasks above. It lets
-    // cancelPendingPanelRequest(UUID) and onPlayerQuit(Player) -- which must unconditionally stop
-    // whatever poll is active for a player, regardless of its request id -- resolve "the active
-    // poll for this player" without scanning pollingTasks.
-    private final Map<UUID, String> currentPollingRequestId = new ConcurrentHashMap<>();
+    // The id of each player's latest /panel request (player -> id), following the re-key to the link id. Only that
+    // link announces its local expiry; an earlier one, which the gateway cancels when the newer one is created,
+    // ends silently. Cleared when the player's pending requests are dropped (quit, invalidation).
+    private final Map<UUID, String> latestPanelRequest = new ConcurrentHashMap<>();
 
     // Players currently mid-transition between credential GUIs (e.g. LoginGUIPage ->
     // RegisterGUIPage after an admin unregister revoked them while a GUI was open) -- consulted
@@ -181,28 +164,23 @@ public class LoginService {
     // every 10 ticks indefinitely.
     private final Map<UUID, BukkitTask> pendingCredentialGuiReopenTasks = new ConcurrentHashMap<>();
 
-    // The poll transport of the 2.0.0 flow, still read by startAuthPolling; links are created through
-    // playerLinkPort below.
-    private volatile PanelLinkTransport panelLinkTransport = new HelperPanelLinkTransport();
-
     // /panel creates its link only through the framework's player-link API (see PlayerLinkPort); tests
     // replace it with a fake.
     private volatile PlayerLinkPort playerLinkPort;
 
+    // The bounds a created link's local lifetime is clamped to (see linkDeadline).
+    private static final long MIN_LINK_LIFETIME_MILLIS = 60_000L;
+    private static final long MAX_LINK_LIFETIME_MILLIS = 600_000L;
+
     // How long /panel's asynchronous worker waits for a create to answer (tests shorten it).
     private volatile long panelCreateCapMillis = 45_000L;
-
-    // Pending panel requests whose link the web has reported cancelled (requestId). A cancelled link
-    // stays completable until it expires, so the request stays pending and its poll goes on; this set
-    // only makes sure the player is told once per request (Phase 18 magic-link contract, section 13).
-    private final java.util.Set<String> reportedCancelledPanelRequests = ConcurrentHashMap.newKeySet();
 
     // The clock the login timeout and the /panel link lifetime read (tests replace it).
     private volatile java.util.function.LongSupplier clock = System::currentTimeMillis;
 
-    // Login-timeout pause while a /panel link is pending (Phase 18 magic-link contract, section 13).
-    // A player's countdown is paused while at least one of their pending requests has not been
-    // reported cancelled; panelPausedAt records when the pause began, and on resume the join time
+    // Login-timeout pause while a /panel link is pending.
+    // A player's countdown is paused while at least one of their requests is pending; panelPausedAt
+    // records when the pause began, and on resume the join time
     // moves forward by the paused span, so the countdown continues with exactly the time that was
     // left. All transitions go through syncPanelPause under panelPauseLock.
     private final Map<UUID, Long> panelPausedAt = new ConcurrentHashMap<>();
@@ -230,16 +208,6 @@ public class LoginService {
      */
     public String i18n(String key) {
         return plugin.i18n(key);
-    }
-
-    /**
-     * Replace the transport {@code /panel} uses to reach the Worker (tests only; production always uses
-     * {@link HelperPanelLinkTransport}).
-     *
-     * @param transport the transport to use from now on
-     */
-    void setPanelLinkTransport(PanelLinkTransport transport) {
-        this.panelLinkTransport = transport;
     }
 
     /**
@@ -275,12 +243,6 @@ public class LoginService {
      */
     @PreDestroy
     public void shutdown() {
-        // Cancel all polling tasks
-        for (BukkitTask task : pollingTasks.values()) {
-            task.cancel();
-        }
-        pollingTasks.clear();
-        currentPollingRequestId.clear();
         // Cancel all queued credential-GUI reopen tasks.
         for (BukkitTask task : pendingCredentialGuiReopenTasks.values()) {
             task.cancel();
@@ -297,8 +259,9 @@ public class LoginService {
         lockedIps.clear();
         lockedUuids.clear();
         pendingPanelRequests.clear();
-        pendingPanelTimestamps.clear();
-        reportedCancelledPanelRequests.clear();
+        pendingPanelDeadlines.clear();
+        panelCreatesInFlight.clear();
+        latestPanelRequest.clear();
         panelPausedAt.clear();
         panelPauseAnnounced.clear();
         invalidationGenerations.clear();
@@ -748,63 +711,35 @@ public class LoginService {
     }
 
     /**
-     * Cancel any in-flight UltiCloud panel magic-link request (and its polling task) for a
-     * player. This is a single entry point reached via invalidateSession, so every
-     * credential-changing path (unregister, both resetPassword overloads, changePassword)
-     * cancels a pending /panel request the same way -- rather than a deleted or credential-reset
-     * account being logged back in when the worker later confirms an authentication that was
-     * requested before the account changed.
+     * End every pending {@code /panel} request of a player, in flight or created, and resume their countdown. The
+     * single entry point reached via invalidateSession, so every credential-changing path (unregister, both
+     * resetPassword overloads, changePassword) ends a pending link the same way -- rather than a deleted or
+     * credential-reset account being logged back in by a completion of a link requested before the account changed.
      *
-     * @param playerUuid the player whose pending panel request should be cancelled
+     * @param playerUuid the player whose pending panel requests end
      */
     private void cancelPendingPanelRequest(UUID playerUuid) {
         dropPendingPanelRequests(playerUuid);
-        cancelActivePollingTask(playerUuid);
         syncPanelPause(playerUuid);
     }
 
     /**
-     * Forget every pending {@code /panel} request of a player, with all its bookkeeping (timestamp,
-     * reported-cancelled mark), without touching the poll or the countdown pause.
-     * A completion that arrives afterwards finds no pending request and logs nobody in.
+     * Forget every pending {@code /panel} request of a player, with all its bookkeeping (deadline, in-flight mark,
+     * latest-link pointer), without touching the countdown pause. A completion or a create answer that arrives
+     * afterwards finds no pending request and logs nobody in.
      *
      * @param playerUuid the player whose pending requests are forgotten
      */
     private void dropPendingPanelRequests(UUID playerUuid) {
         pendingPanelRequests.entrySet().removeIf(entry -> {
             if (entry.getValue().equals(playerUuid)) {
-                pendingPanelTimestamps.remove(entry.getKey());
-                reportedCancelledPanelRequests.remove(entry.getKey());
+                pendingPanelDeadlines.remove(entry.getKey());
+                panelCreatesInFlight.remove(entry.getKey());
                 return true;
             }
             return false;
         });
-    }
-
-    /**
-     * Unconditionally cancel and remove whichever polling task is currently active for a player,
-     * if any.
-     * <p>
-     * {@code pollingTasks} is now keyed by request id (see its field javadoc), so an
-     * unconditional "stop this player's polling" caller cannot remove by player UUID directly.
-     * This resolves the player's current request id via {@link #currentPollingRequestId} first.
-     * Unlike the per-poll self-cleanup inside {@link #startAuthPolling(String, Player, String)}
-     * (which must only ever touch its own entry), this method is deliberately unconditional: it
-     * is only ever called by paths that mean to stop <em>all</em> polling for this player right
-     * now (an invalidation, or the player disconnecting), so removing "whatever is currently
-     * active" is exactly the intended behavior here, not the race the per-poll cleanup guards
-     * against.
-     *
-     * @param playerUuid the player whose active polling task, if any, should be cancelled
-     */
-    private void cancelActivePollingTask(UUID playerUuid) {
-        String requestId = currentPollingRequestId.remove(playerUuid);
-        if (requestId != null) {
-            BukkitTask task = pollingTasks.remove(requestId);
-            if (task != null) {
-                task.cancel();
-            }
-        }
+        latestPanelRequest.remove(playerUuid);
     }
 
     /**
@@ -1118,7 +1053,6 @@ public class LoginService {
         // A link belongs to the connection that asked for it: a completion still in flight when the
         // player left must not log in whoever joins next under the same name (gate-1 review F1).
         dropPendingPanelRequests(uuid);
-        cancelActivePollingTask(uuid);
         clearPanelPause(uuid);
     }
     
@@ -1637,7 +1571,9 @@ public class LoginService {
             // Track the pending request -- this insert and the generation check above must stay
             // atomic with each other (see javadoc above); nothing else belongs inside this lock.
             pendingPanelRequests.put(requestId, playerUuid);
-            pendingPanelTimestamps.put(requestId, clock.getAsLong());
+            pendingPanelDeadlines.put(requestId, clock.getAsLong() + panelCreateCapMillis);
+            panelCreatesInFlight.add(requestId);
+            latestPanelRequest.put(playerUuid, requestId);
             // The countdown pauses from the moment the request exists; the player is told once the
             // link is actually delivered (announcePanelPause), so a failed request resumes silently.
             syncPanelPause(playerUuid);
@@ -1662,7 +1598,8 @@ public class LoginService {
                         "Session was invalidated before the request completed");
             }
             pendingPanelRequests.put(linkId, playerUuid);
-            pendingPanelTimestamps.put(linkId, pendingPanelTimestamps.getOrDefault(requestId, clock.getAsLong()));
+            pendingPanelDeadlines.put(linkId, linkDeadline(creation.expiresAt()));
+            latestPanelRequest.replace(playerUuid, requestId, linkId);
             removePanelRequest(requestId);
         }
         return new PanelLinkResult(true, creation.url(), null, linkId);
@@ -1693,6 +1630,17 @@ public class LoginService {
             proofs.add(PlayerLinkPort.LinkProof.WEB_REGISTRATION);
         }
         return proofs;
+    }
+
+    /**
+     * When a created link ends locally: its {@code expiresAt}, converted to this server's clock at receipt and
+     * clamped to between 60 seconds and 10 minutes from now, so a clock that disagrees with the gateway's can neither
+     * end the link at once nor hold the login countdown longer than ten minutes.
+     */
+    private long linkDeadline(java.time.Instant expiresAt) {
+        long receipt = clock.getAsLong();
+        long remaining = expiresAt.toEpochMilli() - receipt;
+        return receipt + Math.max(MIN_LINK_LIFETIME_MILLIS, Math.min(MAX_LINK_LIFETIME_MILLIS, remaining));
     }
 
     /** Whether the operator's {@code max-register-per-ip} forbids another account from {@code ip}. */
@@ -1758,11 +1706,11 @@ public class LoginService {
      * via {@code Bukkit.getScheduler().runTask(...)} after the worker thread's blocking HTTP call
      * already returned -- so an invalidation landing in that final gap (between {@code
      * requestPanelLink}'s return and this callback actually executing on the main thread) could
-     * still let a revoked player receive the magic link and start a new poll. Calling this at the
+     * still let a revoked player receive the link. Calling this at the
      * top of that callback, under the same per-player lock {@link #invalidateSession(UUID)}
      * synchronizes on, closes that last gap: a {@code false} result means the generation moved on
      * or the request itself was already cancelled/completed elsewhere, and the caller must discard
-     * the result outright -- no link sent, no poll started.
+     * the result outright -- no link sent, no pause announced.
      *
      * @param playerUuid the player the request was made for
      * @param requestId the link id published in the {@link PanelLinkResult}, from {@link
@@ -1779,278 +1727,10 @@ public class LoginService {
         }
     }
 
-    /**
-     * Start polling the Worker API for auth completion.
-     * Polls every 3 seconds for up to 5 minutes, then auto-cancels.
-     * <p>
-     * {@code requestId} is the exact pending request this poll exists to confirm -- captured by
-     * the caller from {@link PanelLinkResult#getUrl()}'s sibling {@link
-     * PanelLinkResult#getLinkId()} at the moment the link was published, not re-derived here.
-     * {@link #handlePanelPollCompleted(Player, String, boolean)} passes it straight through to
-     * {@link #completePanelLogin(String, boolean)}, which only ever resolves this exact id.
-     * Before this round, completion was resolved by scanning {@code pendingPanelRequests} for
-     * "whatever is currently pending" for this player -- if this poll's own request had already
-     * been cancelled (e.g. by an invalidation) but a newer, unrelated request happened to be
-     * pending for the same player by the time this poll's HTTP call returned "completed", that
-     * scan would pick up the newer request and authenticate through it instead of failing
-     * closed.
-     * <p>
-     * {@code requestId} is also this poll's own key into {@code pollingTasks} (see that field's
-     * javadoc) -- every removal/cancellation this method's own scheduled runnable performs below
-     * is scoped to {@code requestId} specifically, never to "whatever task is currently stored
-     * for this player". Cancelling a task that was already superseded by a newer poll for the
-     * same player must never remove or cancel that newer poll's own task.
-     *
-     * @param playerUuid the player's UUID string; kept for callers, the poll itself is keyed by
-     *                   {@code requestId} through {@link PanelLinkTransport#poll(String, UUID)}
-     * @param player the online player
-     * @param requestId the pending request id this poll is confirming, from {@link
-     *                  PanelLinkResult#getLinkId()}
-     */
-    public void startAuthPolling(String playerUuid, Player player, String requestId) {
-        UUID uuid = player.getUniqueId();
-
-        // A new poll always supersedes whichever request was previously current for this
-        // player -- resolved via currentPollingRequestId, not by scanning pollingTasks, since
-        // pollingTasks is now keyed by request id rather than player UUID.
-        String previousRequestId = currentPollingRequestId.put(uuid, requestId);
-        if (previousRequestId != null) {
-            BukkitTask existing = pollingTasks.remove(previousRequestId);
-            if (existing != null) {
-                existing.cancel();
-            }
-        }
-
-        // The one transport, captured once so every tick of this poll uses the same one.
-        final PanelLinkTransport transport = panelLinkTransport;
-        final int maxPolls = 100; // 100 * 3s = 5 minutes
-        final int[] pollCount = {0};
-
-        BukkitTask task = Bukkit.getScheduler().runTaskTimerAsynchronously(bukkitPlugin, () -> {
-            pollCount[0]++;
-
-            if (!player.isOnline() || pollCount[0] > maxPolls) {
-                // Remove/cancel only this poll's own task, keyed by its own request id (round
-                // 11) -- never "whatever task pollingTasks currently holds for this player".
-                stopOwnPoll(uuid, requestId);
-                return;
-            }
-
-            try {
-                SimpleHttpClient.Response response = transport.poll(requestId, uuid);
-                if (!response.isOk()) {
-                    return;
-                }
-
-                JsonObject body = JsonParser.parseString(response.getBody()).getAsJsonObject();
-                JsonObject data = body.has("data") && body.get("data").isJsonObject()
-                    ? body.getAsJsonObject("data") : null;
-                if (data == null) {
-                    return;
-                }
-
-                dispatchPanelPollStatus(player, uuid, requestId, stringOrNull(data, "status"), data,
-                        transport.credentialed());
-            } catch (Exception e) {
-                plugin.getLogger().debug(i18n("log_auth_poll_error").replace("{ERROR}", String.valueOf(e.getMessage())));
-            }
-        }, 60L, 60L); // 60 ticks = 3 seconds
-
-        pollingTasks.put(requestId, task);
-        announcePanelPause(player);
-    }
-
-    /**
-     * Act on one poll's {@code status}, on the poll's own (asynchronous) thread: decide whether this
-     * poll goes on, and hand every state change and message to the main thread.
-     * <p>
-     * Phase 18 magic-link contract, sections 7 and 13. {@code refused}, {@code expired} and {@code
-     * completed} are final, so this poll stops itself; {@code cancelled} is not (the link stays
-     * completable until it expires), so the poll goes on. Any other status -- {@code pending}, or one
-     * this version does not know -- keeps polling silently. Only {@code completed} can reach {@link
-     * #completePanelLogin(String, boolean)}; every other branch ends without logging anyone in.
-     *
-     * @param player    the player the poll is running for
-     * @param uuid      that player's UUID
-     * @param requestId the request this poll confirms
-     * @param status    the reported status, or {@code null} when the response carried none
-     * @param data      the response's {@code data} object
-     * @param credentialed whether the link was created with the server's credential; only then is the
-     *                     {@code proof} of a completion read (contract sections 7 and 14)
-     */
-    private void dispatchPanelPollStatus(Player player, UUID uuid, String requestId, String status, JsonObject data,
-                                         boolean credentialed) {
-        if (status == null) {
-            return;
-        }
-        switch (status) {
-            case "completed": {
-                // Auth completed -- remove/cancel only this poll's own task, keyed by its own
-                // request id: see the class-level javadoc on pollingTasks for why a stale,
-                // superseded poll's completion must never touch a replacement's task.
-                stopOwnPoll(uuid, requestId);
-                final boolean isServerOwner = data.has("is_server_owner")
-                    && !data.get("is_server_owner").isJsonNull()
-                    && data.get("is_server_owner").getAsBoolean();
-                // A proof is trusted only from a transport that vouches for the server's credential
-                // (contract sections 7 and 14); the local pending-request map is not authentication.
-                final String proof = credentialed ? stringOrNull(data, "proof") : null;
-                // Complete login on main thread, resolving by the exact request id this poll was
-                // started for -- see handlePanelPollCompleted's javadoc for why.
-                Bukkit.getScheduler().runTask(bukkitPlugin,
-                        () -> handlePanelPollCompleted(player, requestId, isServerOwner, proof));
-                return;
-            }
-            case "cancelled":
-                if (!reportedCancelledPanelRequests.contains(requestId)) {
-                    Bukkit.getScheduler().runTask(bukkitPlugin, () -> handlePanelPollCancelled(player, requestId));
-                }
-                return;
-            case "refused": {
-                stopOwnPoll(uuid, requestId);
-                final String reason = stringOrNull(data, "reason");
-                Bukkit.getScheduler().runTask(bukkitPlugin, () -> handlePanelPollRefused(player, requestId, reason));
-                return;
-            }
-            case "expired":
-                stopOwnPoll(uuid, requestId);
-                Bukkit.getScheduler().runTask(bukkitPlugin, () -> handlePanelPollExpired(player, requestId));
-                return;
-            default:
-                // pending, or a status this version does not know: keep polling, say nothing.
-        }
-    }
-
-    /**
-     * Cancel and remove this poll's own task, and clear the player's current-poll pointer only if it
-     * still names this request -- never a newer poll's (see {@code pollingTasks}).
-     */
-    private void stopOwnPoll(UUID uuid, String requestId) {
-        BukkitTask self = pollingTasks.remove(requestId);
-        if (self != null) {
-            self.cancel();
-        }
-        currentPollingRequestId.remove(uuid, requestId);
-    }
-
-    /**
-     * The web reported this link cancelled: tell the player once. The request stays pending and its
-     * poll goes on, because a cancelled link stays completable until it expires.
-     */
-    private void handlePanelPollCancelled(Player player, String requestId) {
-        UUID owner = pendingPanelRequests.get(requestId);
-        if (owner == null || !reportedCancelledPanelRequests.add(requestId)) {
-            return;
-        }
-        sendPanelMessage(player, i18n("panel_outcome_cancelled"));
-        // A cancelled link no longer holds the countdown, although its poll goes on.
-        syncPanelPause(owner);
-    }
-
-    /**
-     * The web refused this link: end the request and tell the player why. Nobody is logged in.
-     * A request that is no longer pending (completed, or cancelled by a credential change) is left
-     * alone and nothing is said.
-     */
-    private void handlePanelPollRefused(Player player, String requestId, String reason) {
-        if (pendingPanelRequests.get(requestId) == null) {
-            return;
-        }
-        cleanupPanelRequest(requestId);
-        sendPanelMessage(player, panelRefusalMessage(reason));
-    }
-
-    /**
-     * The web reports this link expired: end the request and tell the player. Nobody is logged in.
-     */
-    private void handlePanelPollExpired(Player player, String requestId) {
-        if (pendingPanelRequests.get(requestId) == null) {
-            return;
-        }
-        cleanupPanelRequest(requestId);
-        sendPanelMessage(player, i18n("panel_outcome_expired"));
-    }
-
-    /**
-     * The player-facing text for a refusal reason (contract section 7's reason vocabulary); a reason
-     * this version does not know still reads as a refusal.
-     */
-    private String panelRefusalMessage(String reason) {
-        if (reason == null) {
-            return i18n("panel_outcome_refused");
-        }
-        switch (reason) {
-            case "identity_bound_elsewhere":
-                return i18n("panel_outcome_refused_identity_bound_elsewhere");
-            case "game_login_required":
-                return i18n("panel_outcome_refused_game_login_required");
-            case "link_not_permitted":
-                return i18n("panel_outcome_refused_link_not_permitted");
-            case "too_many_attempts":
-                return i18n("panel_outcome_refused_too_many_attempts");
-            default:
-                return i18n("panel_outcome_refused");
-        }
-    }
-
     private static void sendPanelMessage(Player player, String message) {
         if (player.isOnline()) {
             player.sendMessage(ChatColor.translateAlternateColorCodes('&', message));
         }
-    }
-
-    private static String stringOrNull(JsonObject object, String key) {
-        return object.has(key) && object.get(key).isJsonPrimitive() ? object.get(key).getAsString() : null;
-    }
-
-    /**
-     * Handle a poll's own observation that the panel magic-link request is "completed", on the
-     * main thread.
-     * <p>
-     * Resolves strictly by the exact {@code requestId} this poll was started for -- see {@link
-     * #startAuthPolling(String, Player, String)} -- and delegates to {@link
-     * #completePanelLogin(String, boolean)}, which independently re-validates that this specific
-     * id is still pending (and still belongs to a registered account) before granting anything.
-     * Every path that removes a pending request ({@link #cancelPendingPanelRequest(UUID)},
-     * reached via {@link #invalidateSession(UUID)} from account deletion, both password-reset
-     * overloads, and password change; or {@link #completePanelLogin(String, boolean)}'s own
-     * cleanup) runs on this same main thread, so whichever removal happened first is guaranteed
-     * to be visible here.
-     * <p>
-     * Fixes a defect found in review of PR #18 (against the deleted-account fix): the original
-     * implementation looked up the request ID once, on the same call stack as the async HTTP
-     * fetch, and treated "not found" as authorization to call {@link #completeLogin(Player)}
-     * directly -- bypassing {@link #completePanelLogin(String, boolean)} 's registration check
-     * entirely. {@link BukkitTask#cancel()} only prevents a scheduled task's future executions;
-     * it does not interrupt an invocation already inside its HTTP call. A poll that started
-     * before an admin reset or unregister could therefore still observe "completed" and
-     * re-authenticate an online player after their credentials were revoked or their account
-     * deleted -- undoing {@code forceReauthenticationIfOnline} in the same stroke.
-     * <p>
-     * An earlier fix replaced that with a fresh lookup at this main-thread completion point,
-     * scanning {@code pendingPanelRequests} for whichever entry was pending for this player --
-     * an improvement, but still not keyed on this specific poll's own request.
-     * A review of PR #18 found that scan could pick up an unrelated, <em>newer</em> request for
-     * the same player: if this poll's original request had already been cancelled but the
-     * player had since started a fresh {@code /panel} request, the stale "completed"
-     * observation would authenticate through the newer request instead of failing.
-     * Passing {@code requestId} straight through from {@link #startAuthPolling(String, Player,
-     * String)} removes the scan entirely -- absence of exactly this id in {@code
-     * pendingPanelRequests} (checked inside {@link #completePanelLogin(String, boolean)}) means
-     * either this login was already completed by another path, or this request was cancelled
-     * because the account changed; either way, nothing else pending for this player is eligible
-     * to be picked up instead.
-     *
-     * @param player the online player the poll was running for
-     * @param requestId the exact pending request id this poll was started for
-     * @param isServerOwner whether the confirmed panel session reported server-owner status
-     * @param proof the completion's proof on a credentialed link, else {@code null}
-     */
-    private void handlePanelPollCompleted(Player player, String requestId, boolean isServerOwner, String proof) {
-        if (!player.isOnline()) {
-            return;
-        }
-        completePanelLogin(requestId, isServerOwner, proof);
     }
 
     /**
@@ -2214,22 +1894,14 @@ public class LoginService {
      * @return the player the request belonged to, or {@code null} if it was not pending
      */
     private UUID removePanelRequest(String requestId) {
-        pendingPanelTimestamps.remove(requestId);
-        reportedCancelledPanelRequests.remove(requestId);
+        pendingPanelDeadlines.remove(requestId);
+        panelCreatesInFlight.remove(requestId);
         return pendingPanelRequests.remove(requestId);
     }
 
-    /**
-     * Whether any of the player's pending requests holds the login countdown: pending, and not
-     * reported cancelled by the web (contract section 13).
-     */
+    /** Whether any request of the player is pending, in flight or created: each one holds the login countdown. */
     private boolean holdsLoginTimeout(UUID playerUuid) {
-        for (Map.Entry<String, UUID> entry : pendingPanelRequests.entrySet()) {
-            if (entry.getValue().equals(playerUuid) && !reportedCancelledPanelRequests.contains(entry.getKey())) {
-                return true;
-            }
-        }
-        return false;
+        return pendingPanelRequests.containsValue(playerUuid);
     }
 
     /**
@@ -2290,27 +1962,27 @@ public class LoginService {
     }
 
     /**
-     * Clean up expired panel requests (older than 5 minutes).
+     * End every pending request whose local deadline has passed (called every second from {@link #checkTimeouts()}).
+     * <p>
+     * A created link ends at its clamped {@code expiresAt} ({@link #linkDeadline}): the framework sends no expiry of
+     * its own for a link whose time simply passed, so this is where the link counts as expired. The player is told
+     * ({@code panel_outcome_expired}) only for their latest link; an earlier one ends silently. A request whose create
+     * has not answered ends silently at the local create cap -- the worker still waiting on it reports the failure
+     * itself and discards a late answer, because the request is no longer pending. Either way the countdown resumes
+     * with exactly the time that was left once no request of the player is pending.
      */
     public void cleanupExpiredPanelRequests() {
         long now = clock.getAsLong();
-        long expiry = 5 * 60 * 1000L; // 5 minutes
         java.util.List<String> expired = new java.util.ArrayList<>();
-        for (Map.Entry<String, Long> entry : pendingPanelTimestamps.entrySet()) {
-            if (now - entry.getValue() > expiry) {
+        for (Map.Entry<String, Long> entry : pendingPanelDeadlines.entrySet()) {
+            if (now > entry.getValue()) {
                 expired.add(entry.getKey());
             }
         }
-        for (String requestId : expired) {
-            UUID owner = pendingPanelRequests.get(requestId);
-            // Tell the player when this was the link being polled for them (or nothing is being
-            // polled any more): an older link a newer /panel superseded expires silently.
-            String polled = owner == null ? null : currentPollingRequestId.get(owner);
-            boolean tell = owner != null && (polled == null || polled.equals(requestId));
-            if (owner != null) {
-                stopOwnPoll(owner, requestId);
-            }
-            removePanelRequest(requestId);
+        for (String id : expired) {
+            UUID owner = pendingPanelRequests.get(id);
+            boolean tell = owner != null && !panelCreatesInFlight.contains(id) && id.equals(latestPanelRequest.get(owner));
+            removePanelRequest(id);
             if (owner != null) {
                 Player player = Bukkit.getPlayer(owner);
                 if (tell && player != null) {
