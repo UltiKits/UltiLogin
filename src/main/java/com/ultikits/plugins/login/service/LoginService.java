@@ -124,8 +124,8 @@ public class LoginService {
     private final SecureRandom random = new SecureRandom();
 
     // Pending /panel requests (id -> player UUID). A request is pending under a local id while its create is in
-    // flight and under the gateway's link id once the link exists (requestPanelLink re-keys it under the
-    // invalidation lock), never under both.
+    // flight and under the gateway's link id once main-thread publishPanelCreation re-keys it under the
+    // player's generation cell, never under both.
     private final Map<String, UUID> pendingPanelRequests = new ConcurrentHashMap<>();
 
     // When each pending request ends locally (id -> clock millis): the local create cap while the create is in
@@ -173,6 +173,23 @@ public class LoginService {
     // The bounds a created link's local lifetime is clamped to (see linkDeadline).
     private static final long MIN_LINK_LIFETIME_MILLIS = 60_000L;
     private static final long MAX_LINK_LIFETIME_MILLIS = 600_000L;
+
+    // Keep each creating address through the link's local deadline plus the gateway's 24h redelivery window.
+    // Quit, invalidation and local end must not erase it. Pruned every second and on receipt; no load-based eviction.
+    private static final long LINK_ORIGIN_GRACE_MILLIS = 86_400_000L;
+    private final Map<String, PanelLinkOrigin> panelLinkOrigins = new ConcurrentHashMap<>();
+
+    private static final class PanelLinkOrigin {
+        private final UUID playerUuid;
+        private final String ip;
+        private final long retainUntil;
+
+        private PanelLinkOrigin(UUID playerUuid, String ip, long retainUntil) {
+            this.playerUuid = playerUuid;
+            this.ip = ip;
+            this.retainUntil = retainUntil;
+        }
+    }
 
     // How long /panel's asynchronous worker waits for a create to answer (tests shorten it).
     private volatile long panelCreateCapMillis = 45_000L;
@@ -308,6 +325,7 @@ public class LoginService {
         lockedUuids.clear();
         pendingPanelRequests.clear();
         pendingPanelDeadlines.clear();
+        panelLinkOrigins.clear();
         panelCreatesInFlight.clear();
         latestPanelRequest.clear();
         panelPausedAt.clear();
@@ -1585,8 +1603,9 @@ public class LoginService {
      * only if the captured generation still matches; that check and the insert run inside a block synchronized on the
      * player's generation cell, the lock {@link #invalidateSession(UUID)} takes around its bump-and-cancel, so an
      * invalidation either lands before (the check refuses) or after (its cancellation finds the entry). The same
-     * cell orders the non-blocking create and callback registration with event scheduling, including an answer that
-     * arrives before create returns. The callback queues main-thread publication before either event can be queued;
+     * cell is held across create and callback registration to order them with event scheduling, including an answer
+     * that arrives before create returns. Every operation under this cell must be non-blocking. The callback queues
+     * main-thread publication before either event can be queued;
      * only that task re-keys the local id to the gateway's link id, after checking the generation and local entry
      * again. An invalidation or quit in flight discards the link. The worker waits outside the lock, for at most
      * the local create cap (45 seconds), for publication rather than just the raw create answer. A timeout and
@@ -1615,7 +1634,8 @@ public class LoginService {
             // A failed read is not an absent account or spare registration capacity. Return a failure to the
             // command worker so it can still schedule its existing main-thread error message.
             boolean accountExists = isRegistered(playerUuid);
-            if (!accountExists && registrationLimitReached(getPlayerIp(player))) {
+            String requestingIp = getPlayerIp(player);
+            if (!accountExists && registrationLimitReached(requestingIp)) {
                 return new PanelLinkResult(false, null, "Registration limit reached for this address", null,
                         PanelLinkResult.Failure.IP_LIMIT);
             }
@@ -1633,6 +1653,12 @@ public class LoginService {
                 playerLinkPort.create(playerUuid, playerName, authenticated, accountExists,
                         offeredProofs(authenticated, accountExists)).whenComplete((creation, error) -> {
                     try {
+                        // Remember even a create whose publication is now stale: its completion can arrive late.
+                        if (error == null && creation != null && creation.isSuccess()) {
+                            prunePanelLinkOrigins(clock.getAsLong());
+                            panelLinkOrigins.put(creation.linkId(), new PanelLinkOrigin(playerUuid, requestingIp,
+                                    linkDeadline(creation.expiresAt()) + LINK_ORIGIN_GRACE_MILLIS));
+                        }
                         queuePanelTask(playerUuid, () -> publishPanelCreation(playerUuid, requestId,
                                 expectedGeneration, generationCell, publication, creation, error));
                     } catch (RuntimeException e) {
@@ -1941,9 +1967,10 @@ public class LoginService {
 
     /**
      * A completion whose link is no longer pending for the connection that asked (DECISIONS item 10): a requested
-     * account is still created, without an address (the asking connection's is unknown, so the per-address limit is
-     * not checked), and nobody is logged in. A player online under another connection and not logged in is told to
-     * run {@code /panel} again.
+     * account still obeys the creating address's cap and records that address while it is retained. After a restart
+     * (or beyond the retention window) the address is unknown: the account has an empty address and skips the cap.
+     * Nobody is logged in. A player online under another connection and not logged in is told to run {@code /panel}
+     * again.
      */
     private PlayerLinkPort.CompletionResult answerLateCompletion(PlayerLinkPort.LinkCompletion completion,
                                                                   AccountData account, Player player) {
@@ -1953,10 +1980,20 @@ public class LoginService {
                     : PlayerLinkPort.CompletionResult.NOT_REQUESTED;
         } else if (!completion.provisionGameAccount()) {
             result = PlayerLinkPort.CompletionResult.NOT_REQUESTED;
-        } else if (insertWebAccount(completion.playerUuid(), completion.playerName(), "")) {
-            result = PlayerLinkPort.CompletionResult.CREATED;
         } else {
-            result = PlayerLinkPort.CompletionResult.AUTH_PLUGIN_UNAVAILABLE;
+            PanelLinkOrigin origin = panelLinkOrigins.get(completion.linkId());
+            if (origin != null && clock.getAsLong() > origin.retainUntil) {
+                panelLinkOrigins.remove(completion.linkId(), origin);
+                origin = null;
+            }
+            String ip = origin != null && origin.playerUuid.equals(completion.playerUuid()) ? origin.ip : "";
+            if (!ip.isEmpty() && registrationLimitReached(ip)) {
+                result = PlayerLinkPort.CompletionResult.REGISTRATION_REJECTED;
+            } else {
+                result = insertWebAccount(completion.playerUuid(), completion.playerName(), ip)
+                        ? PlayerLinkPort.CompletionResult.CREATED
+                        : PlayerLinkPort.CompletionResult.AUTH_PLUGIN_UNAVAILABLE;
+            }
         }
         record(completion, result);
         if (player != null && player.isOnline() && !isLoggedIn(completion.playerUuid())) {
@@ -2189,6 +2226,10 @@ public class LoginService {
         }
     }
 
+    private void prunePanelLinkOrigins(long now) {
+        panelLinkOrigins.entrySet().removeIf(entry -> now > entry.getValue().retainUntil);
+    }
+
     /**
      * End every pending request whose local deadline has passed (called every second from {@link #checkTimeouts()}).
      * <p>
@@ -2201,6 +2242,7 @@ public class LoginService {
      */
     public void cleanupExpiredPanelRequests() {
         long now = clock.getAsLong();
+        prunePanelLinkOrigins(now);
         java.util.List<String> expired = new java.util.ArrayList<>();
         for (Map.Entry<String, Long> entry : pendingPanelDeadlines.entrySet()) {
             if (now > entry.getValue()) {

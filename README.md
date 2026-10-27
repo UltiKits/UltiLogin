@@ -156,10 +156,13 @@ UltiLogin 2.1.0 不会在更旧的 UltiTools-API 版本上加载。
 - **A pending link pauses the login countdown for at most ten minutes.** A player who has not logged in can keep the
   countdown paused by running `/panel` again; each link holds it for at most ten minutes. They still cannot move, chat
   or use commands other than the allowed ones while it is paused.
-- **A web sign-in that arrives late creates an account if one was asked for, but logs nobody in.** If the player left,
-  the server restarted, their password changed or the link had already ended locally, the account is still created (with
-  no game password), nobody is logged in, and a player who is online and not logged in is told to run `/panel` again.
-  The address of such an account is empty, so it is not counted against `max-register-per-ip`.
+- **A web sign-in that arrives late can create a requested account, but logs nobody in.** If the player left,
+  their password changed or the link had already ended locally, the requesting address is still checked against
+  `max-register-per-ip`; a successful creation records that address and has no game password. Nobody is logged in,
+  and a player who is online and not logged in is told to run `/panel` again. Addresses are kept in memory until each
+  link's local deadline (60 seconds to ten minutes after receipt) plus the 24-hour redelivery window, not evicted by
+  newer links. After a restart, that address is unknown: a requested account is created with an empty address and
+  does not count against the limit.
 - **A crash between creating the account and UltiTools-API recording the answer makes UltiCloud's redelivery answer
   "account exists".** The account itself is untouched; only the answer UltiCloud receives differs.
 - **An existing account that completes a web sign-in keeps its password hash, salt and identity.** Its last IP, last login
@@ -170,8 +173,8 @@ UltiLogin 2.1.0 不会在更旧的 UltiTools-API 版本上加载。
 - **A per-IP registration limit also applies to web registrations** (see below). It is checked when `/panel` creates the
   link, so the web page is not offered a registration the game would refuse, and again when the web sign-in finishes: if
   the address reached the limit in between, nothing is created, nobody is logged in and the player sees the limit
-  message. A sign-in finished after the player left creates the account without counting its address (see the first
-  item above).
+  message on the requesting connection. Quitting does not bypass the check; only an unknown address after a restart
+  escapes it during the redelivery window (see the late-sign-in limitation above).
 - **A session auto-login counts as "logged in in game" for `/panel`.** With `session-enabled: true` (the default), a
   player who rejoins from the same IP within `session-timeout` is logged in without a password, and may then link the
   name to an UltiKits account on the web. On an offline-mode server where players share a public IP, someone else
@@ -193,14 +196,16 @@ UltiLogin 2.1.0 不会在更旧的 UltiTools-API 版本上加载。
 
 - **待处理的链接最多暂停登录倒计时十分钟。** 未登录的玩家可以再次执行 `/panel` 让倒计时继续暂停，每个链接最多十分钟；暂停期间仍
   不能移动、聊天或执行未放行的命令。
-- **迟到的网页登录：要求建号就建号，但不让任何人登录。** 若玩家已退出、服务器重启过、其密码已改，或链接已在本地结束，账号仍会创建
-  （没有游戏密码），但不会让任何人登录；此刻在线且未登录的玩家会被提示重新执行 `/panel`。这类账号的地址为空，不计入 `max-register-per-ip`。
+- **迟到的网页登录可以按请求建号，但不让任何人登录。** 若玩家已退出、其密码已改，或链接已在本地结束，仍会按请求时的地址检查
+  `max-register-per-ip`；允许建号时会记录该地址，账号没有游戏密码，但不会让任何人登录；此刻在线且未登录的玩家会被提示重新执行 `/panel`。
+  地址保存在内存中，直到各链接的本地期限（收到链接后 60 秒至十分钟）再加 24 小时重投窗口，不会被新链接挤掉。服务器重启后地址才会未知：
+  此时要求创建的账号地址为空，不计入上限。
 - **建号成功后、UltiTools-API 记下回执前服务器崩溃，UltiCloud 重投时会被回执为"账号已存在"。** 账号本身不受影响，只是 UltiCloud 收到的回执不同。
 - **已有账号完成网页登录时，密码哈希、盐和身份保持不变。** 其最后登录 IP、最后登录时间和登录次数会像 `/login` 一样更新。
 - **网页注册尚未完成时在游戏内注册，会保留游戏内账号。** 若玩家在网页注册完成前执行了 `/register`，游戏内注册的账号（及其游戏密码）
   保持不变，网页登录回执"账号已存在"，玩家被登录。
 - **同一 IP 注册数限制同样适用于网页注册**（见下文）：创建链接时就会检查，网页不会被提供游戏会拒绝的注册；网页登录完成时再检查一次，若这段时间内
-  该地址已达上限，则不建号、不登录，玩家看到上限提示。玩家退出后才完成的登录会创建不计地址的账号（见第一条）。
+  该地址已达上限，则不建号、不登录，请求链接的当前连接会看到上限提示。退出不能绕过检查；重投窗口内只有重启后未知的地址不受此检查（见上面的迟到登录限制）。
 - **会话自动登录在 `/panel` 中视为"已在游戏内登录"。** 在 `session-enabled: true`（默认）下，于 `session-timeout` 内从同一 IP
   重进的玩家无需密码即被登录，随后可在网页上把该名字关联到 UltiKits 账号。在玩家共用公网 IP 的离线模式服务器上，他人若在这段
   时间内从该 IP 以尚未关联的名字进入，就可能把它关联到自己的账号。此类服务器请关闭会话（`session-enabled: false`），或尽早关联

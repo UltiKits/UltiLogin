@@ -434,32 +434,52 @@ class PlayerLinkEventsTest {
 
     @Test
     void createAlreadyCompletedBeforeReturningStillPublishesBeforeItsExpiry() throws Exception {
-        CountDownLatch eventEntered = new CountDownLatch(1);
         AtomicReference<Thread> eventThread = new AtomicReference<>();
         port.answer = () -> {
             CompletableFuture<LinkCreation> answer = CompletableFuture.completedFuture(LinkCreation.created(
                     "INLINE", LINK_URL + "INLINE", Instant.ofEpochMilli(now[0] + 300_000L),
                     EnumSet.of(LinkProof.LINKED_WEB_ACCOUNT)));
-            Thread delivery = new Thread(() -> {
-                eventEntered.countDown();
-                port.handler.onExpired(new LinkExpiry("INLINE", playerUuid, LinkExpiry.Reason.CANCELLED));
-            }, "panel-inline-event");
+            Thread delivery = new Thread(() -> port.handler.onExpired(
+                    new LinkExpiry("INLINE", playerUuid, LinkExpiry.Reason.CANCELLED)), "panel-inline-event");
             eventThread.set(delivery);
             delivery.start();
-            try {
-                assertThat(eventEntered.await(10, TimeUnit.SECONDS)).isTrue();
-            } catch (InterruptedException e) {
-                throw new AssertionError(e);
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            while (delivery.getState() != Thread.State.BLOCKED && delivery.isAlive()
+                    && System.nanoTime() < deadline) {
+                java.util.concurrent.locks.LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
             }
+            assertThat(delivery.getState()).as("event must block on the generation cell before create returns")
+                    .isEqualTo(Thread.State.BLOCKED);
             return answer;
         };
         service.onPlayerJoin(player);
-        openLink();
-        eventThread.get().join(10_000L);
+        CompletableFuture<LoginService.PanelLinkResult> result = new CompletableFuture<>();
+        Thread worker = new Thread(() -> {
+            try {
+                result.complete(service.requestPanelLink(player));
+            } catch (Throwable failure) {
+                result.completeExceptionally(failure);
+            }
+        }, "panel-inline-create");
+        worker.start();
+        try {
+            Runnable publication = mainThread.poll(10, TimeUnit.SECONDS);
+            assertThat(publication).as("first queued task is publication").isNotNull();
+            publication.run();
+            assertThat(service.isPanelRequestCurrent(playerUuid, "INLINE", service.getInvalidationGeneration(playerUuid)))
+                    .as("publication ran before the end event").isTrue();
+            Runnable end = mainThread.poll(10, TimeUnit.SECONDS);
+            assertThat(end).as("second queued task is the end event").isNotNull();
+            end.run();
+            assertThat(service.hasPendingPanelRequest(playerUuid)).as("end event ran after publication").isFalse();
+            assertThat(result.get(10, TimeUnit.SECONDS).isSuccess()).isTrue();
+            assertThat(paused()).isFalse();
+        } finally {
+            worker.join(10_000L);
+            if (eventThread.get() != null) { eventThread.get().join(10_000L); }
+        }
+        assertThat(worker.isAlive()).isFalse();
         assertThat(eventThread.get().isAlive()).isFalse();
-        runMainThread();
-        assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
-        assertThat(paused()).isFalse();
     }
 
     // ==================== registration ====================
@@ -762,7 +782,7 @@ class PlayerLinkEventsTest {
     class LateCompletions {
 
         @Test
-        @DisplayName("F1: the player quit and rejoined -> nobody logged in, the account is still created with an empty register IP, the late line")
+        @DisplayName("F1: quit and rejoin retains the requesting address, creates the account but logs nobody in")
         void quitAndRejoin() throws Exception {
             setAccount(null, null);
             String link = openLink();
@@ -774,15 +794,15 @@ class PlayerLinkEventsTest {
 
             AccountData row = inserted();
             assertThat(row.getPasswordHash()).isEmpty();
-            assertThat(row.getRegisterIp()).as("the address of the connection that asked is unknown").isEmpty();
+            assertThat(row.getRegisterIp()).as("quit does not lose the requesting address").isEqualTo("127.0.0.1");
             assertThat(row.getPlayerName()).isEqualTo("TestPlayer");
             assertThat(service.isLoggedIn(playerUuid)).isFalse();
             assertMessage("panel_late_completion", 1);
         }
 
         @Test
-        @DisplayName("the per-address limit is not checked without a current connection")
-        void lateProvisionSkipsTheAddressLimit() throws Exception {
+        @DisplayName("an unknown address after restart still skips the cap and stores empty IPs")
+        void lateProvisionWithUnknownAddressKeepsRestartBehaviour() throws Exception {
             setAccount(null, null);
             when(config.getMaxRegisterPerIp()).thenReturn(1);
             oneAccountAlreadyFromThisAddress();
@@ -790,7 +810,192 @@ class PlayerLinkEventsTest {
 
             assertThat(deliver(completion("C1", "from-before-restart", LinkProof.WEB_REGISTRATION, true)))
                     .isEqualTo(CompletionResult.CREATED);
+            assertThat(inserted().getRegisterIp()).isEmpty();
+            assertThat(inserted().getLastIp()).isEmpty();
             verify(player, never()).sendMessage(anyString());
+        }
+
+        @Test
+        void quitRetainsTheCapAndRedeliveryRepeatsTheRejection() throws Exception {
+            setAccount(null, null);
+            String link = openLink();
+            service.onPlayerQuit(player);
+            doReturn(null).when(server).getPlayer(playerUuid);
+            when(config.getMaxRegisterPerIp()).thenReturn(1);
+            oneAccountAlreadyFromThisAddress();
+            LinkCompletion event = completion("LATE-CAP", link, LinkProof.WEB_REGISTRATION, true);
+
+            assertThat(deliver(event)).as("late provisioning must enforce the requesting IP's cap")
+                    .isEqualTo(CompletionResult.REGISTRATION_REJECTED);
+            when(config.getMaxRegisterPerIp()).thenReturn(0);
+            assertThat(deliver(event)).as("redelivery must not recompute the recorded rejection")
+                    .isEqualTo(CompletionResult.REGISTRATION_REJECTED);
+            verify(dataOperator, never()).insert(any(AccountData.class));
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+        }
+
+        @Test
+        @SuppressWarnings("unchecked")
+        void lateCreatedAccountCountsAgainstTheAddressAndRedeliveryIsInert() throws Exception {
+            setAccount(null, null);
+            when(config.getMaxRegisterPerIp()).thenReturn(1);
+            List<AccountData> rows = new ArrayList<>();
+            Query<AccountData> byIp = mock(Query.class);
+            when(mockQuery.where("register_ip")).thenReturn(byIp);
+            when(byIp.eq(any())).thenAnswer(invocation -> {
+                String ip = invocation.getArgument(0);
+                when(byIp.list()).thenAnswer(query -> {
+                    List<AccountData> matching = new ArrayList<>();
+                    for (AccountData row : rows) {
+                        if (ip.equals(row.getRegisterIp())) { matching.add(row); }
+                    }
+                    return matching;
+                });
+                return byIp;
+            });
+            doAnswer(invocation -> { rows.add(invocation.getArgument(0)); return null; })
+                    .when(dataOperator).insert(any(AccountData.class));
+            String link = openLink();
+            service.onPlayerQuit(player);
+            LinkCompletion event = completion("LATE-CREATED", link, LinkProof.WEB_REGISTRATION, true);
+
+            assertThat(deliver(event)).isEqualTo(CompletionResult.CREATED);
+            assertThat(rows).hasSize(1);
+            assertThat(rows.get(0).getRegisterIp()).isEqualTo("127.0.0.1");
+            assertThat(rows.get(0).getLastIp()).isEqualTo("127.0.0.1");
+            assertThat(deliver(event)).as("recorded success stays success even though the cap is now reached")
+                    .isEqualTo(CompletionResult.CREATED);
+            assertThat(service.requestPanelLink(player).getFailure()).as("the saved address now counts")
+                    .isEqualTo(LoginService.PanelLinkResult.Failure.IP_LIMIT);
+            verify(dataOperator, times(1)).insert(any(AccountData.class));
+        }
+
+        @ParameterizedTest
+        @org.junit.jupiter.params.provider.EnumSource(LinkExpiry.Reason.class)
+        void gatewayEndRetainsTheAddressLimit(LinkExpiry.Reason reason) throws Exception {
+            setAccount(null, null);
+            String link = openLink();
+            port.handler.onExpired(new LinkExpiry(link, playerUuid, reason));
+            runMainThread();
+            when(config.getMaxRegisterPerIp()).thenReturn(1);
+            oneAccountAlreadyFromThisAddress();
+
+            assertThat(deliver(completion("ENDED", link, LinkProof.WEB_REGISTRATION, true)))
+                    .isEqualTo(CompletionResult.REGISTRATION_REJECTED);
+            verify(dataOperator, never()).insert(any(AccountData.class));
+        }
+
+        @Test
+        void localDeadlineAndSupersedingLinkDoNotLoseTheAddress() throws Exception {
+            setAccount(null, null);
+            String first = openLink();
+            openLink();
+            advance(301);
+            service.cleanupExpiredPanelRequests();
+            when(config.getMaxRegisterPerIp()).thenReturn(1);
+            oneAccountAlreadyFromThisAddress();
+
+            assertThat(deliver(completion("LOCAL-END", first, LinkProof.WEB_REGISTRATION, true)))
+                    .isEqualTo(CompletionResult.REGISTRATION_REJECTED);
+            verify(dataOperator, never()).insert(any(AccountData.class));
+        }
+
+        @Test
+        @SuppressWarnings("unchecked")
+        void addressRetentionIsDeadlinePlus24HoursAndCleanupRemovesIt() throws Exception {
+            setAccount(null, null);
+            String first = openLink();
+            advance(100);
+            String second = openLink();
+            service.onPlayerQuit(player);
+            Map<String, ?> origins = (Map<String, ?>) field("panelLinkOrigins");
+            assertThat(origins).hasSize(2);
+
+            advance(86_600); // first deadline + 24h exactly; second still has 100 seconds left.
+            service.cleanupExpiredPanelRequests();
+            assertThat(origins).containsKeys(first, second);
+            advance(1);
+            service.cleanupExpiredPanelRequests();
+            assertThat(origins).doesNotContainKey(first).containsKey(second);
+            advance(100);
+            service.cleanupExpiredPanelRequests();
+            assertThat(origins).isEmpty();
+        }
+
+        @Test
+        void createReceiptRetainsAddressEvenWhenQuitMadePublicationStale() throws Exception {
+            setAccount(null, null);
+            CompletableFuture<LinkCreation> creation = new CompletableFuture<>();
+            CountDownLatch entered = new CountDownLatch(1);
+            port.answer = () -> creation;
+            port.duringCreate = entered::countDown;
+            CompletableFuture<LoginService.PanelLinkResult> result = new CompletableFuture<>();
+            Thread worker = new Thread(() -> result.complete(service.requestPanelLink(player)), "stale-origin-create");
+            worker.start();
+            try {
+                assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
+                service.onPlayerQuit(player);
+                creation.complete(LinkCreation.created("STALE", LINK_URL + "STALE",
+                        Instant.ofEpochMilli(now[0] + 300_000L), EnumSet.of(LinkProof.WEB_REGISTRATION)));
+                Runnable publication = mainThread.poll(10, TimeUnit.SECONDS);
+                assertThat(publication).isNotNull();
+                publication.run();
+                assertThat(result.get(10, TimeUnit.SECONDS).isSuccess()).isFalse();
+                when(config.getMaxRegisterPerIp()).thenReturn(1);
+                oneAccountAlreadyFromThisAddress();
+
+                assertThat(deliver(completion("STALE-CAP", "STALE", LinkProof.WEB_REGISTRATION, true)))
+                        .isEqualTo(CompletionResult.REGISTRATION_REJECTED);
+            } finally {
+                creation.complete(LinkCreation.failed(PlayerLinkPort.LinkFailure.OTHER, "test cleanup"));
+                runMainThread();
+                worker.join(10_000L);
+            }
+            assertThat(worker.isAlive()).isFalse();
+        }
+
+        @Test
+        void createReceiptRetainsAddressEvenWhenPublicationTimesOut() throws Exception {
+            setAccount(null, null);
+            service.setPanelCreateCap(1);
+            assertThat(service.requestPanelLink(player).isSuccess()).isFalse();
+            runMainThread();
+            when(config.getMaxRegisterPerIp()).thenReturn(1);
+            oneAccountAlreadyFromThisAddress();
+
+            assertThat(deliver(completion("TIMEOUT-CAP", "L1", LinkProof.WEB_REGISTRATION, true)))
+                    .isEqualTo(CompletionResult.REGISTRATION_REJECTED);
+        }
+
+        @Test
+        @SuppressWarnings("unchecked")
+        void nextCreateReceiptPrunesExpiredOriginsButKeepsItsOwn() throws Exception {
+            String first = openLink();
+            advance(86_701);
+            String second = openLink();
+            assertThat((Map<String, ?>) field("panelLinkOrigins")).containsKey(second).doesNotContainKey(first);
+        }
+
+        @Test
+        void expiredOriginIsNotUsedEvenBeforePeriodicCleanup() throws Exception {
+            setAccount(null, null);
+            String link = openLink();
+            service.onPlayerQuit(player);
+            advance(86_701);
+            when(config.getMaxRegisterPerIp()).thenReturn(1);
+            oneAccountAlreadyFromThisAddress();
+
+            assertThat(deliver(completion("BEYOND-WINDOW", link, LinkProof.WEB_REGISTRATION, true)))
+                    .isEqualTo(CompletionResult.CREATED);
+            assertThat(inserted().getRegisterIp()).isEmpty();
+            assertThat((Map<?, ?>) field("panelLinkOrigins")).isEmpty();
+        }
+
+        @Test
+        void addressRetentionIsClearedOnShutdown() throws Exception {
+            openLink();
+            service.shutdown();
+            assertThat((Map<?, ?>) field("panelLinkOrigins")).isEmpty();
         }
 
         @Test
