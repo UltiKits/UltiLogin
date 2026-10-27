@@ -39,6 +39,12 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -79,7 +85,7 @@ class PlayerLinkEventsTest {
     private UUID playerUuid;
     private final long[] now = {1_000_000_000L};
     private FakePort port;
-    private final List<Runnable> mainThread = new ArrayList<>();
+    private final LinkedBlockingQueue<Runnable> mainThread = new LinkedBlockingQueue<>();
     private BukkitScheduler scheduler;
 
     /** A fake player-link API: answers every create with a link and keeps the handler the service installs. */
@@ -88,10 +94,16 @@ class PlayerLinkEventsTest {
         private int registrations;
         private int unregistrations;
         private int next = 1;
+        private Runnable duringCreate = () -> { };
+        private Supplier<CompletableFuture<LinkCreation>> answer;
 
         @Override
         public CompletableFuture<LinkCreation> create(UUID uuid, String name, boolean authenticated,
                                                       boolean accountExists, Set<LinkProof> offeredProofs) {
+            duringCreate.run();
+            if (answer != null) {
+                return answer.get();
+            }
             String id = "L" + next++;
             return CompletableFuture.completedFuture(LinkCreation.created(id, LINK_URL + id,
                     Instant.ofEpochMilli(now[0] + 300_000L), EnumSet.of(LinkProof.LINKED_WEB_ACCOUNT)));
@@ -171,14 +183,38 @@ class PlayerLinkEventsTest {
 
     /** Run every queued main-thread task, including any a task queues itself. */
     private void runMainThread() {
-        while (!mainThread.isEmpty()) {
-            mainThread.remove(0).run();
+        Runnable task;
+        while ((task = mainThread.poll()) != null) {
+            task.run();
         }
     }
 
     /** {@code /panel} as its worker runs it: publish the link and return its id. */
     private String openLink() {
-        LoginService.PanelLinkResult result = service.requestPanelLink(player);
+        CompletableFuture<LoginService.PanelLinkResult> answer = new CompletableFuture<>();
+        Thread worker = new Thread(() -> {
+            try {
+                answer.complete(service.requestPanelLink(player));
+            } catch (Throwable error) {
+                answer.completeExceptionally(error);
+            } finally {
+                mainThread.add(() -> { }); // Wake the queue consumer even for a precheck failure.
+            }
+        }, "panel-open-link");
+        worker.start();
+        try {
+            do {
+                Runnable task = mainThread.poll(10, TimeUnit.SECONDS);
+                assertThat(task).as("publication or worker completion arrived").isNotNull();
+                task.run();
+            } while (!answer.isDone());
+            worker.join(10_000L);
+            runMainThread();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(e);
+        }
+        LoginService.PanelLinkResult result = answer.join();
         assertThat(result.isSuccess()).as("the link was published: %s", result.getError()).isTrue();
         service.announcePanelPause(player);
         return result.getLinkId();
@@ -263,6 +299,167 @@ class PlayerLinkEventsTest {
     private void assertMessage(String key, int count) {
         String text = ChatColor.translateAlternateColorCodes('&', CatalogueText.text("zh", key));
         verify(player, times(count)).sendMessage(text);
+    }
+
+    /** Complete the create while its waiting worker cannot enter the publication lock. */
+    @SuppressWarnings("unchecked")
+    private void completeBeforeWorkerCanRekey(Runnable event) throws Exception {
+        CompletableFuture<LinkCreation> creation = new CompletableFuture<>();
+        CountDownLatch entered = new CountDownLatch(1);
+        port.answer = () -> creation;
+        port.duringCreate = entered::countDown;
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread worker = new Thread(() -> {
+            try {
+                service.requestPanelLink(player);
+            } catch (Throwable error) {
+                failure.set(error);
+            }
+        }, "panel-publication-regression");
+        worker.start();
+        try {
+            assertThat(entered.await(10, TimeUnit.SECONDS)).as("worker reached create").isTrue();
+            AtomicLong cell = ((Map<UUID, AtomicLong>) field("invalidationGenerations")).get(playerUuid);
+            synchronized (cell) {
+                creation.complete(LinkCreation.created("RACE", LINK_URL + "RACE",
+                        Instant.ofEpochMilli(now[0] + 300_000L), EnumSet.of(LinkProof.LINKED_WEB_ACCOUNT)));
+                event.run();
+                runMainThread();
+            }
+        } finally {
+            creation.complete(LinkCreation.failed(PlayerLinkPort.LinkFailure.OTHER, "test cleanup"));
+            worker.join(10_000L);
+        }
+        assertThat(worker.isAlive()).as("request worker finished").isFalse();
+        assertThat(failure.get()).as("request worker did not throw").isNull();
+    }
+
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(LinkExpiry.Reason.class)
+    void expiryAfterCreateCompletionBeforeWorkerRekeyEndsTheLink(LinkExpiry.Reason reason) throws Exception {
+        service.onPlayerJoin(player);
+        advance(55);
+        completeBeforeWorkerCanRekey(() -> port.handler.onExpired(new LinkExpiry("RACE", playerUuid, reason)));
+
+        assertThat(service.isPanelRequestCurrent(playerUuid, "RACE", service.getInvalidationGeneration(playerUuid)))
+                .as("an already-ended link must not be published as live").isFalse();
+        assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+        assertThat(paused()).isFalse();
+        assertThat(service.isLoggedIn(playerUuid)).isFalse();
+        assertCountdownResumedWithTheTimeLeft();
+    }
+
+    @Test
+    void completionAfterCreateBeforeWorkerRekeyLogsInTheCurrentConnection() throws Exception {
+        service.onPlayerJoin(player);
+        AtomicReference<CompletableFuture<CompletionResult>> answer = new AtomicReference<>();
+        completeBeforeWorkerCanRekey(() -> answer.set(port.handler.onCompleted(
+                completion("RACE-C", "RACE", LinkProof.LINKED_WEB_ACCOUNT, false))));
+
+        assertThat(answer.get()).isCompletedWithValue(CompletionResult.NOT_REQUESTED);
+        assertThat(service.isLoggedIn(playerUuid)).as("a current completion is not late").isTrue();
+        assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+        assertMessage("panel_late_completion", 0);
+    }
+
+    @Test
+    void accountLookupFailureReturnsGenericPanelFailure() {
+        when(mockQuery.list()).thenThrow(new IllegalStateException("account database unavailable"));
+        assertPrecheckFailure();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void ipRegistrationLookupFailureReturnsGenericPanelFailure() {
+        setAccount(null, null);
+        when(config.getMaxRegisterPerIp()).thenReturn(1);
+        Query<AccountData> byIp = mock(Query.class);
+        when(mockQuery.where("register_ip")).thenReturn(byIp);
+        when(byIp.eq(any())).thenReturn(byIp);
+        when(byIp.list()).thenThrow(new IllegalStateException("address database unavailable"));
+        assertPrecheckFailure();
+    }
+
+    private void assertPrecheckFailure() {
+        AtomicReference<LoginService.PanelLinkResult> result = new AtomicReference<>();
+        org.assertj.core.api.Assertions.assertThatCode(() -> result.set(service.requestPanelLink(player)))
+                .as("a database precheck failure must return a result, not kill the command worker")
+                .doesNotThrowAnyException();
+        assertThat(result.get().isSuccess()).isFalse();
+        assertThat(result.get().getFailure()).isEqualTo(LoginService.PanelLinkResult.Failure.GENERIC);
+        assertThat(result.get().getLinkId()).isNull();
+        assertThat(result.get().getUrl()).isNull();
+        assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+        assertThat(port.next).as("no create was sent").isEqualTo(1);
+    }
+
+    @Test
+    void aQueuedPublicationCannotResurrectATimedOutRequest() throws Exception {
+        service.onPlayerJoin(player);
+        service.setPanelCreateCap(1);
+        LoginService.PanelLinkResult result = service.requestPanelLink(player);
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(mainThread).hasSize(1);
+        runMainThread();
+        assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+        assertThat(paused()).isFalse();
+    }
+
+    @Test
+    void interruptionEndsTheRequestAndPreservesTheInterrupt() throws Exception {
+        Thread.currentThread().interrupt();
+        try {
+            assertThat(service.requestPanelLink(player).isSuccess()).isFalse();
+            assertThat(Thread.currentThread().isInterrupted()).isTrue();
+        } finally {
+            Thread.interrupted();
+        }
+        runMainThread();
+        assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+    }
+
+    @Test
+    void unschedulablePublicationEndsTheRequest() {
+        doThrow(new IllegalStateException("disabled")).when(scheduler).runTask(any(Plugin.class), any(Runnable.class));
+        assertThat(service.requestPanelLink(player).isSuccess()).isFalse();
+        assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+    }
+
+    @Test
+    void synchronousCreateFailureCleansItsOwnRequest() {
+        port.answer = () -> { throw new IllegalStateException("create refused"); };
+        assertThat(service.requestPanelLink(player).getFailure()).isEqualTo(LoginService.PanelLinkResult.Failure.GENERIC);
+        assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+    }
+
+    @Test
+    void createAlreadyCompletedBeforeReturningStillPublishesBeforeItsExpiry() throws Exception {
+        CountDownLatch eventEntered = new CountDownLatch(1);
+        AtomicReference<Thread> eventThread = new AtomicReference<>();
+        port.answer = () -> {
+            CompletableFuture<LinkCreation> answer = CompletableFuture.completedFuture(LinkCreation.created(
+                    "INLINE", LINK_URL + "INLINE", Instant.ofEpochMilli(now[0] + 300_000L),
+                    EnumSet.of(LinkProof.LINKED_WEB_ACCOUNT)));
+            Thread delivery = new Thread(() -> {
+                eventEntered.countDown();
+                port.handler.onExpired(new LinkExpiry("INLINE", playerUuid, LinkExpiry.Reason.CANCELLED));
+            }, "panel-inline-event");
+            eventThread.set(delivery);
+            delivery.start();
+            try {
+                assertThat(eventEntered.await(10, TimeUnit.SECONDS)).isTrue();
+            } catch (InterruptedException e) {
+                throw new AssertionError(e);
+            }
+            return answer;
+        };
+        service.onPlayerJoin(player);
+        openLink();
+        eventThread.get().join(10_000L);
+        assertThat(eventThread.get().isAlive()).isFalse();
+        runMainThread();
+        assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
+        assertThat(paused()).isFalse();
     }
 
     // ==================== registration ====================

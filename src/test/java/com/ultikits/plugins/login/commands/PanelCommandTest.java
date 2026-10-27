@@ -266,6 +266,9 @@ class PanelCommandTest {
         private CloudPlayerLinks links;
         private final List<Boolean> createdOnPrimaryThread = new ArrayList<>();
         private Thread mainThread;
+        private Query<AccountData> accountQuery;
+        private final java.util.concurrent.LinkedBlockingQueue<Runnable> mainTasks =
+                new java.util.concurrent.LinkedBlockingQueue<>();
 
         // The framework is installed in UltiTools' real static field, not through mockStatic: a static
         // mock is visible only on the thread that created it, and the create runs on the worker thread.
@@ -273,6 +276,10 @@ class PanelCommandTest {
         void setUpFramework() throws Exception {
             mainThread = Thread.currentThread();
             when(mockServer.isPrimaryThread()).thenAnswer(invocation -> Thread.currentThread() == mainThread);
+            doAnswer(invocation -> {
+                mainTasks.add(invocation.getArgument(1));
+                return mock(org.bukkit.scheduler.BukkitTask.class);
+            }).when(mockScheduler).runTask(any(), any(Runnable.class));
 
             links = mock(CloudPlayerLinks.class);
             UltiTools framework = mock(UltiTools.class);
@@ -291,6 +298,7 @@ class PanelCommandTest {
             when(config.isUlticloudEnabled()).thenReturn(true);
             DataOperator<AccountData> dataOperator = mock(DataOperator.class);
             Query<AccountData> query = mock(Query.class);
+            accountQuery = query;
             when(UltiLoginTestHelper.getMockPlugin().getDataOperator(AccountData.class)).thenReturn(dataOperator);
             when(dataOperator.query()).thenReturn(query);
             when(query.where(anyString())).thenReturn(query);
@@ -302,6 +310,38 @@ class PanelCommandTest {
             loggedIn.setAccessible(true);
             ((Map<UUID, Boolean>) loggedIn.get(service)).put(playerUuid, true);
             return service;
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest
+        @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+        @SuppressWarnings("unchecked")
+        void databasePrecheckFailureStillDeliversTheMainThreadError(boolean ipLookup) throws Exception {
+            LoginService service = realServiceWithAccount();
+            if (ipLookup) {
+                when(accountQuery.list()).thenReturn(Collections.emptyList());
+                when(service.getConfig().getMaxRegisterPerIp()).thenReturn(1);
+                Query<AccountData> byIp = mock(Query.class);
+                when(accountQuery.where("register_ip")).thenReturn(byIp);
+                when(byIp.eq(any())).thenReturn(byIp);
+                when(byIp.list()).thenThrow(new IllegalStateException("IP query unavailable"));
+            } else {
+                when(accountQuery.list()).thenThrow(new IllegalStateException("account query unavailable"));
+            }
+            PanelCommand panel = new PanelCommand(UltiLoginTestHelper.getMockPlugin(), service);
+            panel.openPanel(player);
+            ArgumentCaptor<Runnable> async = ArgumentCaptor.forClass(Runnable.class);
+            verify(mockScheduler).runTaskAsynchronously(any(), async.capture());
+            assertThatCode(() -> async.getValue().run()).doesNotThrowAnyException();
+            assertThat(mainTasks).as("a DB failure still schedules the player's result").hasSize(1);
+            mainTasks.remove().run();
+
+            InOrder messages = inOrder(player);
+            messages.verify(player).sendMessage(ChatColor.translateAlternateColorCodes('&',
+                    CatalogueText.text("zh", "panel_generating")));
+            messages.verify(player).sendMessage(ChatColor.translateAlternateColorCodes('&',
+                    CatalogueText.text("zh", "panel_error")));
+            verify(player, never()).spigot();
+            verify(links, never()).create(any(), any(), anyString(), any(), any());
         }
 
         @Test
@@ -325,12 +365,15 @@ class PanelCommandTest {
             verify(mockScheduler).runTaskAsynchronously(any(), asyncCaptor.capture());
             Thread worker = new Thread(asyncCaptor.getValue(), "panel-test-async");
             worker.start();
+            Runnable publication = mainTasks.poll(10, java.util.concurrent.TimeUnit.SECONDS);
+            assertThat(publication).as("main-thread publication").isNotNull();
+            publication.run();
             worker.join(10_000L);
             assertThat(worker.isAlive()).as("the async /panel task finished within 10 s").isFalse();
 
-            ArgumentCaptor<Runnable> syncCaptor = ArgumentCaptor.forClass(Runnable.class);
-            verify(mockScheduler).runTask(any(), syncCaptor.capture());
-            syncCaptor.getValue().run();
+            Runnable delivery = mainTasks.poll(10, java.util.concurrent.TimeUnit.SECONDS);
+            assertThat(delivery).as("main-thread command result").isNotNull();
+            delivery.run();
 
             @SuppressWarnings("unchecked")
             ArgumentCaptor<Set<CloudPlayerLinks.LinkProof>> proofs = ArgumentCaptor.forClass(Set.class);

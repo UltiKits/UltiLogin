@@ -3392,6 +3392,7 @@ class LoginServiceTest {
         @Test
         @DisplayName("Should still publish when the captured generation matches the current one")
         void publishesWhenGenerationMatches() {
+            runPanelPublicationInline();
             when(config.isUlticloudEnabled()).thenReturn(true);
             java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
             service.setPlayerLinkPort(stubPort(() -> { }, calls));
@@ -3415,6 +3416,7 @@ class LoginServiceTest {
         @Test
         @DisplayName("Should discard a created link when the session was invalidated while the create was in flight")
         void discardsTheResultWhenInvalidatedWhileThePostWasInFlight() {
+            runPanelPublicationInline();
             // The pre-create fence only closes the gap before the create. An invalidateSession(...)
             // landing during it (simulated from inside the stub) removes the local entry and bumps the
             // generation, but neither stops the create from answering -- unless requestPanelLink()
@@ -3620,6 +3622,15 @@ class LoginServiceTest {
             assertThat(inFlight).isEmpty();
             assertThat(latest).isEmpty();
         }
+    }
+
+    private void runPanelPublicationInline() {
+        BukkitScheduler scheduler = spy(Bukkit.getScheduler());
+        doAnswer(invocation -> {
+            ((Runnable) invocation.getArgument(1)).run();
+            return mock(BukkitTask.class);
+        }).when(scheduler).runTask(any(Plugin.class), any(Runnable.class));
+        doReturn(scheduler).when(Bukkit.getServer()).getScheduler();
     }
 
     // ==================== Helper methods ====================

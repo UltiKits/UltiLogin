@@ -1584,12 +1584,14 @@ public class LoginService {
      * <b>Fences.</b> The request is published locally (inserted into {@code pendingPanelRequests} under a local id)
      * only if the captured generation still matches; that check and the insert run inside a block synchronized on the
      * player's generation cell, the lock {@link #invalidateSession(UUID)} takes around its bump-and-cancel, so an
-     * invalidation either lands before (the check refuses) or after (its cancellation finds the entry). The create is
-     * then awaited outside the lock, for at most the local create cap (45 seconds). When it succeeds, the generation
-     * and the local entry are checked again under the same lock: an invalidation or a quit while the create was in
-     * flight discards the link. A current link is re-keyed in that same step from the local id to the gateway's link
-     * id, the id its completion and expiry carry, so nothing is ever pending under both. {@code PanelCommand} checks
-     * once more on the main thread ({@link #isPanelRequestCurrent(UUID, String, long)}).
+     * invalidation either lands before (the check refuses) or after (its cancellation finds the entry). The same
+     * cell orders the non-blocking create and callback registration with event scheduling, including an answer that
+     * arrives before create returns. The callback queues main-thread publication before either event can be queued;
+     * only that task re-keys the local id to the gateway's link id, after checking the generation and local entry
+     * again. An invalidation or quit in flight discards the link. The worker waits outside the lock, for at most
+     * the local create cap (45 seconds), for publication rather than just the raw create answer. A timeout and
+     * publication choose one terminal result under the same cell, so a late task cannot resurrect the request.
+     * {@code PanelCommand} checks once more on the main thread ({@link #isPanelRequestCurrent(UUID, String, long)}).
      * <p>
      * The login countdown pauses from the local insert; every failure removes the request again and resumes the
      * countdown silently, with exactly the time that was left.
@@ -1600,63 +1602,108 @@ public class LoginService {
      * @return the result: on success the URL and the link id the request is now pending under
      */
     public PanelLinkResult requestPanelLink(Player player, long expectedGeneration) {
-        if (!isPanelEnabled()) {
-            return new PanelLinkResult(false, null, "Panel integration not enabled");
-        }
-
         UUID playerUuid = player.getUniqueId();
-        String playerName = player.getName();
-        boolean authenticated = isLoggedIn(playerUuid);
-        boolean accountExists = isRegistered(playerUuid);
-        if (!accountExists && registrationLimitReached(getPlayerIp(player))) {
-            // A link for a name without an account may end in a web registration, which this address may not
-            // make any more: refuse here, before the web side could create an UltiKits account in vain.
-            return new PanelLinkResult(false, null, "Registration limit reached for this address", null,
-                    PanelLinkResult.Failure.IP_LIMIT);
-        }
         String requestId = UUID.randomUUID().toString();
-
         AtomicLong generationCell = invalidationGenerations.computeIfAbsent(playerUuid, k -> new AtomicLong());
-        synchronized (generationCell) {
-            if (generationCell.get() != expectedGeneration) {
-                return new PanelLinkResult(false, null,
-                        "Session was invalidated before the request completed");
+        java.util.concurrent.CompletableFuture<PanelLinkResult> publication = new java.util.concurrent.CompletableFuture<>();
+        try {
+            if (!isPanelEnabled()) {
+                return new PanelLinkResult(false, null, "Panel integration not enabled");
             }
-            // Track the pending request -- this insert and the generation check above must stay
-            // atomic with each other (see javadoc above); nothing else belongs inside this lock.
-            pendingPanelRequests.put(requestId, playerUuid);
-            pendingPanelDeadlines.put(requestId, clock.getAsLong() + panelCreateCapMillis);
-            panelCreatesInFlight.add(requestId);
-            latestPanelRequest.put(playerUuid, requestId);
-            // The countdown pauses from the moment the request exists; the player is told once the
-            // link is actually delivered (announcePanelPause), so a failed request resumes silently.
-            syncPanelPause(playerUuid);
+            String playerName = player.getName();
+            boolean authenticated = isLoggedIn(playerUuid);
+            // A failed read is not an absent account or spare registration capacity. Return a failure to the
+            // command worker so it can still schedule its existing main-thread error message.
+            boolean accountExists = isRegistered(playerUuid);
+            if (!accountExists && registrationLimitReached(getPlayerIp(player))) {
+                return new PanelLinkResult(false, null, "Registration limit reached for this address", null,
+                        PanelLinkResult.Failure.IP_LIMIT);
+            }
+            synchronized (generationCell) {
+                if (generationCell.get() != expectedGeneration) {
+                    return stalePanelCreation();
+                }
+                pendingPanelRequests.put(requestId, playerUuid);
+                pendingPanelDeadlines.put(requestId, clock.getAsLong() + panelCreateCapMillis);
+                panelCreatesInFlight.add(requestId);
+                latestPanelRequest.put(playerUuid, requestId);
+                syncPanelPause(playerUuid);
+                // create is non-blocking. Hold this cell only through callback registration, never through
+                // get(): even a future completed before create returns must enqueue publication before an event.
+                playerLinkPort.create(playerUuid, playerName, authenticated, accountExists,
+                        offeredProofs(authenticated, accountExists)).whenComplete((creation, error) -> {
+                    try {
+                        queuePanelTask(playerUuid, () -> publishPanelCreation(playerUuid, requestId,
+                                expectedGeneration, generationCell, publication, creation, error));
+                    } catch (RuntimeException e) {
+                        failPanelPublication(requestId, generationCell, publication,
+                                PlayerLinkPort.LinkFailure.OTHER, String.valueOf(e.getMessage()));
+                    }
+                });
+            }
+        } catch (RuntimeException e) {
+            return failPanelPublication(requestId, generationCell, publication,
+                    PlayerLinkPort.LinkFailure.OTHER, String.valueOf(e.getMessage()));
         }
+        return awaitPanelPublication(requestId, generationCell, publication);
+    }
 
-        PlayerLinkPort.LinkCreation creation = awaitCreation(playerLinkPort.create(playerUuid, playerName,
-                authenticated, accountExists, offeredProofs(authenticated, accountExists)));
-
-        if (!creation.isSuccess()) {
-            cleanupPanelRequest(requestId);
-            return failedCreation(creation);
+    /** Order publication and both event consumers at the same per-player queue boundary. Never wait here. */
+    private void queuePanelTask(UUID playerUuid, Runnable task) {
+        AtomicLong cell = invalidationGenerations.computeIfAbsent(playerUuid, k -> new AtomicLong());
+        synchronized (cell) {
+            Bukkit.getScheduler().runTask(bukkitPlugin, task);
         }
+    }
 
-        String linkId = creation.linkId();
-        synchronized (generationCell) {
-            // The checks before the create only fence the gap before it. An invalidation (or a quit) while the
-            // create was in flight removed the local entry and/or bumped the generation; neither stops the create
-            // from answering, so the answer is discarded here, under the lock invalidateSession takes.
-            if (generationCell.get() != expectedGeneration || !pendingPanelRequests.containsKey(requestId)) {
+    /** Publish only on the main thread, before a subsequently delivered completion or expiry can consume the id. */
+    private void publishPanelCreation(UUID playerUuid, String requestId, long expectedGeneration,
+            AtomicLong cell, java.util.concurrent.CompletableFuture<PanelLinkResult> publication,
+            PlayerLinkPort.LinkCreation creation, Throwable error) {
+        synchronized (cell) {
+            if (publication.isDone()) {
+                return; // The worker already ended this request at its cap or on interruption.
+            }
+            try {
+                if (error != null || creation == null) {
+                    failPanelPublication(requestId, cell, publication, PlayerLinkPort.LinkFailure.OTHER,
+                            error == null ? "no answer" : String.valueOf(error.getMessage()));
+                } else if (!creation.isSuccess()) {
+                    failPanelPublication(requestId, cell, publication, creation.failure(), creation.reason());
+                } else if (cell.get() != expectedGeneration || !pendingPanelRequests.containsKey(requestId)) {
+                    cleanupPanelRequest(requestId);
+                    publication.complete(stalePanelCreation());
+                } else {
+                    String linkId = creation.linkId();
+                    long deadline = linkDeadline(creation.expiresAt());
+                    pendingPanelRequests.put(linkId, playerUuid);
+                    pendingPanelDeadlines.put(linkId, deadline);
+                    latestPanelRequest.replace(playerUuid, requestId, linkId);
+                    removePanelRequest(requestId);
+                    publication.complete(new PanelLinkResult(true, creation.url(), null, linkId));
+                }
+            } catch (RuntimeException e) {
+                failPanelPublication(requestId, cell, publication, PlayerLinkPort.LinkFailure.OTHER,
+                        String.valueOf(e.getMessage()));
+            }
+        }
+    }
+
+    private static PanelLinkResult stalePanelCreation() {
+        return new PanelLinkResult(false, null, "Session was invalidated before the request completed");
+    }
+
+    /** Choose a single terminal result under the publication lock; a late callback cannot resurrect this request. */
+    private PanelLinkResult failPanelPublication(String requestId, AtomicLong cell,
+            java.util.concurrent.CompletableFuture<PanelLinkResult> publication,
+            PlayerLinkPort.LinkFailure failure, String reason) {
+        synchronized (cell) {
+            if (!publication.isDone()) {
                 cleanupPanelRequest(requestId);
-                return new PanelLinkResult(false, null,
-                        "Session was invalidated before the request completed");
+                publication.complete(failedCreation(PlayerLinkPort.LinkCreation.failed(failure, reason)));
             }
-            pendingPanelRequests.put(linkId, playerUuid);
-            pendingPanelDeadlines.put(linkId, linkDeadline(creation.expiresAt()));
-            latestPanelRequest.replace(playerUuid, requestId, linkId);
-            removePanelRequest(requestId);
+            return publication.getNow(null);
         }
-        return new PanelLinkResult(true, creation.url(), null, linkId);
     }
 
     /**
@@ -1702,24 +1749,20 @@ public class LoginService {
         return config.getMaxRegisterPerIp() > 0 && countRegistrationsByIp(ip) >= config.getMaxRegisterPerIp();
     }
 
-    /**
-     * Wait for a create's answer on the calling (asynchronous) thread, for at most the local create cap. A create
-     * that has not answered by then counts as timed out; an interrupted wait counts as a failure.
-     */
-    private PlayerLinkPort.LinkCreation awaitCreation(java.util.concurrent.CompletableFuture<PlayerLinkPort.LinkCreation> answer) {
+    /** Wait outside the generation lock for main-thread publication, not merely the framework's raw answer. */
+    private PanelLinkResult awaitPanelPublication(String requestId, AtomicLong cell,
+            java.util.concurrent.CompletableFuture<PanelLinkResult> publication) {
         try {
-            PlayerLinkPort.LinkCreation creation = answer.get(panelCreateCapMillis,
-                    java.util.concurrent.TimeUnit.MILLISECONDS);
-            return creation != null ? creation
-                    : PlayerLinkPort.LinkCreation.failed(PlayerLinkPort.LinkFailure.OTHER, "no answer");
+            return publication.get(panelCreateCapMillis, java.util.concurrent.TimeUnit.MILLISECONDS);
         } catch (java.util.concurrent.TimeoutException e) {
-            return PlayerLinkPort.LinkCreation.failed(PlayerLinkPort.LinkFailure.TIMED_OUT,
+            return failPanelPublication(requestId, cell, publication, PlayerLinkPort.LinkFailure.TIMED_OUT,
                     "no answer within " + panelCreateCapMillis + " ms");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return PlayerLinkPort.LinkCreation.failed(PlayerLinkPort.LinkFailure.OTHER, "interrupted");
+            return failPanelPublication(requestId, cell, publication, PlayerLinkPort.LinkFailure.OTHER, "interrupted");
         } catch (java.util.concurrent.ExecutionException | RuntimeException e) {
-            return PlayerLinkPort.LinkCreation.failed(PlayerLinkPort.LinkFailure.OTHER, String.valueOf(e.getMessage()));
+            return failPanelPublication(requestId, cell, publication, PlayerLinkPort.LinkFailure.OTHER,
+                    String.valueOf(e.getMessage()));
         }
     }
 
@@ -1801,7 +1844,7 @@ public class LoginService {
         java.util.concurrent.CompletableFuture<PlayerLinkPort.CompletionResult> answer =
                 new java.util.concurrent.CompletableFuture<>();
         try {
-            Bukkit.getScheduler().runTask(bukkitPlugin, () -> answerCompletion(completion, answer));
+            queuePanelTask(completion.playerUuid(), () -> answerCompletion(completion, answer));
         } catch (RuntimeException e) {
             answer.completeExceptionally(e);
         }
@@ -2049,7 +2092,7 @@ public class LoginService {
                 break;
         }
         try {
-            Bukkit.getScheduler().runTask(bukkitPlugin,
+            queuePanelTask(expiry.playerUuid(),
                     () -> endPendingLink(expiry.linkId(), expiry.playerUuid(), message));
         } catch (RuntimeException e) {
             // The plugin is disabling: every pending link ends with it.
