@@ -431,6 +431,8 @@ UltiLogin 启用期间会在服务器日志（Log4j 根日志器）上挂一个�
   This module declares `api-version: 631`, so UltiTools-API 6.3.0 and older refuse to load it with a warning that
   the UltiTools version is outdated. 本模块声明 `api-version: 631`，UltiTools-API 6.3.0 及更早版本会拒绝加载它，并警告
   UltiTools 版本过旧。
+  Before that warning, UltiTools-API 6.3.0 also logs a class-load warning with a stack trace for `FrameworkPlayerLinkPort` (it uses an API added in 6.3.1); these lines are expected, the module is not loaded, and updating UltiTools-API to 6.3.1 removes them.
+  在该警告之前，UltiTools-API 6.3.0 还会为 `FrameworkPlayerLinkPort` 输出带堆栈的类加载警告（它使用了 6.3.1 新增的 API）；这些日志属于预期情况，模块不会加载，升级 UltiTools-API 至 6.3.1 后便不再出现。
 - Install: put `UltiLogin-<version>.jar` into `plugins/UltiTools/plugins/` and restart the server (`/ul reload` only
   reloads configuration; it does not load a new module jar). 安装：将 JAR 放入 `plugins/UltiTools/plugins/` 并重启服务器
   （`/ul reload` 只重载配置，不会加载新的模块 JAR）。
