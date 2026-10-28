@@ -2110,8 +2110,8 @@ public class LoginService {
     /**
      * A link stopped being usable without completing (called off the main thread; at most once per link). The link
      * ends on the main thread through the same path as a local expiry: the player is told why (expired, cancelled,
-     * refused) only for their latest link, and the countdown resumes with the time that was left. An expiry for a
-     * link that is not pending for its player does nothing.
+     * declined for DENIED ("Not me")) only for their latest link, and the countdown resumes with the time that was
+     * left. An expiry for a link that is not pending for its player does nothing.
      *
      * @param expiry the link, its player and the reason
      */
