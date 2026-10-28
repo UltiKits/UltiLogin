@@ -332,6 +332,76 @@ class LoginProtectionListenerTest {
             return loc;
         }
 
+        @org.junit.jupiter.params.ParameterizedTest
+        @org.junit.jupiter.params.provider.CsvSource({"64.2, 62.8", "64.8, 64.2", "0.2, -1.2"})
+        @DisplayName("An unauthenticated straight fall keeps the original destination (UltiLogin#73)")
+        void straightFallKeepsDestination(double fromY, double toY) {
+            org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.2, fromY, -0.2, 15, 25);
+            org.bukkit.Location to = new org.bukkit.Location(mockWorld, 0.8, toY, -0.8, 45, 55);
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from, to);
+            org.bukkit.Location originalTo = event.getTo();
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.getTo()).isSameAs(originalTo);
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest
+        @org.junit.jupiter.params.provider.CsvSource({"1.2, 62.8, -0.2", "0.2, 62.8, -1.2", "1.2, 62.8, -1.2",
+                "1.2, 64.1, -1.2"})
+        @DisplayName("A sideways fall keeps the lower Y but restores X/Z and facing (UltiLogin#73)")
+        void sidewaysFallKeepsLowerY(double toX, double toY, double toZ) {
+            org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.2, 64.2, -0.2, 15, 25);
+            org.bukkit.Location to = new org.bukkit.Location(mockWorld, toX, toY, toZ, 45, 55);
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from, to);
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.getTo()).isEqualTo(new org.bukkit.Location(mockWorld, 0.2, toY, -0.2, 15, 25));
+            assertThat(from.getY()).isEqualTo(64.2);
+            assertThat(to.getX()).isEqualTo(toX);
+            assertThat(to.getZ()).isEqualTo(toZ);
+        }
+
+        @Test
+        @DisplayName("An upward block change is still reverted (UltiLogin#73)")
+        void upwardBlockChangeIsReverted() {
+            org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.2, 64.8, -0.2, 15, 25);
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from,
+                    new org.bukkit.Location(mockWorld, 0.2, 65.1, -0.2, 45, 55));
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.getTo()).isEqualTo(from);
+        }
+
+        @Test
+        @DisplayName("A look-only move keeps its destination and new facing (UltiLogin#73)")
+        void lookOnlyKeepsDestination() {
+            org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.2, 64.8, -0.2, 15, 25);
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from,
+                    new org.bukkit.Location(mockWorld, 0.2, 64.8, -0.2, 45, 55));
+            org.bukkit.Location originalTo = event.getTo();
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.getTo()).isSameAs(originalTo);
+        }
+
+        @Test
+        @DisplayName("An authenticated sideways fall keeps its destination (UltiLogin#73)")
+        void authenticatedFallKeepsDestination() {
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(true);
+            PlayerMoveEvent event = new PlayerMoveEvent(player,
+                    new org.bukkit.Location(mockWorld, 0.2, 64.8, -0.2, 15, 25),
+                    new org.bukkit.Location(mockWorld, 2.2, 62.8, -2.2, 45, 55));
+            org.bukkit.Location originalTo = event.getTo();
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.getTo()).isSameAs(originalTo);
+        }
+
         @Test
         @DisplayName("Should allow movement when logged in")
         void allowWhenLoggedIn() {

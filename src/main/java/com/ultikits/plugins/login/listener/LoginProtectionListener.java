@@ -11,6 +11,7 @@ import mc.obliviate.inventory.InventoryAPI;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
+import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Cancellable;
 import org.bukkit.plugin.Plugin;
@@ -194,14 +195,30 @@ public class LoginProtectionListener implements Listener {
         loginService.onPlayerQuit(event.getPlayer());
     }
     
+    /**
+     * Refuse block-column changes and upward block changes, but never revert a descent.
+     * Holding an airborne player at their old Y triggers Paper's floating kick before they can
+     * log in (UltiLogin#73 UAT probe.airborne-rejoin). A sideways descent keeps the lower Y but
+     * restores X/Z and facing, so falling cannot let a player leave their column. Looking around
+     * and movement within a block remain untouched.
+     */
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerMove(PlayerMoveEvent event) {
-        // Only cancel if player should be blocked AND actually moved (not just looked around)
-        if (shouldCancel(event.getPlayer()) &&
-                (event.getFrom().getBlockX() != event.getTo().getBlockX() ||
-                 event.getFrom().getBlockY() != event.getTo().getBlockY() ||
-                 event.getFrom().getBlockZ() != event.getTo().getBlockZ())) {
-            event.setTo(event.getFrom());
+        if (!shouldCancel(event.getPlayer())) {
+            return;
+        }
+        Location from = event.getFrom();
+        Location to = event.getTo();
+        boolean changesColumn = from.getBlockX() != to.getBlockX()
+                || from.getBlockZ() != to.getBlockZ();
+        if (to.getY() < from.getY()) {
+            if (changesColumn) {
+                Location falling = from.clone();
+                falling.setY(to.getY());
+                event.setTo(falling);
+            }
+        } else if (changesColumn || from.getBlockY() != to.getBlockY()) {
+            event.setTo(from);
         }
     }
     
