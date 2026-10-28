@@ -201,6 +201,25 @@ class LoginServiceTest {
     class IsPasswordValid {
 
         @Test
+        void twoCharacterRegistrationIsRefusedWithShippedMinimum() {
+            LoginConfig defaults = new LoginConfig();
+            when(config.isGuiModeEnabled()).thenReturn(defaults.isGuiModeEnabled());
+            when(config.getMinPasswordLength()).thenReturn(defaults.getMinPasswordLength());
+            when(config.getMaxPasswordLength()).thenReturn(defaults.getMaxPasswordLength());
+            LoginService realValidationService = spy(service);
+            com.ultikits.plugins.login.commands.RegisterCommand command =
+                    new com.ultikits.plugins.login.commands.RegisterCommand(realValidationService);
+
+            command.register(player, "ab", "ab");
+
+            verify(realValidationService).isPasswordValid("ab");
+            verify(realValidationService, never()).register(any(), anyString());
+            verify(dataOperator, never()).insert(any(AccountData.class));
+            assertThat(service.isPasswordValid("ab")).isFalse();
+            assertThat(service.isRegistered(playerUuid)).isFalse();
+        }
+
+        @Test
         @DisplayName("Should validate command mode password length")
         void commandMode() {
             when(config.isGuiModeEnabled()).thenReturn(false);
@@ -761,6 +780,34 @@ class LoginServiceTest {
     @Nested
     @DisplayName("resetPassword")
     class ResetPassword {
+
+        @ParameterizedTest(name = "generated password authenticates in GUI mode = {0}")
+        @ValueSource(booleans = {false, true})
+        void generatedPasswordLogsInAndOldPasswordIsRefused(boolean guiMode) {
+            when(config.isGuiModeEnabled()).thenReturn(guiMode);
+            when(config.getGuiPasswordLength()).thenReturn(new LoginConfig().getGuiPasswordLength());
+            String oldPassword = "oldPassword123";
+            String salt = "testSalt";
+            AccountData original = UltiLoginTestHelper.createSampleAccount(
+                    playerUuid, "TestPlayer", hashPasswordForTest(oldPassword, salt), salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(original));
+
+            String newPassword = service.resetPassword(playerUuid);
+
+            assertThat(newPassword).isNotNull();
+            if (guiMode) {
+                assertThat(newPassword).matches("\\d{4}");
+            }
+            ArgumentCaptor<AccountData> written = ArgumentCaptor.forClass(AccountData.class);
+            verify(dataOperator).updateCounted(written.capture());
+            when(mockQuery.list()).thenReturn(Collections.singletonList(written.getValue()));
+
+            assertThat(service.login(player, oldPassword).isSuccess()).as("old password is revoked").isFalse();
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            assertThat(service.login(player, newPassword).isSuccess())
+                    .as("the returned random password authenticates against the stored hash").isTrue();
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+        }
 
         @Test
         @DisplayName("Should return null when account doesn't exist")
