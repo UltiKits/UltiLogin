@@ -153,6 +153,9 @@ UltiLogin 2.1.0 不会在更旧的 UltiTools-API 版本上加载。
 
 ### Known limitations / 已知限制
 
+- **An unauthenticated player above the void keeps falling.** Void damage, like other damage, is suppressed
+  while they are not logged in. They keep falling until they log in and normal damage resumes, or the login
+  timeout disconnects them.
 - **A pending link pauses the login countdown for at most ten minutes.** A player who has not logged in can keep the
   countdown paused by running `/panel` again; each link holds it for at most ten minutes. They still cannot move, chat
   or use commands other than the allowed ones while it is paused.
@@ -194,6 +197,8 @@ UltiLogin 2.1.0 不会在更旧的 UltiTools-API 版本上加载。
   who ran it, and the command line itself is logged as `/logadmin reset ******` (UltiKits/UltiLogin#57).
 
 
+- **未登录的玩家在虚空上方会持续下落。** 登录前，虚空伤害和其他伤害一样被抑制；玩家会继续下落，直到登录后恢复正常伤害，
+  或登录超时被断开连接。
 - **待处理的链接最多暂停登录倒计时十分钟。** 未登录的玩家可以再次执行 `/panel` 让倒计时继续暂停，每个链接最多十分钟；暂停期间仍
   不能移动、聊天或执行未放行的命令。
 - **迟到的网页登录可以按请求建号，但不让任何人登录。** 若玩家已退出、其密码已改，或链接已在本地结束，仍会按请求时的地址检查

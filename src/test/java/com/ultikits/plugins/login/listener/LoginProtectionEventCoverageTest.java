@@ -231,10 +231,10 @@ class LoginProtectionEventCoverageTest {
                         + " and onPlayerMove already freezes walking.");
         uncovered.put("org.bukkit.event.player.PlayerPortalEvent",
                 "A subclass of PlayerTeleportEvent, excluded for the same reason, plus one of its"
-                        + " own: with movement frozen an unauthenticated player cannot walk into a"
-                        + " portal, so the only way to reach this event is having quit inside a portal"
-                        + " block — where cancelling it would trap the player there until they log in"
-                        + " from inside the portal.");
+                        + " own: an unauthenticated player may rejoin inside a portal block or fall"
+                        + " into a portal below them, since descending is allowed. This movement"
+                        + " listener does not cancel portal teleports; cancelling them could trap a"
+                        + " player inside the portal until they log in there.");
         uncovered.put("org.bukkit.event.player.AsyncPlayerChatPreviewEvent",
                 "A chat preview renders text and mutates no world or inventory state, so it is"
                         + " outside the required set's criterion. Chat itself is already cancelled by"

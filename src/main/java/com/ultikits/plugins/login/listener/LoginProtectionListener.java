@@ -107,9 +107,10 @@ import java.util.concurrent.ConcurrentHashMap;
  *   operator rescuing a stuck player with {@code /tp}. A teleport is not player-initiated world
  *   mutation, and {@link #onPlayerMove} already freezes walking.</li>
  *   <li>{@link PlayerPortalEvent} — a subclass of {@link PlayerTeleportEvent}, excluded for that
- *   reason plus one of its own: with movement frozen, the only way to reach it is having quit inside
- *   a portal block, where cancelling it would trap the player until they log in from inside the
- *   portal.</li>
+ *   reason plus one of its own: an unauthenticated player may rejoin inside a portal block or
+ *   fall into a portal below them, since descending is allowed. This movement listener does not
+ *   cancel portal teleports; cancelling them could trap a player inside the portal until they
+ *   log in there.</li>
  *   <li>{@code AsyncPlayerChatPreviewEvent} — a preview renders text and mutates no world or
  *   inventory state. Chat itself is already cancelled by {@link #onPlayerChat}, and the class is
  *   {@code @Deprecated} in {@code paper-api} 1.21.11.</li>
@@ -196,11 +197,15 @@ public class LoginProtectionListener implements Listener {
     }
     
     /**
-     * Refuse block-column changes and upward block changes, but never revert a descent.
+     * Refuse block-column changes and upward block changes, but never restore the old Y on descent.
      * Holding an airborne player at their old Y triggers Paper's floating kick before they can
-     * log in (UltiLogin#73 UAT probe.airborne-rejoin). A sideways descent keeps the lower Y but
-     * restores X/Z and facing, so falling cannot let a player leave their column. Looking around
-     * and movement within a block remain untouched.
+     * log in (see {@code ultilogin.protection.movement-block.airborne-rejoin} in UAT-CHECKLIST.md).
+     * Paper treats a changed move destination as a teleport and returns before updating its floating
+     * flag; that same-world teleport does not reset the floating counter. Returning a sideways fall
+     * to the previous fractional X/Z lets repeated moves converge on a column edge. Instead, keep
+     * the lower Y and previous facing at the centre of the from-block column: the distance to its
+     * edges leaves ordinary free-fall ticks between reverts to clear the floating flag. Looking
+     * around and movement within a block remain untouched.
      */
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerMove(PlayerMoveEvent event) {
@@ -214,7 +219,9 @@ public class LoginProtectionListener implements Listener {
         if (to.getY() < from.getY()) {
             if (changesColumn) {
                 Location falling = from.clone();
+                falling.setX(from.getBlockX() + 0.5);
                 falling.setY(to.getY());
+                falling.setZ(from.getBlockZ() + 0.5);
                 event.setTo(falling);
             }
         } else if (changesColumn || from.getBlockY() != to.getBlockY()) {

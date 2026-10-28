@@ -349,7 +349,7 @@ class LoginProtectionListenerTest {
         @org.junit.jupiter.params.ParameterizedTest
         @org.junit.jupiter.params.provider.CsvSource({"1.2, 62.8, -0.2", "0.2, 62.8, -1.2", "1.2, 62.8, -1.2",
                 "1.2, 64.1, -1.2"})
-        @DisplayName("A sideways fall keeps the lower Y but restores X/Z and facing (UltiLogin#73)")
+        @DisplayName("A sideways fall keeps the lower Y at the column centre with the previous facing (UltiLogin#73)")
         void sidewaysFallKeepsLowerY(double toX, double toY, double toZ) {
             org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.2, 64.2, -0.2, 15, 25);
             org.bukkit.Location to = new org.bukkit.Location(mockWorld, toX, toY, toZ, 45, 55);
@@ -357,10 +357,14 @@ class LoginProtectionListenerTest {
 
             listener.onPlayerMove(event);
 
-            assertThat(event.getTo()).isEqualTo(new org.bukkit.Location(mockWorld, 0.2, toY, -0.2, 15, 25));
+            assertThat(event.getTo()).isEqualTo(new org.bukkit.Location(mockWorld,
+                    from.getBlockX() + 0.5, toY, from.getBlockZ() + 0.5, 15, 25));
+            assertThat(event.getTo().getX()).isNotEqualTo(from.getX());
+            assertThat(event.getTo().getZ()).isNotEqualTo(from.getZ());
             assertThat(from.getY()).isEqualTo(64.2);
             assertThat(to.getX()).isEqualTo(toX);
             assertThat(to.getZ()).isEqualTo(toZ);
+            assertThat(to).isEqualTo(new org.bukkit.Location(mockWorld, toX, toY, toZ, 45, 55));
         }
 
         @Test
@@ -369,6 +373,18 @@ class LoginProtectionListenerTest {
             org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.2, 64.8, -0.2, 15, 25);
             PlayerMoveEvent event = new PlayerMoveEvent(player, from,
                     new org.bukkit.Location(mockWorld, 0.2, 65.1, -0.2, 45, 55));
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.getTo()).isEqualTo(from);
+        }
+
+        @Test
+        @DisplayName("An upward move that also changes column is still reverted (UltiLogin#73)")
+        void upwardAndColumnChangeIsReverted() {
+            org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.2, 64.8, -0.2, 15, 25);
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from,
+                    new org.bukkit.Location(mockWorld, 1.2, 65.1, -1.2, 45, 55));
 
             listener.onPlayerMove(event);
 
