@@ -2122,7 +2122,7 @@ public class LoginService {
                 message = () -> i18n("panel_link_cancelled");
                 break;
             case DENIED:
-                message = () -> i18n("panel_outcome_refused");
+                message = () -> i18n("panel_link_declined");
                 break;
             default:
                 message = () -> i18n("panel_outcome_expired");

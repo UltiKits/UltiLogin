@@ -1073,7 +1073,7 @@ class PlayerLinkEventsTest {
         @CsvSource({
                 "EXPIRED, panel_outcome_expired",
                 "CANCELLED, panel_link_cancelled",
-                "DENIED, panel_outcome_refused",
+                "DENIED, panel_link_declined",
                 "OTHER, panel_outcome_expired"
         })
         @DisplayName("each reason ends the pending link with its line on the main thread and resumes the countdown with the time left")
@@ -1086,6 +1086,26 @@ class PlayerLinkEventsTest {
 
             assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
             assertMessage(key, 1);
+            assertCountdownResumedWithTheTimeLeft();
+        }
+
+        @Test
+        @DisplayName("DENIED sends the neutral declined text before the countdown resume line")
+        void deniedSendsDeclinedBeforeResume() {
+            when(UltiLoginTestHelper.getMockPlugin().i18n(anyString()))
+                    .thenAnswer(invocation -> CatalogueText.text("en", invocation.getArgument(0)));
+            String link = joinAndOpenLinkLate();
+            clearInvocations(player);
+
+            port.handler.onExpired(new LinkExpiry(link, playerUuid, LinkExpiry.Reason.DENIED));
+            runMainThread();
+
+            ArgumentCaptor<String> messages = ArgumentCaptor.forClass(String.class);
+            verify(player, times(2)).sendMessage(messages.capture());
+            assertThat(messages.getAllValues()).containsExactly(
+                    ChatColor.RED + "The web panel sign-in was declined. Run /panel again for a new link.",
+                    ChatColor.YELLOW + "Your login countdown has resumed. Log in before it runs out.");
+            assertThat(service.hasPendingPanelRequest(playerUuid)).isFalse();
             assertCountdownResumedWithTheTimeLeft();
         }
 

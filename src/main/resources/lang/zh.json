@@ -76,6 +76,7 @@
   "panel_error": "&c生成面板链接失败，请稍后再试。",
   "panel_outcome_expired": "&c你的网页面板链接已过期，请重新执行 /panel 获取新链接。",
   "panel_outcome_refused": "&c网页面板拒绝了此次登录。",
+  "panel_link_declined": "&c网页登录已被拒绝。再次输入 /panel 获取新链接。",
   "panel_link_cancelled": "&e你取消了网页面板登录。如需继续，请重新执行 /panel 获取新链接。",
   "panel_account_create_failed": "&c无法创建你的游戏账号。请重新执行 /panel 重试。",
   "panel_late_completion": "&e你的网页面板登录在所用链接结束后才完成。请重新执行 /panel 登录。",

@@ -76,6 +76,7 @@
   "panel_error": "&cFailed to generate panel link. Please try again later.",
   "panel_outcome_expired": "&cYour web panel link has expired. Run /panel again for a new one.",
   "panel_outcome_refused": "&cThe web panel refused this sign-in.",
+  "panel_link_declined": "&cThe web panel sign-in was declined. Run /panel again for a new link.",
   "panel_link_cancelled": "&eYou cancelled the web panel sign-in. Run /panel again for a new link.",
   "panel_account_create_failed": "&cYour game account could not be created. Run /panel again to retry.",
   "panel_late_completion": "&eYour web panel sign-in finished after the link you used had ended. Run /panel again to log in.",

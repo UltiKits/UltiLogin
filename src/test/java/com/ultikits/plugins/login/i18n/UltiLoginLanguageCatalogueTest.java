@@ -192,9 +192,15 @@ class UltiLoginLanguageCatalogueTest {
     }
 
     @Test
-    @DisplayName("every catalogue key is reachable from the source")
+    @DisplayName("every catalogue key is reachable except the refusal key retained for operator-edited catalogues")
     void everyCatalogueKeyIsReachableFromSource() {
-        assertThat(unreachableCatalogueKeys(sources, DYNAMIC_KEY_SITES, catalogues)).isEmpty();
+        // Keep the old DENIED text for compatibility; all other catalogue keys must still be reachable.
+        List<String> retainedKeys = new ArrayList<>();
+        for (Catalogue catalogue : catalogues) {
+            retainedKeys.add(catalogue.fileName + " declares \"panel_outcome_refused\", which no code can produce");
+        }
+        assertThat(unreachableCatalogueKeys(sources, DYNAMIC_KEY_SITES, catalogues))
+                .containsExactlyInAnyOrderElementsOf(retainedKeys);
     }
 
     @Test
