@@ -5,6 +5,65 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 本文件记录本项目的所有重要更改，格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)。
 
+## [Unreleased]
+
+### Added
+
+- On UltiTools-API 6.3.1 the module registers `/login`, `/l`, `/register`, `/reg`, `/changepassword`, `/changepw`,
+  `/cpw`, `/setpassword`, `/setpw`, `/recover`, `/logadmin`, `/loginadmin` and `/regs` with the framework's
+  sensitive-command registry when it is enabled, so their arguments are replaced with `***` in everything the
+  framework sends to UltiCloud (the panel console, error reports and chat). The list is taken from the commands' own
+  declarations: every alias of every command that takes arguments. The local console and log files keep the module's
+  own `******` mask, which is unchanged.
+- 在 UltiTools-API 6.3.1 上，模块启用时会把 `/login`、`/l`、`/register`、`/reg`、`/changepassword`、`/changepw`、`/cpw`、
+  `/setpassword`、`/setpw`、`/recover`、`/logadmin`、`/loginadmin` 和 `/regs` 登记到框架的敏感命令表，框架发往 UltiCloud 的所有内容
+  （面板控制台、错误报告、聊天）中，这些命令的参数都会被替换为 `***`。列表取自命令本身的声明：凡是带参数的命令，其全部别名都会登记。
+  本地控制台与日志文件仍使用模块自己的 `******` 遮蔽，规则不变。
+
+### Changed
+
+- Requires UltiTools-API 6.3.1 or later. `api-version` rises from 630 to 631, so UltiTools-API 6.3.0 refuses this
+  version at load with a warning that the UltiTools version is outdated.
+- 需要 UltiTools-API 6.3.1 或更高版本。`api-version` 从 630 提高到 631，UltiTools-API 6.3.0 会在加载时拒绝此版本，并警告
+  UltiTools 版本过旧。
+- `/panel` now creates its link through UltiTools-API 6.3.1's player-link API instead of the module's own HTTP request, and
+  nothing is polled any more: UltiCloud reports the result as an event. All three proofs still work (logged in in game, an
+  already linked account, a web registration). A sign-in that completes is answered to UltiCloud (account created, account
+  already exists, not requested, registration rejected, login plugin unavailable); a repeated delivery of the same sign-in
+  creates and logs in nothing twice; a sign-in that arrives after the player left, the server restarted or the link ended
+  creates a requested account but logs nobody in, and tells a player who is online to run `/panel` again. A link ends when
+  UltiCloud says so (expired, cancelled, refused) or at its own expiry time, which holds the login countdown for at most
+  ten minutes.
+- Messages changed. New: "You have been logged in via UltiCloud." (no more "(Player)" or "(Server Owner)"), "The web panel
+  sign-in is complete.", a cancelled link now says to run `/panel` again (cancelling is final), the rate-limit and
+  link-not-permitted answers, "Your game account could not be created. Run /panel again to retry.", and the late sign-in
+  line. The refusal reasons the old protocol gave are gone: a refusal is now just "The web panel refused this sign-in."
+- A game password set with `/setpassword` is now described as a backup for when UltiCloud cannot be reached, and the
+  player is told to use a password different from their UltiKits account. The reminder follows every web sign-in of an
+  account that has no game password and every join, `/login` and re-prompt in which that account is not logged in; the
+  `/login` refusal and `/setpassword`'s help text say the same.
+- `/panel` for a name without an account is refused before any link is requested when its address has already reached
+  `max-register-per-ip`, so the web side no longer creates an UltiKits account the game would refuse. The limit is checked
+  again when the web sign-in finishes.
+- 现在 `/panel` 通过 UltiTools-API 6.3.1 的玩家链接接口创建链接，不再使用模块自己的 HTTP 请求，也不再轮询：UltiCloud 以事件报告结果。三种证明仍然
+  可用（已在游戏内登录、已关联账号、网页注册）。完成的网页登录会回执给 UltiCloud（账号已创建、账号已存在、未要求、注册被拒绝、登录插件不可用）；
+  同一次登录重复投递不会重复建号或登录；玩家已退出、服务器已重启或链接已结束后才到达的登录会创建被要求的账号但不让任何人登录，并提示在线的玩家重新
+  执行 `/panel`。链接在 UltiCloud 报告结束（过期、取消、拒绝）时，或到自己的过期时间时结束，对登录倒计时的暂停最长十分钟。
+- 提示文字有变化。新增：“You have been logged in via UltiCloud.”（不再区分 Player／Server Owner）、网页登录完成提示、取消后需重新执行 `/panel`（取消是终态）、
+  请求太频繁和不允许生成链接的提示、游戏账号创建失败提示，以及迟到登录的提示。旧协议给出的各种拒绝原因已取消，拒绝只提示“网页面板拒绝了此次登录”。
+- 用 `/setpassword` 设置的游戏密码现在被说明为 UltiCloud 连不上时用的备用密码，并提醒玩家使用与 UltiKits 账号不同的密码。每次没有游戏密码的账号经网页登录后，
+  以及该账号未登录时的每次进服、`/login` 和再次提示，都会提醒；`/login` 的拒绝提示和 `/setpassword` 的帮助文字同样如此。
+- 名字没有账号时，若其地址已达 `max-register-per-ip`，`/panel` 在请求链接前就会拒绝，网页不再建出游戏会拒绝的 UltiKits 账号；网页登录完成时会再检查一次。
+
+### Removed
+
+- UltiLogin 2.0.0's `/panel` request path (the HTTP call to UltiCloud, the three-second polling, the owner/player
+  distinction in the sign-in message, the four refusal reasons and the credential-refused message) is gone, with no
+  bridge: UltiLogin 2.0.0's `/panel` does not work on UltiTools-API 6.3.1, so update to this version. Players can still
+  use `/login`.
+- UltiLogin 2.0.0 的 `/panel` 请求路径（对 UltiCloud 的 HTTP 请求、三秒轮询、登录提示中服主／玩家的区分、四种拒绝原因以及凭据被拒绝的提示）已移除，且没有
+  兼容桥接：UltiLogin 2.0.0 的 `/panel` 在 UltiTools-API 6.3.1 上不能使用，请更新到此版本。玩家仍可使用 `/login`。
+
 ## [2.0.0] - 2026-10-21
 
 ### Added

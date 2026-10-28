@@ -11,6 +11,7 @@ import mc.obliviate.inventory.InventoryAPI;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
+import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Cancellable;
 import org.bukkit.plugin.Plugin;
@@ -106,9 +107,10 @@ import java.util.concurrent.ConcurrentHashMap;
  *   operator rescuing a stuck player with {@code /tp}. A teleport is not player-initiated world
  *   mutation, and {@link #onPlayerMove} already freezes walking.</li>
  *   <li>{@link PlayerPortalEvent} — a subclass of {@link PlayerTeleportEvent}, excluded for that
- *   reason plus one of its own: with movement frozen, the only way to reach it is having quit inside
- *   a portal block, where cancelling it would trap the player until they log in from inside the
- *   portal.</li>
+ *   reason plus one of its own: an unauthenticated player may rejoin inside a portal block or
+ *   fall into a portal below them, since descending is allowed. This movement listener does not
+ *   cancel portal teleports; cancelling them could trap a player inside the portal until they
+ *   log in there.</li>
  *   <li>{@code AsyncPlayerChatPreviewEvent} — a preview renders text and mutates no world or
  *   inventory state. Chat itself is already cancelled by {@link #onPlayerChat}, and the class is
  *   {@code @Deprecated} in {@code paper-api} 1.21.11.</li>
@@ -194,14 +196,36 @@ public class LoginProtectionListener implements Listener {
         loginService.onPlayerQuit(event.getPlayer());
     }
     
+    /**
+     * Refuse block-column changes and upward block changes, but never restore the old Y on descent.
+     * Holding an airborne player at their old Y triggers Paper's floating kick before they can
+     * log in (see {@code ultilogin.protection.movement-block.airborne-rejoin} in UAT-CHECKLIST.md).
+     * Paper treats a changed move destination as a teleport and returns before updating its floating
+     * flag; that same-world teleport does not reset the floating counter. Returning a sideways fall
+     * to the previous fractional X/Z lets repeated moves converge on a column edge. Instead, keep
+     * the lower Y and previous facing at the centre of the from-block column: the distance to its
+     * edges leaves ordinary free-fall ticks between reverts to clear the floating flag. Looking
+     * around and movement within a block remain untouched.
+     */
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerMove(PlayerMoveEvent event) {
-        // Only cancel if player should be blocked AND actually moved (not just looked around)
-        if (shouldCancel(event.getPlayer()) &&
-                (event.getFrom().getBlockX() != event.getTo().getBlockX() ||
-                 event.getFrom().getBlockY() != event.getTo().getBlockY() ||
-                 event.getFrom().getBlockZ() != event.getTo().getBlockZ())) {
-            event.setTo(event.getFrom());
+        if (!shouldCancel(event.getPlayer())) {
+            return;
+        }
+        Location from = event.getFrom();
+        Location to = event.getTo();
+        boolean changesColumn = from.getBlockX() != to.getBlockX()
+                || from.getBlockZ() != to.getBlockZ();
+        if (to.getY() < from.getY()) {
+            if (changesColumn) {
+                Location falling = from.clone();
+                falling.setX(from.getBlockX() + 0.5);
+                falling.setY(to.getY());
+                falling.setZ(from.getBlockZ() + 0.5);
+                event.setTo(falling);
+            }
+        } else if (changesColumn || from.getBlockY() != to.getBlockY()) {
+            event.setTo(from);
         }
     }
     
@@ -627,10 +651,10 @@ public class LoginProtectionListener implements Listener {
                     UUID uuid = player.getUniqueId();
                     // An account created on the web has no game password, so the number pad can
                     // never succeed and would keep the player from typing /panel: tell them to
-                    // log in with /panel instead (maintainer decision 2026-10-09).
+                    // log in with /panel and set a backup password (maintainer decision 2026-10-09).
                     if (loginService.isRegistered(uuid) && loginService.hasNoGamePassword(uuid)) {
                         player.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                            loginService.i18n("login_no_game_password")));
+                            loginService.i18n("login_no_game_password_backup")));
                         return;
                     }
                     // Mark this player as mid-transition before opening the new credential GUI.
@@ -671,7 +695,13 @@ public class LoginProtectionListener implements Listener {
                 // already-authenticated player. Re-check exactly what the GUI branch checks
                 // before sending anything.
                 if (player.isOnline() && !loginService.isLoggedIn(player.getUniqueId())) {
-                    if (loginService.isRegistered(player.getUniqueId())) {
+                    UUID uuid = player.getUniqueId();
+                    if (loginService.isRegistered(uuid) && loginService.hasNoGamePassword(uuid)) {
+                        // No password can match an account created on the web: point it at /panel
+                        // and the backup password, as the GUI branch does.
+                        player.sendMessage(ChatColor.translateAlternateColorCodes('&',
+                            loginService.i18n("login_no_game_password_backup")));
+                    } else if (loginService.isRegistered(uuid)) {
                         player.sendMessage(ChatColor.translateAlternateColorCodes('&',
                             loginService.getConfig().getLoginPrompt()));
                     } else {

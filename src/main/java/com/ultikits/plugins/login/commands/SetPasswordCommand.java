@@ -11,7 +11,8 @@ import org.bukkit.entity.Player;
 
 /**
  * {@code /setpassword <new> <confirm>}: sets the first game password of an account that was created on
- * the web through {@code /panel} and therefore has none (Phase 18 magic-link contract, section 13).
+ * the web through {@code /panel} and therefore has none. That password is a backup for when UltiCloud cannot be
+ * reached; the help asks for one different from the UltiKits password.
  * <p>
  * Accepted only while the player is logged in and the stored password is empty; the new password must
  * satisfy the same policy as {@code /register}. An account that already has a password is pointed at
@@ -66,7 +67,7 @@ public class SetPasswordCommand extends BaseCommandExecutor {
     @Override
     protected void handleHelp(CommandSender sender) {
         LoginConfig config = loginService.getConfig();
-        sender.sendMessage(ChatColor.YELLOW + loginService.i18n("help_setpassword"));
+        sender.sendMessage(ChatColor.YELLOW + loginService.i18n("help_setpassword_backup"));
         if (config.isGuiModeEnabled()) {
             sender.sendMessage(ChatColor.translateAlternateColorCodes('&', loginService.i18n("help_password_digits")
                 .replace("{LENGTH}", String.valueOf(config.getGuiPasswordLength()))));

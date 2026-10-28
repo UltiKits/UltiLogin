@@ -256,6 +256,22 @@ class LoginProtectionListenerTest {
         }
 
         @Test
+        @DisplayName("text mode: an account created on the web is re-prompted with the backup-password line, not the login prompt")
+        void textModeWebAccountGetsTheBackupPasswordLine() {
+            when(mockServer.isPrimaryThread()).thenReturn(true);
+            when(config.isGuiModeEnabled()).thenReturn(false);
+            when(loginService.isRegistered(playerUuid)).thenReturn(true);
+            when(loginService.hasNoGamePassword(playerUuid)).thenReturn(true);
+            when(loginService.i18n("login_no_game_password_backup")).thenReturn("&cUse /panel, then /setpassword");
+
+            LoginProtectionListener.presentCredentialPrompt(
+                    player, UltiLoginTestHelper.getMockPlugin(), loginService, mockBukkitPlugin);
+
+            verify(player).sendMessage(ChatColor.translateAlternateColorCodes('&', "&cUse /panel, then /setpassword"));
+            verify(player, times(1)).sendMessage(anyString());
+        }
+
+        @Test
         @DisplayName("Should skip the prompt and log a warning, without throwing, when the plugin is disabling")
         void skipsWhenPluginDisabling() {
             when(mockServer.isPrimaryThread()).thenReturn(false);
@@ -314,6 +330,92 @@ class LoginProtectionListenerTest {
             // reads the location back after the listener resets it see null instead of the mock.
             when(loc.clone()).thenReturn(loc);
             return loc;
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest
+        @org.junit.jupiter.params.provider.CsvSource({"64.2, 62.8", "64.8, 64.2", "0.2, -1.2"})
+        @DisplayName("An unauthenticated straight fall keeps the original destination (UltiLogin#73)")
+        void straightFallKeepsDestination(double fromY, double toY) {
+            org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.2, fromY, -0.2, 15, 25);
+            org.bukkit.Location to = new org.bukkit.Location(mockWorld, 0.8, toY, -0.8, 45, 55);
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from, to);
+            org.bukkit.Location originalTo = event.getTo();
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.getTo()).isSameAs(originalTo);
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest
+        @org.junit.jupiter.params.provider.CsvSource({"1.2, 62.8, -0.2", "0.2, 62.8, -1.2", "1.2, 62.8, -1.2",
+                "1.2, 64.1, -1.2"})
+        @DisplayName("A sideways fall keeps the lower Y at the column centre with the previous facing (UltiLogin#73)")
+        void sidewaysFallKeepsLowerY(double toX, double toY, double toZ) {
+            org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.2, 64.2, -0.2, 15, 25);
+            org.bukkit.Location to = new org.bukkit.Location(mockWorld, toX, toY, toZ, 45, 55);
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from, to);
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.getTo()).isEqualTo(new org.bukkit.Location(mockWorld,
+                    from.getBlockX() + 0.5, toY, from.getBlockZ() + 0.5, 15, 25));
+            assertThat(event.getTo().getX()).isNotEqualTo(from.getX());
+            assertThat(event.getTo().getZ()).isNotEqualTo(from.getZ());
+            assertThat(from.getY()).isEqualTo(64.2);
+            assertThat(to.getX()).isEqualTo(toX);
+            assertThat(to.getZ()).isEqualTo(toZ);
+            assertThat(to).isEqualTo(new org.bukkit.Location(mockWorld, toX, toY, toZ, 45, 55));
+        }
+
+        @Test
+        @DisplayName("An upward block change is still reverted (UltiLogin#73)")
+        void upwardBlockChangeIsReverted() {
+            org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.2, 64.8, -0.2, 15, 25);
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from,
+                    new org.bukkit.Location(mockWorld, 0.2, 65.1, -0.2, 45, 55));
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.getTo()).isEqualTo(from);
+        }
+
+        @Test
+        @DisplayName("An upward move that also changes column is still reverted (UltiLogin#73)")
+        void upwardAndColumnChangeIsReverted() {
+            org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.2, 64.8, -0.2, 15, 25);
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from,
+                    new org.bukkit.Location(mockWorld, 1.2, 65.1, -1.2, 45, 55));
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.getTo()).isEqualTo(from);
+        }
+
+        @Test
+        @DisplayName("A look-only move keeps its destination and new facing (UltiLogin#73)")
+        void lookOnlyKeepsDestination() {
+            org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.2, 64.8, -0.2, 15, 25);
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from,
+                    new org.bukkit.Location(mockWorld, 0.2, 64.8, -0.2, 45, 55));
+            org.bukkit.Location originalTo = event.getTo();
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.getTo()).isSameAs(originalTo);
+        }
+
+        @Test
+        @DisplayName("An authenticated sideways fall keeps its destination (UltiLogin#73)")
+        void authenticatedFallKeepsDestination() {
+            when(loginService.isLoggedIn(playerUuid)).thenReturn(true);
+            PlayerMoveEvent event = new PlayerMoveEvent(player,
+                    new org.bukkit.Location(mockWorld, 0.2, 64.8, -0.2, 15, 25),
+                    new org.bukkit.Location(mockWorld, 2.2, 62.8, -2.2, 45, 55));
+            org.bukkit.Location originalTo = event.getTo();
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.getTo()).isSameAs(originalTo);
         }
 
         @Test
@@ -1415,7 +1517,7 @@ class LoginProtectionListenerTest {
             Runnable task = captureReopenTask();
             when(loginService.isRegistered(playerUuid)).thenReturn(true);
             when(loginService.hasNoGamePassword(playerUuid)).thenReturn(true);
-            when(loginService.i18n("login_no_game_password")).thenReturn("&cUse /panel, then /setpassword");
+            when(loginService.i18n("login_no_game_password_backup")).thenReturn("&cUse /panel, then /setpassword");
 
             try (MockedStatic<LoginGUIPage> loginGui = mockStatic(LoginGUIPage.class);
                  MockedStatic<RegisterGUIPage> registerGui = mockStatic(RegisterGUIPage.class)) {

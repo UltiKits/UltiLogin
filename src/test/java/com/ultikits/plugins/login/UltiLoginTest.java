@@ -319,6 +319,51 @@ class UltiLoginTest {
     }
 
     /**
+     * Enabling the module registers its argument-taking commands with UltiTools-API 6.3.1's
+     * sensitive-command registry (D-01), so their arguments are redacted in what the framework sends
+     * to UltiCloud. The registry is reached through the package-private seam
+     * {@code sensitiveCommandRegistry()}; a mocked plugin returns {@code null} from it, which is why
+     * every other test here enables without static mocking.
+     */
+    @Nested
+    @DisplayName("the argument-taking commands are registered with the framework's sensitive-command registry")
+    class SensitiveCommandRegistration {
+
+        @Test
+        @DisplayName("enable registers exactly the derived names in the framework's registry")
+        void enableRegistersTheDerivedNames() {
+            UltiLogin plugin = mock(UltiLogin.class);
+            PluginLogger logger = mock(PluginLogger.class);
+            when(plugin.getLogger()).thenReturn(logger);
+            when(plugin.i18n(anyString())).thenAnswer(com.ultikits.plugins.login.i18n.CatalogueText.answer("en"));
+            when(plugin.registerSelf()).thenCallRealMethod();
+            when(plugin.sensitiveCommandRegistry()).thenCallRealMethod();
+
+            com.ultikits.ultitools.websocket.SensitiveCommandRegistry registry =
+                    new com.ultikits.ultitools.websocket.SensitiveCommandRegistry();
+            com.ultikits.ultitools.UltiTools ultiTools = mock(com.ultikits.ultitools.UltiTools.class);
+            when(ultiTools.getSensitiveCommandRegistry()).thenReturn(registry);
+            try (org.mockito.MockedStatic<com.ultikits.ultitools.UltiTools> statics =
+                         mockStatic(com.ultikits.ultitools.UltiTools.class)) {
+                statics.when(com.ultikits.ultitools.UltiTools::getInstance).thenReturn(ultiTools);
+
+                assertThat(plugin.registerSelf()).isTrue();
+            }
+
+            assertThat(registry.registeredNames())
+                    .isEqualTo(com.ultikits.plugins.login.logging.CloudSensitiveCommands.names());
+            assertThat(registry.redactText("Steve issued server command: /login hunter2"))
+                    .isEqualTo("Steve issued server command: /login ***");
+        }
+
+        @Test
+        @DisplayName("POSITIVE CONTROL: without the enable call the registry stays empty")
+        void registryStartsEmpty() {
+            assertThat(new com.ultikits.ultitools.websocket.SensitiveCommandRegistry().registeredNames()).isEmpty();
+        }
+    }
+
+    /**
      * enabling the module installs the password log filter on Log4j's root logger and
      * unloading it removes the filter, so an unload leaves none behind and a re-enable never stacks
      * two. A failed install warns and never costs the module its enable.

@@ -11,8 +11,6 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.Query;
 import com.ultikits.ultitools.manager.ConfigManager;
-import com.ultikits.ultitools.utils.CommonUtils;
-import com.ultikits.ultitools.utils.UltiCloudRequests;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -124,8 +122,7 @@ class LoginServiceTest {
         when(mockQuery.delete()).thenReturn(0);
 
         service = new LoginService(UltiLoginTestHelper.getMockPlugin(), config);
-        // The /panel tests in this class use the production transport, the framework helper
-        // UltiCloudRequests, statically mocked per test (plan 21-18: there is no other transport).
+        // The /panel tests in this class that need a create answer install a stub PlayerLinkPort.
 
         playerUuid = UUID.randomUUID();
         player = UltiLoginTestHelper.createMockPlayer("TestPlayer", playerUuid);
@@ -140,10 +137,8 @@ class LoginServiceTest {
     @Test
     @DisplayName("Constructor resolves the UltiTools plugin its scheduler paths hand to Bukkit")
     void constructorResolvesFrameworkPlugin() throws Exception {
-        // startAuthPolling passes this field to the scheduler as the task owner
-        // (LoginService.java:855 and :907). Nothing currently enabled in this class reaches that
-        // path, so a null here would sit latent -- and MockBukkit's scheduler accepts a null owner
-        // silently, so even a test that did reach it would not necessarily fail. Pin the field
+        // The scheduler paths (credential-GUI reopen, prompts) pass this field to the scheduler as
+        // the task owner. MockBukkit's scheduler accepts a null owner silently, so pin the field
         // instead, so the fixture cannot drop the "UltiTools" plugin without something going red.
         Field bukkitPluginField = LoginService.class.getDeclaredField("bukkitPlugin");
         bukkitPluginField.setAccessible(true);
@@ -204,6 +199,25 @@ class LoginServiceTest {
     @Nested
     @DisplayName("isPasswordValid")
     class IsPasswordValid {
+
+        @Test
+        void twoCharacterRegistrationIsRefusedWithShippedMinimum() {
+            LoginConfig defaults = new LoginConfig();
+            when(config.isGuiModeEnabled()).thenReturn(defaults.isGuiModeEnabled());
+            when(config.getMinPasswordLength()).thenReturn(defaults.getMinPasswordLength());
+            when(config.getMaxPasswordLength()).thenReturn(defaults.getMaxPasswordLength());
+            LoginService realValidationService = spy(service);
+            com.ultikits.plugins.login.commands.RegisterCommand command =
+                    new com.ultikits.plugins.login.commands.RegisterCommand(realValidationService);
+
+            command.register(player, "ab", "ab");
+
+            verify(realValidationService).isPasswordValid("ab");
+            verify(realValidationService, never()).register(any(), anyString());
+            verify(dataOperator, never()).insert(any(AccountData.class));
+            assertThat(service.isPasswordValid("ab")).isFalse();
+            assertThat(service.isRegistered(playerUuid)).isFalse();
+        }
 
         @Test
         @DisplayName("Should validate command mode password length")
@@ -766,6 +780,34 @@ class LoginServiceTest {
     @Nested
     @DisplayName("resetPassword")
     class ResetPassword {
+
+        @ParameterizedTest(name = "generated password authenticates in GUI mode = {0}")
+        @ValueSource(booleans = {false, true})
+        void generatedPasswordLogsInAndOldPasswordIsRefused(boolean guiMode) {
+            when(config.isGuiModeEnabled()).thenReturn(guiMode);
+            when(config.getGuiPasswordLength()).thenReturn(new LoginConfig().getGuiPasswordLength());
+            String oldPassword = "oldPassword123";
+            String salt = "testSalt";
+            AccountData original = UltiLoginTestHelper.createSampleAccount(
+                    playerUuid, "TestPlayer", hashPasswordForTest(oldPassword, salt), salt);
+            when(mockQuery.list()).thenReturn(Collections.singletonList(original));
+
+            String newPassword = service.resetPassword(playerUuid);
+
+            assertThat(newPassword).isNotNull();
+            if (guiMode) {
+                assertThat(newPassword).matches("\\d{4}");
+            }
+            ArgumentCaptor<AccountData> written = ArgumentCaptor.forClass(AccountData.class);
+            verify(dataOperator).updateCounted(written.capture());
+            when(mockQuery.list()).thenReturn(Collections.singletonList(written.getValue()));
+
+            assertThat(service.login(player, oldPassword).isSuccess()).as("old password is revoked").isFalse();
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            assertThat(service.login(player, newPassword).isSuccess())
+                    .as("the returned random password authenticates against the stored hash").isTrue();
+            assertThat(service.isLoggedIn(playerUuid)).isTrue();
+        }
 
         @Test
         @DisplayName("Should return null when account doesn't exist")
@@ -1662,10 +1704,10 @@ class LoginServiceTest {
         }
 
         @Test
-        @DisplayName("invalidateSession cancels a pending panel magic-link request and its polling task")
+        @DisplayName("invalidateSession ends a pending panel link with all its bookkeeping")
         void invalidateSessionCancelsPendingPanelRequest() throws Exception {
             // unregister() ends `sessions` entries but, before this fix, left an in-flight /panel
-            // magic-link request live. Since invalidateSession is the single entry point every
+            // request live. Since invalidateSession is the single entry point every
             // credential-changing path already routes through, the cancellation belongs here
             // rather than duplicated at each call site -- covering unregister and both
             // resetPassword overloads and changePassword in one place.
@@ -1673,35 +1715,24 @@ class LoginServiceTest {
             Map<String, UUID> pendingPanelRequests =
                     (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
             @SuppressWarnings("unchecked")
-            Map<String, Long> pendingPanelTimestamps =
-                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
+            Map<String, Long> pendingPanelDeadlines =
+                    (Map<String, Long>) getFieldValue(service, "pendingPanelDeadlines");
             @SuppressWarnings("unchecked")
-            Map<String, BukkitTask> pollingTasks =
-                    (Map<String, BukkitTask>) getFieldValue(service, "pollingTasks");
-            @SuppressWarnings("unchecked")
-            Map<UUID, String> currentPollingRequestId =
-                    (Map<UUID, String>) getFieldValue(service, "currentPollingRequestId");
+            Map<UUID, String> latestPanelRequest =
+                    (Map<UUID, String>) getFieldValue(service, "latestPanelRequest");
 
-            String requestId = "pending-panel-request";
-            pendingPanelRequests.put(requestId, playerUuid);
-            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
-            BukkitTask mockTask = mock(BukkitTask.class);
-            pollingTasks.put(requestId, mockTask);
-            currentPollingRequestId.put(playerUuid, requestId);
+            String linkId = "pending-panel-link";
+            pendingPanelRequests.put(linkId, playerUuid);
+            pendingPanelDeadlines.put(linkId, System.currentTimeMillis() + 300_000L);
+            latestPanelRequest.put(playerUuid, linkId);
 
             service.invalidateSession(playerUuid);
 
             assertThat(pendingPanelRequests)
-                    .as("a pending panel magic-link request for the invalidated player must be cancelled")
-                    .doesNotContainKey(requestId);
-            assertThat(pendingPanelTimestamps).doesNotContainKey(requestId);
-            assertThat(pollingTasks)
-                    .as("the polling task backing the cancelled request must be removed")
-                    .doesNotContainKey(requestId);
-            assertThat(currentPollingRequestId)
-                    .as("the player's current-poll index entry must also be cleared")
-                    .doesNotContainKey(playerUuid);
-            verify(mockTask).cancel();
+                    .as("a pending panel link of the invalidated player must end")
+                    .doesNotContainKey(linkId);
+            assertThat(pendingPanelDeadlines).doesNotContainKey(linkId);
+            assertThat(latestPanelRequest).doesNotContainKey(playerUuid);
         }
 
         @Test
@@ -2484,13 +2515,10 @@ class LoginServiceTest {
          * silent {@code isOnline()} no-op, because both are silent. This proves the cleanup
          * directly: the player is still reported online (so no online check can explain the
          * outcome), every one of the five tracking maps holds an entry for them, and after the quit
-         * none does and the in-flight panel-poll task has been cancelled.
-         * <p>
-         * It proves what the checklist row states and nothing more: quitting does not withdraw a
-         * pending panel request, which stays until its five-minute expiry.
+         * none does: the pending panel link is dropped with the rest.
          */
         @Test
-        @DisplayName("Quit clears all five tracking entries and cancels the poll task while the player still reads as online (UltiKits/UltiLogin#28)")
+        @DisplayName("Quit clears all five tracking entries, the pending panel link included, while the player still reads as online (UltiKits/UltiLogin#28)")
         @SuppressWarnings("unchecked")
         void clearsEveryTrackingEntryWhileStillReportedOnline() throws Exception {
             when(player.isOnline()).thenReturn(true);
@@ -2498,24 +2526,23 @@ class LoginServiceTest {
             Map<UUID, Long> joinTimes = (Map<UUID, Long>) getFieldValue(service, "joinTimes");
             Map<UUID, org.bukkit.Location> originalLocations =
                     (Map<UUID, org.bukkit.Location>) getFieldValue(service, "originalLocations");
-            Map<String, BukkitTask> pollingTasks = (Map<String, BukkitTask>) getFieldValue(service, "pollingTasks");
-            Map<UUID, String> currentPollingRequestId =
-                    (Map<UUID, String>) getFieldValue(service, "currentPollingRequestId");
-            BukkitTask pollTask = mock(BukkitTask.class);
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+            Map<UUID, String> latestPanelRequest =
+                    (Map<UUID, String>) getFieldValue(service, "latestPanelRequest");
             loggedInPlayers.put(playerUuid, Boolean.TRUE);
             joinTimes.put(playerUuid, System.currentTimeMillis());
             originalLocations.put(playerUuid, mock(org.bukkit.Location.class));
-            pollingTasks.put("in-flight", pollTask);
-            currentPollingRequestId.put(playerUuid, "in-flight");
+            pendingPanelRequests.put("in-flight", playerUuid);
+            latestPanelRequest.put(playerUuid, "in-flight");
 
             service.onPlayerQuit(player);
 
             assertThat(loggedInPlayers).doesNotContainKey(playerUuid);
             assertThat(joinTimes).doesNotContainKey(playerUuid);
             assertThat(originalLocations).doesNotContainKey(playerUuid);
-            assertThat(pollingTasks).doesNotContainKey("in-flight");
-            assertThat(currentPollingRequestId).doesNotContainKey(playerUuid);
-            verify(pollTask).cancel();
+            assertThat(pendingPanelRequests).doesNotContainKey("in-flight");
+            assertThat(latestPanelRequest).doesNotContainKey(playerUuid);
         }
     }
 
@@ -3137,33 +3164,28 @@ class LoginServiceTest {
     // ==================== onPlayerQuit with polling task ====================
 
     @Nested
-    @DisplayName("onPlayerQuit with polling task")
+    @DisplayName("onPlayerQuit with a pending panel link")
     class OnPlayerQuitWithPolling {
 
         @Test
-        @DisplayName("Should cancel polling task on quit")
-        void cancelPollingTask() throws Exception {
+        @DisplayName("Should drop the player's pending panel link on quit, and only theirs")
+        void dropsPendingLinkOnQuit() throws Exception {
             @SuppressWarnings("unchecked")
-            Map<String, BukkitTask> pollingTasks =
-                    (Map<String, BukkitTask>) getFieldValue(service, "pollingTasks");
-            @SuppressWarnings("unchecked")
-            Map<UUID, String> currentPollingRequestId =
-                    (Map<UUID, String>) getFieldValue(service, "currentPollingRequestId");
+            Map<String, UUID> pendingPanelRequests =
+                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
 
-            String requestId = "quit-request";
-            BukkitTask mockTask = mock(BukkitTask.class);
-            pollingTasks.put(requestId, mockTask);
-            currentPollingRequestId.put(playerUuid, requestId);
+            UUID otherPlayer = UUID.randomUUID();
+            pendingPanelRequests.put("quit-link", playerUuid);
+            pendingPanelRequests.put("other-link", otherPlayer);
 
             service.onPlayerQuit(player);
 
-            verify(mockTask).cancel();
-            assertThat(pollingTasks).doesNotContainKey(requestId);
-            assertThat(currentPollingRequestId).doesNotContainKey(playerUuid);
+            assertThat(pendingPanelRequests).doesNotContainKey("quit-link");
+            assertThat(pendingPanelRequests).containsKey("other-link");
         }
 
         @Test
-        @DisplayName("Should handle quit when no polling task exists")
+        @DisplayName("Should handle quit when no panel link is pending")
         void noPollingTask() {
             // Should not throw
             service.onPlayerQuit(player);
@@ -3356,6 +3378,31 @@ class LoginServiceTest {
         }
     }
 
+    /** A create stub: answers a link {@code L-<n>}, running {@code during} inside the create first. */
+    private static PlayerLinkPort stubPort(Runnable during, java.util.concurrent.atomic.AtomicInteger calls) {
+        return new PlayerLinkPort() {
+            @Override
+            public java.util.concurrent.CompletableFuture<LinkCreation> create(UUID uuid, String name,
+                    boolean authenticated, boolean accountExists, java.util.Set<LinkProof> proofs) {
+                calls.incrementAndGet();
+                during.run();
+                return java.util.concurrent.CompletableFuture.completedFuture(PlayerLinkPort.LinkCreation.created(
+                        "L-" + calls.get(), "http://panel.test/link", java.time.Instant.now().plusSeconds(300),
+                        java.util.EnumSet.of(PlayerLinkPort.LinkProof.LINKED_WEB_ACCOUNT)));
+            }
+
+            @Override
+            public boolean registerHandler(LinkEventHandler handler) {
+                return true;
+            }
+
+            @Override
+            public void unregisterHandler() {
+                // no handler is installed here
+            }
+        };
+    }
+
     @Nested
     @DisplayName("requestPanelLink invalidation-generation fence")
     class RequestPanelLinkGenerationFence {
@@ -3364,883 +3411,81 @@ class LoginServiceTest {
         @DisplayName("Should refuse to publish a request captured before an invalidation that landed"
                 + " before the worker inserted it")
         void refusesRequestCapturedBeforeInvalidation() {
-            // See requestPanelLink(Player, long):
-            // /panel captures the invalidation generation before scheduling its asynchronous
-            // worker; requestPanelLink() runs later, on that worker thread. An administrator's
-            // reset/unregister landing in the gap between those two points calls
-            // invalidateSession(), which increments the generation and calls
-            // cancelPendingPanelRequest() -- but that cancellation finds nothing yet, since this
-            // request has not been inserted into pendingPanelRequests at that point. Without the
-            // fence, the worker would go on to publish the (already-stale) request, send the
-            // link, and start polling; since a reset/change does not remove the account,
-            // completePanelLogin()'s registration check would later pass and re-authenticate the
-            // revoked connection.
-            //
-            // The previous version of this test passed for the wrong reason.
-            // UltiTools.getInstance() is null in this unit test, so requestPanelLink's own
-            // try/catch around UltiTools.getEnv() refused the request via the unrelated "API
-            // URL not configured" branch regardless of whether the fence check above it existed
-            // at all -- removing the fence entirely left this test passing unchanged. Stubbing
-            // UltiTools.getEnv(), CommonUtils .getUltiToolsUUID(), and UltiCloudRequests.post()
-            // below makes the rest of the publish path succeed, so that with the fence removed
-            // this request WOULD be published; the assertions then pin the fence-specific
-            // outcome instead of a coincidental one. Verified locally: disabling the "if
-            // (generationCell.get() != expectedGeneration)" check in requestPanelLink() turns
-            // the isSuccess() assertion below red -- org.opentest4j.AssertionFailedError: [a
-            // panel link request captured before an invalidation must not be published]
-            // Expecting value to be false but was true -- since the (fence-free) request then
-            // reaches the stubbed HTTP call and succeeds.
+            // /panel captures the invalidation generation before scheduling its asynchronous worker;
+            // requestPanelLink() runs later, on that worker thread. An administrator's reset/unregister
+            // landing in the gap calls invalidateSession(), whose cancellation finds nothing yet, since
+            // this request has not been inserted. The stub port answers every create with a link, so
+            // only the fence itself can refuse this request: with the check removed it would be
+            // published.
             when(config.isUlticloudEnabled()).thenReturn(true);
+            java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+            service.setPlayerLinkPort(stubPort(() -> { }, calls));
 
             long capturedGeneration = service.getInvalidationGeneration(playerUuid);
-
-            // Simulates the admin action landing in the gap before the worker calls
-            // requestPanelLink() with the generation it captured above.
             service.invalidateSession(playerUuid);
 
-            YamlConfiguration env = mock(YamlConfiguration.class);
-            when(env.getString("api-url")).thenReturn("http://ulticloud.test");
-            UltiCloudRequests.Result okResponse = cloudOk("{\"data\":{\"url\":\"http://panel.test/link\"}}");
+            LoginService.PanelLinkResult result = service.requestPanelLink(player, capturedGeneration);
 
-            try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
-                 MockedStatic<CommonUtils> commonUtils = mockStatic(CommonUtils.class);
-                 MockedStatic<UltiCloudRequests> http = mockStatic(UltiCloudRequests.class)) {
-                ultiTools.when(UltiTools::getEnv).thenReturn(env);
-                commonUtils.when(CommonUtils::getUltiToolsUUID).thenReturn("server-uuid");
-                http.when(() -> UltiCloudRequests.post(anyString(), anyString()))
-                        .thenReturn(okResponse);
-
-                LoginService.PanelLinkResult result = service.requestPanelLink(player, capturedGeneration);
-
-                assertThat(result.isSuccess())
-                        .as("a panel link request captured before an invalidation must not be published")
-                        .isFalse();
-                assertThat(result.getError())
-                        .as("the fence's own refusal must be distinguishable from any other"
-                                + " failure path -- this test's stubs make every other failure"
-                                + " path (e.g. \"API URL not configured\") unreachable, so only"
-                                + " the fence itself can produce this message")
-                        .contains("invalidated");
-                assertThat(service.hasPendingPanelRequest(playerUuid))
-                        .as("a refused request must never be inserted into pendingPanelRequests")
-                        .isFalse();
-                http.verifyNoInteractions();
-            }
+            assertThat(result.isSuccess())
+                    .as("a panel link request captured before an invalidation must not be published")
+                    .isFalse();
+            assertThat(result.getError()).contains("invalidated");
+            assertThat(service.hasPendingPanelRequest(playerUuid))
+                    .as("a refused request must never be inserted into pendingPanelRequests")
+                    .isFalse();
+            assertThat(calls.get()).as("no link was requested").isZero();
         }
 
         @Test
-        @DisplayName("Should still attempt to publish when the captured generation matches the current one")
+        @DisplayName("Should still publish when the captured generation matches the current one")
         void publishesWhenGenerationMatches() {
-            // Regression guard: an uncontested request (no invalidation in the gap) must keep
-            // working through the new two-argument overload exactly like before.
+            runPanelPublicationInline();
             when(config.isUlticloudEnabled()).thenReturn(true);
+            java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+            service.setPlayerLinkPort(stubPort(() -> { }, calls));
 
             long capturedGeneration = service.getInvalidationGeneration(playerUuid);
-            UltiCloudRequests.Result okResponse = cloudOk("{\"data\":{\"url\":\"http://panel.test/link\"}}");
 
-            try (MockedStatic<CommonUtils> commonUtils = mockStatic(CommonUtils.class);
-                 MockedStatic<UltiCloudRequests> cloud = mockStatic(UltiCloudRequests.class)) {
-                commonUtils.when(CommonUtils::getUltiToolsUUID).thenReturn("server-uuid");
-                cloud.when(() -> UltiCloudRequests.post(anyString(), anyString())).thenReturn(okResponse);
+            LoginService.PanelLinkResult result = service.requestPanelLink(player, capturedGeneration);
 
-                LoginService.PanelLinkResult result = service.requestPanelLink(player, capturedGeneration);
-
-                assertThat(result.isSuccess())
-                        .as("a request whose generation still matches must pass the fence and be published: %s",
-                                result.getError())
-                        .isTrue();
-                assertThat(result.getRequestId()).isNotNull();
-            }
+            assertThat(result.isSuccess())
+                    .as("a request whose generation still matches must pass the fence and be published: %s",
+                            result.getError())
+                    .isTrue();
+            assertThat(result.getLinkId()).isEqualTo("L-1");
         }
     }
 
     @Nested
-    @DisplayName("requestPanelLink post-POST invalidation re-check")
+    @DisplayName("requestPanelLink re-check after the create")
     class RequestPanelLinkPostPostRecheck {
 
         @Test
-        @DisplayName("Should discard a successful HTTP result when the session was invalidated"
-                + " while the POST was in flight")
+        @DisplayName("Should discard a created link when the session was invalidated while the create was in flight")
         void discardsTheResultWhenInvalidatedWhileThePostWasInFlight() {
-            // The pre-POST fence (RequestPanelLinkGenerationFence above) only closes the gap
-            // *before* the blocking HTTP call -- the check and the pendingPanelRequests insert
-            // are atomic with each other, but nothing re-checks either afterward. An
-            // invalidateSession(...) landing *during* the call (simulated here from inside the
-            // mocked UltiCloudRequests.post() answer, after the pre-POST atomic check-and-insert
-            // has already run) removes this request's pendingPanelRequests entry and bumps the
-            // generation, but neither of those stops this in-flight call from finishing and
-            // requestPanelLink() handing back a success result regardless -- unless
-            // requestPanelLink() re-checks after the call returns, which is the fix under test.
+            runPanelPublicationInline();
+            // The pre-create fence only closes the gap before the create. An invalidateSession(...)
+            // landing during it (simulated from inside the stub) removes the local entry and bumps the
+            // generation, but neither stops the create from answering -- unless requestPanelLink()
+            // re-checks after the answer, which is the fix under test.
             when(config.isUlticloudEnabled()).thenReturn(true);
+            java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+            service.setPlayerLinkPort(stubPort(() -> service.invalidateSession(playerUuid), calls));
 
             long capturedGeneration = service.getInvalidationGeneration(playerUuid);
 
-            YamlConfiguration env = mock(YamlConfiguration.class);
-            when(env.getString("api-url")).thenReturn("http://ulticloud.test");
-            UltiCloudRequests.Result okResponse = cloudOk("{\"data\":{\"url\":\"http://panel.test/link\"}}");
+            LoginService.PanelLinkResult result = service.requestPanelLink(player, capturedGeneration);
 
-            try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
-                 MockedStatic<CommonUtils> commonUtils = mockStatic(CommonUtils.class);
-                 MockedStatic<UltiCloudRequests> http = mockStatic(UltiCloudRequests.class)) {
-                ultiTools.when(UltiTools::getEnv).thenReturn(env);
-                commonUtils.when(CommonUtils::getUltiToolsUUID).thenReturn("server-uuid");
-                http.when(() -> UltiCloudRequests.post(anyString(), anyString()))
-                        .thenAnswer(invocation -> {
-                            // The session is invalidated while this POST is "in flight" -- after
-                            // the pre-POST atomic check-and-insert already ran, but before this
-                            // call returns.
-                            service.invalidateSession(playerUuid);
-                            return okResponse;
-                        });
-
-                LoginService.PanelLinkResult result = service.requestPanelLink(player, capturedGeneration);
-
-                assertThat(result.isSuccess())
-                        .as("a result whose invalidation raced the in-flight POST must be"
-                                + " discarded, not returned as success")
-                        .isFalse();
-                assertThat(result.getError()).contains("invalidated");
-                assertThat(result.getUrl()).isNull();
-                assertThat(result.getRequestId()).isNull();
-                assertThat(service.hasPendingPanelRequest(playerUuid))
-                        .as("the discarded request must not remain pending -- nothing left for a"
-                                + " caller to poll for")
-                        .isFalse();
-                http.verify(() -> UltiCloudRequests.post(anyString(), anyString()), times(1));
-            }
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(result.getError()).contains("invalidated");
+            assertThat(result.getUrl()).isNull();
+            assertThat(result.getLinkId()).isNull();
+            assertThat(service.hasPendingPanelRequest(playerUuid))
+                    .as("the discarded link must not remain pending")
+                    .isFalse();
+            assertThat(calls.get()).isEqualTo(1);
         }
     }
-
-    @Nested
-    @DisplayName("completePanelLogin")
-    class CompletePanelLogin {
-
-        @Test
-        @DisplayName("Should return false for unknown request ID")
-        void unknownRequestId() {
-            boolean result = service.completePanelLogin("nonexistent-id");
-            assertThat(result).isFalse();
-        }
-
-        @Test
-        @DisplayName("Should return false for unknown request ID with role")
-        void unknownRequestIdWithRole() {
-            boolean result = service.completePanelLogin("nonexistent-id", true);
-            assertThat(result).isFalse();
-        }
-
-        @Test
-        @DisplayName("Should complete login for valid pending request")
-        void validRequest() throws Exception {
-            // Inject pending request
-            @SuppressWarnings("unchecked")
-            Map<String, UUID> pendingPanelRequests =
-                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
-            @SuppressWarnings("unchecked")
-            Map<String, Long> pendingPanelTimestamps =
-                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
-
-            String requestId = "test-request-123";
-            pendingPanelRequests.put(requestId, playerUuid);
-            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
-
-            // Mock Bukkit.getPlayer to return our player
-            try {
-                Field serverField = Bukkit.class.getDeclaredField("server");
-                serverField.setAccessible(true);
-                Server server = (Server) serverField.get(null);
-                doReturn(player).when(server).getPlayer(playerUuid);
-            } catch (Exception e) {
-                // Skip
-            }
-
-            // Return account for update
-            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
-
-            boolean result = service.completePanelLogin(requestId, false);
-
-            assertThat(result).isTrue();
-            assertThat(service.isLoggedIn(playerUuid)).isTrue();
-            // Request should be cleaned up
-            assertThat(pendingPanelRequests).doesNotContainKey(requestId);
-            assertThat(pendingPanelTimestamps).doesNotContainKey(requestId);
-        }
-
-        @Test
-        @DisplayName("Should send owner message when isServerOwner true")
-        void ownerMessage() throws Exception {
-            @SuppressWarnings("unchecked")
-            Map<String, UUID> pendingPanelRequests =
-                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
-            @SuppressWarnings("unchecked")
-            Map<String, Long> pendingPanelTimestamps =
-                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
-
-            String requestId = "test-owner-request";
-            pendingPanelRequests.put(requestId, playerUuid);
-            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
-
-            try {
-                Field serverField = Bukkit.class.getDeclaredField("server");
-                serverField.setAccessible(true);
-                Server server = (Server) serverField.get(null);
-                doReturn(player).when(server).getPlayer(playerUuid);
-            } catch (Exception e) {
-                // Skip
-            }
-
-            when(mockQuery.list()).thenReturn(Collections.singletonList(
-                    UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt")));
-
-            boolean result = service.completePanelLogin(requestId, true);
-
-            assertThat(result).isTrue();
-            // Verify i18n was called with owner key
-            verify(UltiLoginTestHelper.getMockPlugin()).i18n("panel_auth_success_owner");
-        }
-
-        @Test
-        @DisplayName("Should send player message when isServerOwner false")
-        void playerMessage() throws Exception {
-            @SuppressWarnings("unchecked")
-            Map<String, UUID> pendingPanelRequests =
-                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
-            @SuppressWarnings("unchecked")
-            Map<String, Long> pendingPanelTimestamps =
-                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
-
-            String requestId = "test-player-request";
-            pendingPanelRequests.put(requestId, playerUuid);
-            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
-
-            try {
-                Field serverField = Bukkit.class.getDeclaredField("server");
-                serverField.setAccessible(true);
-                Server server = (Server) serverField.get(null);
-                doReturn(player).when(server).getPlayer(playerUuid);
-            } catch (Exception e) {
-                // Skip
-            }
-
-            when(mockQuery.list()).thenReturn(Collections.singletonList(
-                    UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt")));
-
-            boolean result = service.completePanelLogin(requestId, false);
-
-            assertThat(result).isTrue();
-            verify(UltiLoginTestHelper.getMockPlugin()).i18n("panel_auth_success_player");
-        }
-
-        @Test
-        @DisplayName("Should return false when player is offline")
-        void playerOffline() throws Exception {
-            @SuppressWarnings("unchecked")
-            Map<String, UUID> pendingPanelRequests =
-                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
-            @SuppressWarnings("unchecked")
-            Map<String, Long> pendingPanelTimestamps =
-                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
-
-            String requestId = "test-offline-request";
-            pendingPanelRequests.put(requestId, playerUuid);
-            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
-
-            // Bukkit.getPlayer returns null (offline)
-            try {
-                Field serverField = Bukkit.class.getDeclaredField("server");
-                serverField.setAccessible(true);
-                Server server = (Server) serverField.get(null);
-                doReturn(null).when(server).getPlayer(playerUuid);
-            } catch (Exception e) {
-                // Skip
-            }
-
-            boolean result = service.completePanelLogin(requestId);
-
-            assertThat(result).isFalse();
-        }
-
-        @Test
-        @DisplayName("Should refuse to complete login when the account is no longer registered")
-        void refusesLoginForDeletedAccount() throws Exception {
-            // A second, independent layer of defense alongside invalidateSession's cancellation.
-            // If a magic-link request survives account deletion for any reason (e.g. it was
-            // created after the account row was already gone, or the cancellation path itself
-            // regresses), completePanelLogin must still refuse to mark a non-existent account as
-            // logged in.
-            @SuppressWarnings("unchecked")
-            Map<String, UUID> pendingPanelRequests =
-                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
-            @SuppressWarnings("unchecked")
-            Map<String, Long> pendingPanelTimestamps =
-                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
-
-            String requestId = "test-deleted-account-request";
-            pendingPanelRequests.put(requestId, playerUuid);
-            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
-
-            try {
-                Field serverField = Bukkit.class.getDeclaredField("server");
-                serverField.setAccessible(true);
-                Server server = (Server) serverField.get(null);
-                doReturn(player).when(server).getPlayer(playerUuid);
-            } catch (Exception e) {
-                // Skip
-            }
-
-            // No account for this UUID -- the account row was deleted (unregister) while the
-            // magic-link request was still pending.
-            when(mockQuery.list()).thenReturn(Collections.emptyList());
-
-            boolean result = service.completePanelLogin(requestId, false);
-
-            assertThat(result)
-                    .as("completePanelLogin must not log in a player whose account no longer exists")
-                    .isFalse();
-            assertThat(service.isLoggedIn(playerUuid)).isFalse();
-        }
-
-        @Test
-        @DisplayName("Should create session after panel login when enabled")
-        void createSessionAfterPanelLogin() throws Exception {
-            when(config.isSessionEnabled()).thenReturn(true);
-
-            @SuppressWarnings("unchecked")
-            Map<String, UUID> pendingPanelRequests =
-                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
-            @SuppressWarnings("unchecked")
-            Map<String, Long> pendingPanelTimestamps =
-                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
-
-            String requestId = "test-session-request";
-            pendingPanelRequests.put(requestId, playerUuid);
-            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
-
-            try {
-                Field serverField = Bukkit.class.getDeclaredField("server");
-                serverField.setAccessible(true);
-                Server server = (Server) serverField.get(null);
-                doReturn(player).when(server).getPlayer(playerUuid);
-            } catch (Exception e) {
-                // Skip
-            }
-
-            when(mockQuery.list()).thenReturn(Collections.singletonList(
-                    UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt")));
-
-            service.completePanelLogin(requestId, false);
-
-            assertThat(service.hasValidSession(player)).isTrue();
-        }
-
-        @Test
-        @DisplayName("Should update account on panel login")
-        void updateAccountOnPanelLogin() throws Exception {
-            @SuppressWarnings("unchecked")
-            Map<String, UUID> pendingPanelRequests =
-                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
-            @SuppressWarnings("unchecked")
-            Map<String, Long> pendingPanelTimestamps =
-                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
-
-            String requestId = "test-update-request";
-            pendingPanelRequests.put(requestId, playerUuid);
-            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
-
-            try {
-                Field serverField = Bukkit.class.getDeclaredField("server");
-                serverField.setAccessible(true);
-                Server server = (Server) serverField.get(null);
-                doReturn(player).when(server).getPlayer(playerUuid);
-            } catch (Exception e) {
-                // Skip
-            }
-
-            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
-
-            service.completePanelLogin(requestId, false);
-
-            verify(dataOperator).updateCounted(any(AccountData.class));
-        }
-
-        @Test
-        @DisplayName("Should handle update exception during panel login")
-        void updateExceptionOnPanelLogin() throws Exception {
-            @SuppressWarnings("unchecked")
-            Map<String, UUID> pendingPanelRequests =
-                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
-            @SuppressWarnings("unchecked")
-            Map<String, Long> pendingPanelTimestamps =
-                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
-
-            String requestId = "test-exception-request";
-            pendingPanelRequests.put(requestId, playerUuid);
-            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
-
-            try {
-                Field serverField = Bukkit.class.getDeclaredField("server");
-                serverField.setAccessible(true);
-                Server server = (Server) serverField.get(null);
-                doReturn(player).when(server).getPlayer(playerUuid);
-            } catch (Exception e) {
-                // Skip
-            }
-
-            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
-            doThrow(unwritableEntity("update failed")).when(dataOperator).updateCounted(any());
-
-            // Should still return true (login succeeds, update failure is logged)
-            boolean result = service.completePanelLogin(requestId, false);
-            assertThat(result).isTrue();
-        }
-
-        @Test
-        @DisplayName("Should refuse panel login when no account exists for the request")
-        void nullAccountPanelLogin() throws Exception {
-            // This test previously asserted the bug itself -- that completePanelLogin "should
-            // still complete login" with no backing account.
-            // That is exactly the deleted-account-logs-back-in defect this module fixes, so the
-            // expectation is corrected here rather than left pinning the old behavior.
-            @SuppressWarnings("unchecked")
-            Map<String, UUID> pendingPanelRequests =
-                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
-            @SuppressWarnings("unchecked")
-            Map<String, Long> pendingPanelTimestamps =
-                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
-
-            String requestId = "test-null-account-request";
-            pendingPanelRequests.put(requestId, playerUuid);
-            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
-
-            try {
-                Field serverField = Bukkit.class.getDeclaredField("server");
-                serverField.setAccessible(true);
-                Server server = (Server) serverField.get(null);
-                doReturn(player).when(server).getPlayer(playerUuid);
-            } catch (Exception e) {
-                // Skip
-            }
-
-            // No account exists
-            when(mockQuery.list()).thenReturn(Collections.emptyList());
-
-            boolean result = service.completePanelLogin(requestId, false);
-
-            assertThat(result).isFalse();
-            assertThat(service.isLoggedIn(playerUuid)).isFalse();
-            // update should NOT be called since there is no account to log in or update
-            verify(dataOperator, never()).updateCounted(any());
-        }
-
-        @Test
-        @DisplayName("Single-arg completePanelLogin delegates to two-arg with isServerOwner=false")
-        void singleArgDelegatesToTwoArg() throws Exception {
-            @SuppressWarnings("unchecked")
-            Map<String, UUID> pendingPanelRequests =
-                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
-            @SuppressWarnings("unchecked")
-            Map<String, Long> pendingPanelTimestamps =
-                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
-
-            String requestId = "test-delegate-request";
-            pendingPanelRequests.put(requestId, playerUuid);
-            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
-
-            try {
-                Field serverField = Bukkit.class.getDeclaredField("server");
-                serverField.setAccessible(true);
-                Server server = (Server) serverField.get(null);
-                doReturn(player).when(server).getPlayer(playerUuid);
-            } catch (Exception e) {
-                // Skip
-            }
-
-            when(mockQuery.list()).thenReturn(Collections.singletonList(
-                    UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt")));
-
-            boolean result = service.completePanelLogin(requestId);
-
-            assertThat(result).isTrue();
-            // Should use player message key (not owner)
-            verify(UltiLoginTestHelper.getMockPlugin()).i18n("panel_auth_success_player");
-        }
-    }
-
-    @Nested
-    @DisplayName("startAuthPolling")
-    class StartAuthPollingRace {
-
-        /**
-         * Wires {@code server.getScheduler()} to a scheduler mock that runs both the async poll
-         * task and its main-thread completion callback synchronously, on the calling thread,
-         * instead of truly scheduling them. This turns startAuthPolling's two-hop
-         * (async poll -> main-thread completion) dispatch into a single, deterministic call
-         * stack, which is what lets the test below inject the race at the exact right point
-         * without flaky real threading -- Mockito's static mocks (used for
-         * {@link UltiTools#getEnv()} and {@link UltiCloudRequests#get(String, Map)} below) are
-         * thread-confined to whichever thread created them, so they would silently not apply at
-         * all on a real MockBukkit worker thread.
-         */
-        private void makeSchedulerRunTasksSynchronously(Server server, BukkitTask fakeTask) {
-            // ServerMock declares a covariant getScheduler() returning BukkitSchedulerMock, not
-            // the bare BukkitScheduler interface -- doReturn() validates against that concrete
-            // declared type, so the fake must be a spy of the real instance (a
-            // Mockito-generated BukkitSchedulerMock subclass), not a plain mock(BukkitScheduler
-            // .class). Spying also means every method we do not override here still behaves
-            // exactly like the real scheduler.
-            BukkitScheduler fakeScheduler = spy(server.getScheduler());
-            doAnswer(invocation -> {
-                Runnable runnable = invocation.getArgument(1);
-                runnable.run();
-                return fakeTask;
-            }).when(fakeScheduler).runTaskTimerAsynchronously(any(Plugin.class), any(Runnable.class), anyLong(), anyLong());
-            doAnswer(invocation -> {
-                Runnable runnable = invocation.getArgument(1);
-                runnable.run();
-                return fakeTask;
-            }).when(fakeScheduler).runTask(any(Plugin.class), any(Runnable.class));
-            doReturn(fakeScheduler).when(server).getScheduler();
-        }
-
-        @Test
-        @DisplayName("Must not re-authenticate a player whose account was deleted while the poll's HTTP call was already in flight")
-        void doesNotReauthenticateAfterUnregisterDuringInFlightPoll() throws Exception {
-            // BukkitTask#cancel() only prevents a scheduled task's future executions -- it does not
-            // interrupt an invocation already inside its HTTP call. The pre-fix fallback in
-            // startAuthPolling treated "no pending request found" as authorization to call
-            // completeLogin(player) directly, bypassing every check completePanelLogin performs
-            // (including the isRegistered guard added against a deleted account logging back in).
-            // Reproduced deterministically by unregistering the account from inside the mocked HTTP
-            // call's answer -- exactly the ordering the report describes -- with the scheduler wired to
-            // run both hops of the poll synchronously so the race is exact rather than best-effort.
-            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
-
-            assertThat(service.forceLogin(player)).isTrue();
-            assertThat(service.isLoggedIn(playerUuid)).isTrue();
-
-            @SuppressWarnings("unchecked")
-            Map<String, UUID> pendingPanelRequests =
-                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
-            pendingPanelRequests.put("panel-req-race", playerUuid);
-
-            Field serverField = Bukkit.class.getDeclaredField("server");
-            serverField.setAccessible(true);
-            Server server = (Server) serverField.get(null);
-            doReturn(player).when(server).getPlayer(playerUuid);
-            makeSchedulerRunTasksSynchronously(server, mock(BukkitTask.class));
-
-            YamlConfiguration env = mock(YamlConfiguration.class);
-            when(env.getString("api-url")).thenReturn("http://ulticloud.test");
-
-            String pollResponseJson = "{\"data\":{\"status\":\"completed\",\"is_server_owner\":false}}";
-            UltiCloudRequests.Result completedResponse = cloudOk(pollResponseJson);
-
-            try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
-                 MockedStatic<UltiCloudRequests> http = mockStatic(UltiCloudRequests.class)) {
-                ultiTools.when(UltiTools::getEnv).thenReturn(env);
-                http.when(() -> UltiCloudRequests.get(anyString(), anyMap())).thenAnswer(invocation -> {
-                    // The account is deleted while this poll's HTTP call is "in flight" -- before
-                    // the poll code below gets a chance to notice its pending request is gone.
-                    boolean unregistered = service.unregister(playerUuid);
-                    assertThat(unregistered).isTrue();
-                    return completedResponse;
-                });
-
-                service.startAuthPolling(playerUuid.toString(), player, "panel-req-race");
-            }
-
-            assertThat(service.isLoggedIn(playerUuid))
-                    .as("a magic-link poll must not re-authenticate a player after their account"
-                            + " was deleted mid-poll, even though the poll's own cancellation"
-                            + " could not stop its already in-flight HTTP call")
-                    .isFalse();
-        }
-
-        @Test
-        @DisplayName("Still completes login through completePanelLogin when the request is not cancelled mid-poll")
-        void completesLoginWhenNoRaceOccurs() throws Exception {
-            // Regression guard for the fix above: startAuthPolling's normal, uncontested
-            // completion path must keep working -- it must still route through
-            // completePanelLogin (session creation, account bookkeeping, the success message)
-            // rather than becoming a silent no-op whenever the request happens to still be
-            // pending.
-            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
-
-            @SuppressWarnings("unchecked")
-            Map<String, UUID> pendingPanelRequests =
-                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
-            pendingPanelRequests.put("panel-req-normal", playerUuid);
-
-            Field serverField = Bukkit.class.getDeclaredField("server");
-            serverField.setAccessible(true);
-            Server server = (Server) serverField.get(null);
-            doReturn(player).when(server).getPlayer(playerUuid);
-            makeSchedulerRunTasksSynchronously(server, mock(BukkitTask.class));
-
-            YamlConfiguration env = mock(YamlConfiguration.class);
-            when(env.getString("api-url")).thenReturn("http://ulticloud.test");
-
-            String pollResponseJson = "{\"data\":{\"status\":\"completed\",\"is_server_owner\":false}}";
-            UltiCloudRequests.Result completedResponse = cloudOk(pollResponseJson);
-
-            try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
-                 MockedStatic<UltiCloudRequests> http = mockStatic(UltiCloudRequests.class)) {
-                ultiTools.when(UltiTools::getEnv).thenReturn(env);
-                http.when(() -> UltiCloudRequests.get(anyString(), anyMap())).thenReturn(completedResponse);
-
-                service.startAuthPolling(playerUuid.toString(), player, "panel-req-normal");
-            }
-
-            assertThat(service.isLoggedIn(playerUuid))
-                    .as("an uncontested poll completion must still log the player in")
-                    .isTrue();
-            assertThat(pendingPanelRequests)
-                    .as("completePanelLogin must have run its own cleanup for the request")
-                    .doesNotContainKey("panel-req-normal");
-            verify(UltiLoginTestHelper.getMockPlugin()).i18n("panel_auth_success_player");
-        }
-
-        @Test
-        @DisplayName("Must not authenticate through a newer pending request for the same player"
-                + " after this poll's own request was cancelled")
-        void doesNotAuthenticateThroughANewerPendingRequestAfterAStaleCompletion() throws Exception {
-            // handlePanelPollCompleted used to resolve "completed" by scanning pendingPanelRequests
-            // for whichever entry was pending for this player, rather than the specific request id
-            // this poll was started for. If this poll's own request had already been cancelled (e.g.
-            // by an invalidation) but the player had since started a fresh /panel request, that scan
-            // would pick up the newer request and authenticate through it -- even though this poll's
-            // own "completed" observation had nothing to do with the newer request. Reproduced by
-            // removing the original request and inserting a newer one for the same player from inside
-            // the mocked HTTP call's answer, exactly the ordering the report describes.
-            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
-
-            @SuppressWarnings("unchecked")
-            Map<String, UUID> pendingPanelRequests =
-                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
-            pendingPanelRequests.put("panel-req-old", playerUuid);
-
-            Field serverField = Bukkit.class.getDeclaredField("server");
-            serverField.setAccessible(true);
-            Server server = (Server) serverField.get(null);
-            doReturn(player).when(server).getPlayer(playerUuid);
-            makeSchedulerRunTasksSynchronously(server, mock(BukkitTask.class));
-
-            YamlConfiguration env = mock(YamlConfiguration.class);
-            when(env.getString("api-url")).thenReturn("http://ulticloud.test");
-
-            String pollResponseJson = "{\"data\":{\"status\":\"completed\",\"is_server_owner\":false}}";
-            UltiCloudRequests.Result completedResponse = cloudOk(pollResponseJson);
-
-            try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
-                 MockedStatic<UltiCloudRequests> http = mockStatic(UltiCloudRequests.class)) {
-                ultiTools.when(UltiTools::getEnv).thenReturn(env);
-                http.when(() -> UltiCloudRequests.get(anyString(), anyMap())).thenAnswer(invocation -> {
-                    // The original request is cancelled (e.g. by an invalidation) and the player
-                    // starts a fresh /panel request, both landing before this poll's "completed"
-                    // response is processed on the main thread.
-                    pendingPanelRequests.remove("panel-req-old");
-                    pendingPanelRequests.put("panel-req-new", playerUuid);
-                    return completedResponse;
-                });
-
-                service.startAuthPolling(playerUuid.toString(), player, "panel-req-old");
-            }
-
-            assertThat(service.isLoggedIn(playerUuid))
-                    .as("a stale completion for a cancelled request must not authenticate the"
-                            + " player through an unrelated, newer pending request for the same"
-                            + " player")
-                    .isFalse();
-            assertThat(pendingPanelRequests)
-                    .as("the newer request must be left untouched -- this poll's stale"
-                            + " completion was never entitled to consume it")
-                    .containsKey("panel-req-new");
-        }
-
-        @Test
-        @DisplayName("Must not cancel or remove a newer poll's own task when an older,"
-                + " superseded poll's stale HTTP response arrives")
-        void doesNotCancelANewerPollsTaskWhenAnOlderSupersededPollsStaleCompletionArrives() throws Exception {
-            // Starting poll B always cancels+replaces poll A's scheduled task for the same player --
-            // correct, a new /panel request supersedes the previous one. But BukkitTask#cancel() only
-            // prevents a task's *future* scheduled executions; it does not interrupt an invocation
-            // already blocked inside its own HTTP call. If A's HTTP call was still in flight when B
-            // started, A's own "completed" observation -- arriving later, on that same in-flight
-            // invocation -- used to remove and cancel whatever task pollingTasks currently held
-            // keyed on the player's UUID: B's task, not A's own (already-replaced) one.
-            // handlePanelPollCompleted correctly refused to complete A's own (never-published)
-            // request, but B's task was killed anyway, permanently stalling B's still-valid
-            // magic link. Reproduced by starting B from inside A's mocked HTTP call's answer --
-            // exactly the ordering the report describes.
-            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
-
-            @SuppressWarnings("unchecked")
-            Map<String, UUID> pendingPanelRequests =
-                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
-            // Request B is already published and pending; poll A's stale completion (for a
-            // request that was never itself made pending here) must never be able to consume it.
-            pendingPanelRequests.put("panel-req-new", playerUuid);
-
-            Field serverField = Bukkit.class.getDeclaredField("server");
-            serverField.setAccessible(true);
-            Server server = (Server) serverField.get(null);
-            doReturn(player).when(server).getPlayer(playerUuid);
-
-            BukkitTask taskA = mock(BukkitTask.class, "taskA");
-            BukkitTask taskB = mock(BukkitTask.class, "taskB");
-            Iterator<BukkitTask> taskIterator = Arrays.asList(taskA, taskB).iterator();
-            List<Runnable> capturedPollRunnables = new ArrayList<>();
-            BukkitScheduler fakeScheduler = spy(server.getScheduler());
-            // Capture each poll's scheduled runnable instead of running it inline (unlike
-            // makeSchedulerRunTasksSynchronously above): this test needs poll A's own
-            // startAuthPolling call to finish storing its task into pollingTasks *before* its
-            // runnable ever executes, exactly as real Bukkit guarantees via its initial
-            // scheduling delay. Running the runnable inline during scheduling would let the
-            // nested startAuthPolling(...) call for B run to completion before A's own outer
-            // call ever reached its own pollingTasks.put(...) -- an ordering that cannot happen
-            // against a real scheduler and would produce a false failure here.
-            doAnswer(invocation -> {
-                capturedPollRunnables.add(invocation.getArgument(1));
-                return taskIterator.next();
-            }).when(fakeScheduler)
-              .runTaskTimerAsynchronously(any(Plugin.class), any(Runnable.class), anyLong(), anyLong());
-            doAnswer(invocation -> {
-                Runnable runnable = invocation.getArgument(1);
-                runnable.run();
-                return mock(BukkitTask.class);
-            }).when(fakeScheduler).runTask(any(Plugin.class), any(Runnable.class));
-            doReturn(fakeScheduler).when(server).getScheduler();
-
-            YamlConfiguration env = mock(YamlConfiguration.class);
-            when(env.getString("api-url")).thenReturn("http://ulticloud.test");
-
-            String completedJson = "{\"data\":{\"status\":\"completed\",\"is_server_owner\":false}}";
-            UltiCloudRequests.Result completedResponse = cloudOk(completedJson);
-
-            try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
-                 MockedStatic<UltiCloudRequests> http = mockStatic(UltiCloudRequests.class)) {
-                ultiTools.when(UltiTools::getEnv).thenReturn(env);
-                http.when(() -> UltiCloudRequests.get(anyString(), anyMap())).thenAnswer(invocation -> {
-                    // Poll A's HTTP call is "in flight" here -- the player starts a fresh
-                    // /panel request while it's blocked, which cancels+replaces A's task with
-                    // B's (does not run B's own first tick -- irrelevant to this race).
-                    service.startAuthPolling(playerUuid.toString(), player, "panel-req-new");
-                    // Poll A's own (now-stale) HTTP call finally returns "completed".
-                    return completedResponse;
-                });
-
-                service.startAuthPolling(playerUuid.toString(), player, "panel-req-old");
-                // Fire poll A's first tick manually -- this is where its HTTP call "blocks" and,
-                // from inside the mocked answer above, the player starts poll B.
-                capturedPollRunnables.get(0).run();
-            }
-
-            @SuppressWarnings("unchecked")
-            Map<String, BukkitTask> pollingTasks =
-                    (Map<String, BukkitTask>) getFieldValue(service, "pollingTasks");
-
-            assertThat(pollingTasks)
-                    .as("poll A's stale completion must not remove poll B's own task")
-                    .containsEntry("panel-req-new", taskB);
-            assertThat(pollingTasks)
-                    .as("poll A's own (already-superseded) entry must be gone")
-                    .doesNotContainKey("panel-req-old");
-            verify(taskB, never()).cancel();
-
-            assertThat(service.isLoggedIn(playerUuid))
-                    .as("poll A's own (superseded, never-published) request must not be"
-                            + " completed")
-                    .isFalse();
-
-            boolean completed = service.completePanelLogin("panel-req-new");
-            assertThat(completed)
-                    .as("poll B's still-pending request must remain completable after poll A's"
-                            + " stale completion ran")
-                    .isTrue();
-            assertThat(service.isLoggedIn(playerUuid))
-                    .as("poll B must be able to authenticate the player normally")
-                    .isTrue();
-        }
-
-        @Test
-        @DisplayName("A normal (uncontested) completion still removes and cancels its own"
-                + " polling task")
-        void normalCompletionRemovesAndCancelsItsOwnTask() throws Exception {
-            // Regression guard for the fix above: a poll that is never superseded must still
-            // clean up its own entry in pollingTasks (and the currentPollingRequestId index) on
-            // completion, rather than becoming a permanent leak once tasks stopped being keyed
-            // by player UUID.
-            AccountData account = UltiLoginTestHelper.createSampleAccount(playerUuid, "TestPlayer", "hash", "salt");
-            when(mockQuery.list()).thenReturn(Collections.singletonList(account));
-
-            @SuppressWarnings("unchecked")
-            Map<String, UUID> pendingPanelRequests =
-                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
-            pendingPanelRequests.put("panel-req-solo", playerUuid);
-
-            Field serverField = Bukkit.class.getDeclaredField("server");
-            serverField.setAccessible(true);
-            Server server = (Server) serverField.get(null);
-            doReturn(player).when(server).getPlayer(playerUuid);
-
-            BukkitTask fakeTask = mock(BukkitTask.class);
-            List<Runnable> capturedPollRunnables = new ArrayList<>();
-            BukkitScheduler fakeScheduler = spy(server.getScheduler());
-            // Same capture-then-run-manually ordering as the race test above: pollingTasks.put(
-            // ...) for this poll must happen before its runnable ever executes.
-            doAnswer(invocation -> {
-                capturedPollRunnables.add(invocation.getArgument(1));
-                return fakeTask;
-            }).when(fakeScheduler)
-              .runTaskTimerAsynchronously(any(Plugin.class), any(Runnable.class), anyLong(), anyLong());
-            doAnswer(invocation -> {
-                Runnable runnable = invocation.getArgument(1);
-                runnable.run();
-                return mock(BukkitTask.class);
-            }).when(fakeScheduler).runTask(any(Plugin.class), any(Runnable.class));
-            doReturn(fakeScheduler).when(server).getScheduler();
-
-            YamlConfiguration env = mock(YamlConfiguration.class);
-            when(env.getString("api-url")).thenReturn("http://ulticloud.test");
-
-            String pollResponseJson = "{\"data\":{\"status\":\"completed\",\"is_server_owner\":false}}";
-            UltiCloudRequests.Result completedResponse = cloudOk(pollResponseJson);
-
-            try (MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
-                 MockedStatic<UltiCloudRequests> http = mockStatic(UltiCloudRequests.class)) {
-                ultiTools.when(UltiTools::getEnv).thenReturn(env);
-                http.when(() -> UltiCloudRequests.get(anyString(), anyMap())).thenReturn(completedResponse);
-
-                service.startAuthPolling(playerUuid.toString(), player, "panel-req-solo");
-                capturedPollRunnables.get(0).run();
-            }
-
-            @SuppressWarnings("unchecked")
-            Map<String, BukkitTask> pollingTasks =
-                    (Map<String, BukkitTask>) getFieldValue(service, "pollingTasks");
-            @SuppressWarnings("unchecked")
-            Map<UUID, String> currentPollingRequestId =
-                    (Map<UUID, String>) getFieldValue(service, "currentPollingRequestId");
-
-            assertThat(pollingTasks)
-                    .as("a poll must remove its own task from pollingTasks once it completes")
-                    .doesNotContainKey("panel-req-solo");
-            assertThat(currentPollingRequestId)
-                    .as("the player's current-poll index entry must also be cleared")
-                    .doesNotContainKey(playerUuid);
-            verify(fakeTask).cancel();
-            assertThat(service.isLoggedIn(playerUuid)).isTrue();
-        }
-    }
-
-    // ==================== hasPendingPanelRequest ====================
 
     @Nested
     @DisplayName("hasPendingPanelRequest")
@@ -4281,75 +3526,54 @@ class LoginServiceTest {
     @DisplayName("cleanupExpiredPanelRequests")
     class CleanupExpiredPanelRequests {
 
-        @Test
-        @DisplayName("Should remove expired requests")
-        void removeExpired() throws Exception {
-            @SuppressWarnings("unchecked")
-            Map<String, UUID> pendingPanelRequests =
-                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
-            @SuppressWarnings("unchecked")
-            Map<String, Long> pendingPanelTimestamps =
-                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
+        @SuppressWarnings("unchecked")
+        private Map<String, UUID> pending() throws Exception {
+            return (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
+        }
 
-            // Add an expired request (6 minutes ago)
-            pendingPanelRequests.put("expired-id", UUID.randomUUID());
-            pendingPanelTimestamps.put("expired-id", System.currentTimeMillis() - 6 * 60 * 1000L);
-
-            service.cleanupExpiredPanelRequests();
-
-            assertThat(pendingPanelRequests).doesNotContainKey("expired-id");
-            assertThat(pendingPanelTimestamps).doesNotContainKey("expired-id");
+        @SuppressWarnings("unchecked")
+        private Map<String, Long> deadlines() throws Exception {
+            return (Map<String, Long>) getFieldValue(service, "pendingPanelDeadlines");
         }
 
         @Test
-        @DisplayName("Should keep non-expired requests")
-        void keepNonExpired() throws Exception {
-            @SuppressWarnings("unchecked")
-            Map<String, UUID> pendingPanelRequests =
-                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
-            @SuppressWarnings("unchecked")
-            Map<String, Long> pendingPanelTimestamps =
-                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
-
-            UUID someUuid = UUID.randomUUID();
-            pendingPanelRequests.put("fresh-id", someUuid);
-            pendingPanelTimestamps.put("fresh-id", System.currentTimeMillis());
+        @DisplayName("Should remove requests whose deadline has passed")
+        void removeExpired() throws Exception {
+            pending().put("expired-id", UUID.randomUUID());
+            deadlines().put("expired-id", System.currentTimeMillis() - 60_000L);
 
             service.cleanupExpiredPanelRequests();
 
-            assertThat(pendingPanelRequests).containsKey("fresh-id");
-            assertThat(pendingPanelTimestamps).containsKey("fresh-id");
+            assertThat(pending()).doesNotContainKey("expired-id");
+            assertThat(deadlines()).doesNotContainKey("expired-id");
+        }
+
+        @Test
+        @DisplayName("Should keep requests whose deadline lies ahead")
+        void keepNonExpired() throws Exception {
+            pending().put("fresh-id", UUID.randomUUID());
+            deadlines().put("fresh-id", System.currentTimeMillis() + 300_000L);
+
+            service.cleanupExpiredPanelRequests();
+
+            assertThat(pending()).containsKey("fresh-id");
+            assertThat(deadlines()).containsKey("fresh-id");
         }
 
         @Test
         @DisplayName("Should remove only expired requests when mixed")
         void mixedRequests() throws Exception {
-            @SuppressWarnings("unchecked")
-            Map<String, UUID> pendingPanelRequests =
-                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
-            @SuppressWarnings("unchecked")
-            Map<String, Long> pendingPanelTimestamps =
-                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
-
-            UUID expired1Uuid = UUID.randomUUID();
-            UUID freshUuid = UUID.randomUUID();
-            UUID expired2Uuid = UUID.randomUUID();
-
-            pendingPanelRequests.put("expired-1", expired1Uuid);
-            pendingPanelTimestamps.put("expired-1", System.currentTimeMillis() - 10 * 60 * 1000L);
-
-            pendingPanelRequests.put("fresh-1", freshUuid);
-            pendingPanelTimestamps.put("fresh-1", System.currentTimeMillis());
-
-            pendingPanelRequests.put("expired-2", expired2Uuid);
-            pendingPanelTimestamps.put("expired-2", System.currentTimeMillis() - 7 * 60 * 1000L);
+            pending().put("expired-1", UUID.randomUUID());
+            deadlines().put("expired-1", System.currentTimeMillis() - 5 * 60 * 1000L);
+            pending().put("fresh-1", UUID.randomUUID());
+            deadlines().put("fresh-1", System.currentTimeMillis() + 5 * 60 * 1000L);
+            pending().put("expired-2", UUID.randomUUID());
+            deadlines().put("expired-2", System.currentTimeMillis() - 1_000L);
 
             service.cleanupExpiredPanelRequests();
 
-            assertThat(pendingPanelRequests).hasSize(1);
-            assertThat(pendingPanelRequests).containsKey("fresh-1");
-            assertThat(pendingPanelTimestamps).hasSize(1);
-            assertThat(pendingPanelTimestamps).containsKey("fresh-1");
+            assertThat(pending()).containsOnlyKeys("fresh-1");
+            assertThat(deadlines()).containsOnlyKeys("fresh-1");
         }
 
         @Test
@@ -4402,7 +3626,7 @@ class LoginServiceTest {
             LoginService.PanelLinkResult result =
                     new LoginService.PanelLinkResult(true, "https://panel.example.com/login", null);
 
-            assertThat(result.getRequestId()).isNull();
+            assertThat(result.getLinkId()).isNull();
         }
 
         @Test
@@ -4411,53 +3635,49 @@ class LoginServiceTest {
             LoginService.PanelLinkResult result = new LoginService.PanelLinkResult(
                     true, "https://panel.example.com/login", null, "req-42");
 
-            assertThat(result.getRequestId()).isEqualTo("req-42");
+            assertThat(result.getLinkId()).isEqualTo("req-42");
         }
     }
 
-    // ==================== shutdown with polling tasks ====================
+    // ==================== shutdown with pending panel links ====================
 
     @Nested
-    @DisplayName("shutdown with polling tasks")
+    @DisplayName("shutdown with pending panel links")
     class ShutdownWithPolling {
 
         @Test
-        @DisplayName("Should cancel all polling tasks on shutdown")
-        void cancelAllPollingTasks() throws Exception {
-            @SuppressWarnings("unchecked")
-            Map<String, BukkitTask> pollingTasks =
-                    (Map<String, BukkitTask>) getFieldValue(service, "pollingTasks");
-
-            BukkitTask task1 = mock(BukkitTask.class);
-            BukkitTask task2 = mock(BukkitTask.class);
-            pollingTasks.put(UUID.randomUUID().toString(), task1);
-            pollingTasks.put(UUID.randomUUID().toString(), task2);
-
-            service.shutdown();
-
-            verify(task1).cancel();
-            verify(task2).cancel();
-            assertThat(pollingTasks).isEmpty();
-        }
-
-        @Test
-        @DisplayName("Should clear pending panel requests on shutdown")
+        @DisplayName("Should clear pending panel links and all their bookkeeping on shutdown")
+        @SuppressWarnings("unchecked")
         void clearPendingRequests() throws Exception {
-            @SuppressWarnings("unchecked")
             Map<String, UUID> pendingPanelRequests =
                     (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
-            @SuppressWarnings("unchecked")
-            Map<String, Long> pendingPanelTimestamps =
-                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
+            Map<String, Long> pendingPanelDeadlines =
+                    (Map<String, Long>) getFieldValue(service, "pendingPanelDeadlines");
+            java.util.Set<String> inFlight = (java.util.Set<String>) getFieldValue(service, "panelCreatesInFlight");
+            Map<UUID, String> latest = (Map<UUID, String>) getFieldValue(service, "latestPanelRequest");
 
-            pendingPanelRequests.put("req-1", UUID.randomUUID());
-            pendingPanelTimestamps.put("req-1", System.currentTimeMillis());
+            UUID owner = UUID.randomUUID();
+            pendingPanelRequests.put("req-1", owner);
+            pendingPanelDeadlines.put("req-1", System.currentTimeMillis());
+            inFlight.add("req-1");
+            latest.put(owner, "req-1");
 
             service.shutdown();
 
             assertThat(pendingPanelRequests).isEmpty();
-            assertThat(pendingPanelTimestamps).isEmpty();
+            assertThat(pendingPanelDeadlines).isEmpty();
+            assertThat(inFlight).isEmpty();
+            assertThat(latest).isEmpty();
         }
+    }
+
+    private void runPanelPublicationInline() {
+        BukkitScheduler scheduler = spy(Bukkit.getScheduler());
+        doAnswer(invocation -> {
+            ((Runnable) invocation.getArgument(1)).run();
+            return mock(BukkitTask.class);
+        }).when(scheduler).runTask(any(Plugin.class), any(Runnable.class));
+        doReturn(scheduler).when(Bukkit.getServer()).getScheduler();
     }
 
     // ==================== Helper methods ====================
@@ -4586,29 +3806,6 @@ class LoginServiceTest {
                     .as("a write that did not happen must not revoke the player's login (a failed update must not log the player out)")
                     .isTrue();
         }
-
-        @Test
-        @DisplayName("a panel login still completes and logs the failed write with the reason")
-        void panelLogin() throws Exception {
-            @SuppressWarnings("unchecked")
-            Map<String, UUID> pendingPanelRequests =
-                    (Map<String, UUID>) getFieldValue(service, "pendingPanelRequests");
-            @SuppressWarnings("unchecked")
-            Map<String, Long> pendingPanelTimestamps =
-                    (Map<String, Long>) getFieldValue(service, "pendingPanelTimestamps");
-            String requestId = "test-row-gone-request";
-            pendingPanelRequests.put(requestId, playerUuid);
-            pendingPanelTimestamps.put(requestId, System.currentTimeMillis());
-            Field serverField = Bukkit.class.getDeclaredField("server");
-            serverField.setAccessible(true);
-            Server server = (Server) serverField.get(null);
-            doReturn(player).when(server).getPlayer(playerUuid);
-
-            boolean result = service.completePanelLogin(requestId, false);
-
-            assertThat(result).isTrue();
-            verify(UltiLoginTestHelper.getMockLogger()).error(line("log_account_update_after_panel_failed"));
-        }
     }
 
     /**
@@ -4634,12 +3831,4 @@ class LoginServiceTest {
                 : org.bukkit.ChatColor.translateAlternateColorCodes('&', text);
     }
 
-    /** A framework-helper answer that carried an HTTP 200 exchange with {@code body}. */
-    private static UltiCloudRequests.Result cloudOk(String body) {
-        UltiCloudRequests.Result result = mock(UltiCloudRequests.Result.class);
-        when(result.getOutcome()).thenReturn(UltiCloudRequests.Outcome.OK);
-        when(result.getStatusCode()).thenReturn(200);
-        when(result.getBody()).thenReturn(body);
-        return result;
-    }
 }
