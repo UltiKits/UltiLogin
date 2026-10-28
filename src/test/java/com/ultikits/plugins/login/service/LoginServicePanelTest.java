@@ -968,7 +968,7 @@ class LoginServicePanelTest {
             "panel_link_error",
             "panel_create_rate_limited",
             "panel_create_not_permitted",
-            "panel_outcome_refused",
+            "panel_link_declined",
             "panel_link_cancelled",
             "panel_signed_in",
             "panel_web_signin_complete",
@@ -987,6 +987,7 @@ class LoginServicePanelTest {
             "setpassword_failed");
 
     private static final List<String> REMOVED_KEYS = Arrays.asList(
+            "panel_outcome_refused",
             "panel_credential_refused",
             "log_panel_credential_refused",
             "log_auth_poll_error",

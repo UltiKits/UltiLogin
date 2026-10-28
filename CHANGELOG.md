@@ -22,6 +22,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Declining a web sign-in with "Not me" now uses neutral wording and asks the player to run `/panel` again. The bind
+  and replace pages' "Cancel" buttons give the same declined message; the unused old refusal text is no longer shipped.
+- 在网页登录页点击“不是我”时，现在使用中性的拒绝提示，并说明需重新执行 `/panel`。绑定页和替换页的“取消”按钮也显示同一条提示；不再随模块提供无人读取的旧拒绝文字。
 - Requires UltiTools-API 6.3.1 or later. `api-version` rises from 630 to 631, so UltiTools-API 6.3.0 refuses this
   version at load with a warning that the UltiTools version is outdated.
 - 需要 UltiTools-API 6.3.1 或更高版本。`api-version` 从 630 提高到 631，UltiTools-API 6.3.0 会在加载时拒绝此版本，并警告
@@ -32,12 +35,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   already exists, not requested, registration rejected, login plugin unavailable); a repeated delivery of the same sign-in
   creates and logs in nothing twice; a sign-in that arrives after the player left, the server restarted or the link ended
   creates a requested account but logs nobody in, and tells a player who is online to run `/panel` again. A link ends when
-  UltiCloud says so (expired, cancelled, refused) or at its own expiry time, which holds the login countdown for at most
+  UltiCloud says so (expired, cancelled, declined) or at its own expiry time, which holds the login countdown for at most
   ten minutes.
 - Messages changed. New: "You have been logged in via UltiCloud." (no more "(Player)" or "(Server Owner)"), "The web panel
   sign-in is complete.", a cancelled link now says to run `/panel` again (cancelling is final), the rate-limit and
   link-not-permitted answers, "Your game account could not be created. Run /panel again to retry.", and the late sign-in
-  line. The refusal reasons the old protocol gave are gone: a refusal is now just "The web panel refused this sign-in."
+  line. The refusal reasons the old protocol gave are gone: clicking "Not me" now says "The web panel sign-in was
+  declined. Run /panel again for a new link."
 - A game password set with `/setpassword` is now described as a backup for when UltiCloud cannot be reached, and the
   player is told to use a password different from their UltiKits account. The reminder follows every web sign-in of an
   account that has no game password and every join, `/login` and re-prompt in which that account is not logged in; the
@@ -50,7 +54,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   同一次登录重复投递不会重复建号或登录；玩家已退出、服务器已重启或链接已结束后才到达的登录会创建被要求的账号但不让任何人登录，并提示在线的玩家重新
   执行 `/panel`。链接在 UltiCloud 报告结束（过期、取消、拒绝）时，或到自己的过期时间时结束，对登录倒计时的暂停最长十分钟。
 - 提示文字有变化。新增：“You have been logged in via UltiCloud.”（不再区分 Player／Server Owner）、网页登录完成提示、取消后需重新执行 `/panel`（取消是终态）、
-  请求太频繁和不允许生成链接的提示、游戏账号创建失败提示，以及迟到登录的提示。旧协议给出的各种拒绝原因已取消，拒绝只提示“网页面板拒绝了此次登录”。
+  请求太频繁和不允许生成链接的提示、游戏账号创建失败提示，以及迟到登录的提示。旧协议给出的各种拒绝原因已取消，点击“不是我”会提示“网页面板登录已被拒绝。请重新执行 /panel 获取新链接。”。
 - 用 `/setpassword` 设置的游戏密码现在被说明为 UltiCloud 连不上时用的备用密码，并提醒玩家使用与 UltiKits 账号不同的密码。每次没有游戏密码的账号经网页登录后，
   以及该账号未登录时的每次进服、`/login` 和再次提示，都会提醒；`/login` 的拒绝提示和 `/setpassword` 的帮助文字同样如此。
 - 名字没有账号时，若其地址已达 `max-register-per-ip`，`/panel` 在请求链接前就会拒绝，网页不再建出游戏会拒绝的 UltiKits 账号；网页登录完成时会再检查一次。

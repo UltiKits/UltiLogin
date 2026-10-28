@@ -87,8 +87,9 @@ What the player sees in game:
 | A player who was already logged in finishes a web sign-in | "The web panel sign-in is complete." |
 | Signed in to an account that has no game password (always the case for one created on the web) | the line above, then "Your account has no game password yet. Set a backup password with /setpassword <password> <confirm>: it lets you log in with /login when UltiCloud cannot be reached. Use a password different from your UltiKits account." |
 | `/login` or a join, for such an account that is not logged in | "This account was created on the web and has no game password yet. Log in with /panel, then set a backup password with /setpassword <password> <confirm> for when UltiCloud cannot be reached (different from your UltiKits password)." |
-| Cancelled on the page, or a newer `/panel` replaced the link | "You cancelled the web panel sign-in. Run /panel again for a new link." |
-| Refused by the page | "The web panel refused this sign-in." |
+| The latest delivered link was cancelled by the plugin or player (`cancelled`) | "You cancelled the web panel sign-in. Run /panel again for a new link." |
+| The web user clicked "Not me" on the confirmation page, or "Cancel" on the bind or replace page (`denied`) | "The web panel sign-in was declined. Run /panel again for a new link." |
+| A newer `/panel` replaced an earlier link | No message for the earlier link; the newer link stays pending |
 | Link expired | "Your web panel link has expired. Run /panel again for a new one." |
 | Countdown running again | "Your login countdown has resumed. Log in before it runs out." (with the time that was left, never a fresh full timeout) |
 | UltiCloud rate-limited the request | "Too many panel links were requested just now. Wait a minute, then run /panel again." |
@@ -134,8 +135,9 @@ older UltiTools-API versions.
 `/login`，再执行 `/panel`。要把游戏名移到另一个 UltiKits 账号：在原账号的设置中解除关联，登录另一个账号，再执行 `/panel`。
 
 游戏内可能看到的提示：链接发出时登录倒计时暂停（仍不能移动或聊天）；网页登录成功；已登录的玩家完成网页登录；没有游戏密码的账号登录后提示
-用 `/setpassword` 设置备用密码（UltiCloud 连不上时可用 `/login` 登录，请使用与 UltiKits 账号不同的密码）；网页取消，或被新的 `/panel` 替换
-（需要重新执行 `/panel`）；网页拒绝；链接过期；倒计时恢复（按暂停时剩余的时间，绝不重新计满）；请求太频繁；UltiCloud 不允许在此生成链接；
+用 `/setpassword` 设置备用密码（UltiCloud 连不上时可用 `/login` 登录，请使用与 UltiKits 账号不同的密码）；插件或玩家取消最新已发出的链接时提示重新执行 `/panel`；
+网页点击“不是我”，或在绑定／替换页点击“取消”，提示“网页面板登录已被拒绝。请重新执行 /panel 获取新链接。”；被新的 `/panel` 替换的旧链接静默结束；
+链接过期；倒计时恢复（按暂停时剩余的时间，绝不重新计满）；请求太频繁；UltiCloud 不允许在此生成链接；
 同一 IP 注册数已达上限；服务器未登录 UltiCloud（不发链接，静默恢复倒计时）或其他创建失败；网页登录已完成但游戏账号创建失败；网页登录在所用链接结束后才完成
 （需重新执行 `/panel`）。具体文字见上表（`language: en`）及 `lang/zh.json`。
 
