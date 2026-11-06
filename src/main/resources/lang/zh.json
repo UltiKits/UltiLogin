@@ -1,5 +1,7 @@
 {
   "login_enabled": "UltiLogin 已启用！",
+  "log_runtime_incompatible": "在 Minecraft 1.21 以下版本运行 UltiLogin 需要 UltiTools 6.4.0 或更高版本（服务端：{SERVER}，UltiTools：{FRAMEWORK}）。请更新 UltiTools。",
+  "log_runtime_unknown": "UltiLogin 无法判断运行环境兼容性（服务端：{SERVER}，UltiTools：{FRAMEWORK}）；将跳过版本门禁并继续启动。",
 
   "login_success": "登录成功！欢迎回来！",
   "register_success": "注册成功！欢迎加入服务器！",
