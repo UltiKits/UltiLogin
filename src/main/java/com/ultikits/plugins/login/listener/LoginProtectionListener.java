@@ -23,7 +23,6 @@ import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.block.SignChangeEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
-import org.bukkit.event.entity.EntityMountEvent;
 import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
@@ -66,11 +65,11 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <h2>Sibling listener</h2>
  *
- * {@link LoginProtectionPaperListener} carries the handlers for events in Paper's own namespaces, kept
- * in a separate class on purpose. That class's javadoc has the measurement: one handler whose parameter
- * type is missing at runtime empties the <em>whole</em> listener's handler map, so isolating the
- * Paper-only events bounds that failure to them. Both classes are in the coverage contract's
- * {@code PROTECTION_LISTENERS}, so it does not matter to the tests which file a handler lives in.
+ * {@link LoginProtectionPaperListener} carries the stable recipe-book hook. Mount, item-pick,
+ * sign-open and equipment-swap hooks are independently probed and manually registered by UltiLogin;
+ * their optional typed listeners live outside the component-scan root. One missing handler parameter
+ * would otherwise disable a whole listener during reflection. Modern and legacy mount hooks both
+ * delegate to {@link #protectMount} on this same bean, sharing its join-tick state.
  *
  * <h2>One event covered defensively</h2>
  *
@@ -129,7 +128,7 @@ public class LoginProtectionListener implements Listener {
     /**
      * Players whose join has not had its first tick yet. Paper restores the vehicle of a player who
      * quit while riding in that tick, after {@link PlayerJoinEvent}; refusing that mount makes Paper
-     * discard the vehicle and everything riding it, so {@link #onEntityMount} lets it through for
+     * discard the vehicle and everything riding it, so {@link #protectMount} lets it through for
      * these players and the one-tick task in {@link #onPlayerJoin} takes an unauthenticated player
      * off the vehicle instead (UltiKits/UltiLogin#41).
      */
@@ -244,10 +243,9 @@ public class LoginProtectionListener implements Listener {
      * discard the vehicle and its riders, so the player is taken off it one tick later instead
      * ({@link #onPlayerJoin}).
      */
-    @EventHandler(priority = EventPriority.LOWEST)
-    public void onEntityMount(EntityMountEvent event) {
-        if (event.getEntity() instanceof Player) {
-            Player player = (Player) event.getEntity();
+    public void protectMount(Entity entity, Cancellable event) {
+        if (entity instanceof Player) {
+            Player player = (Player) entity;
             if (!inJoinTick.contains(player.getUniqueId())) {
                 cancelIfNotLoggedIn(player, event);
             }
@@ -257,7 +255,7 @@ public class LoginProtectionListener implements Listener {
     /**
      * Drop an unauthenticated passenger from a moving minecart or boat (UltiKits/UltiLogin#41).
      * <p>
-     * A backstop for {@link #onEntityMount} and the one-tick check after a join: whatever put an
+     * A backstop for {@link #protectMount} and the one-tick check after a join: whatever put an
      * unauthenticated player into a vehicle, the vehicle does not carry them. {@link VehicleMoveEvent}
      * cannot be cancelled, and holding the vehicle back would also hold back its other riders, so the
      * unauthenticated passenger is dismounted instead — what {@link #onPlayerMove} already does to an
@@ -480,7 +478,7 @@ public class LoginProtectionListener implements Listener {
      *   cancelling {@link PlayerInteractEvent} cannot suppress it. There is also no book-editor-open
      *   event to cancel: {@code paper-api} 1.21.11 carries seven book events (recipe book, lectern,
      *   and this one) and none of them is an "editor opened" — unlike signs, which have
-     *   {@code PlayerOpenSignEvent}, which is why {@link LoginProtectionPaperListener#onPlayerOpenSign}
+     *   {@code PlayerOpenSignEvent}, which is why {@link com.ultikits.plugins.logincompat.OpenSignProtectionListener#onPlayerOpenSign}
      *   can prevent that editor and nothing can prevent this one.</li>
      *   <li>{@code ServerGamePacketListenerImpl#handleEditBook} reaches
      *   {@code CraftEventFactory#handleEditBookEvent} — which fires this event unconditionally —
@@ -529,7 +527,7 @@ public class LoginProtectionListener implements Listener {
      * co-installed plugin that opens a sign editor for a joining player reaches this event, and this
      * handler is the only thing refusing the write.
      * <p>
-     * {@link LoginProtectionPaperListener#onPlayerOpenSign} refuses the editor at the point it opens;
+     * {@link com.ultikits.plugins.logincompat.OpenSignProtectionListener#onPlayerOpenSign} refuses the editor at the point it opens;
      * the two are complementary rather than redundant — that one prevents, this one is the backstop.
      * <p>
      * {@code SignChangeEvent#getPlayer()} is annotated {@code @NotNull}, so the null branch below
