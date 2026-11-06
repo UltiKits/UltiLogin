@@ -4,7 +4,7 @@ import com.ultikits.plugins.login.i18n.LoginSeams;
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.service.LoginService;
-import com.ultikits.plugins.logincompat.EquipmentSwapProtectionListener;
+import com.ultikits.plugins.compat.login.EquipmentSwapProtectionListener;
 import com.ultikits.plugins.logincompat.MountProtectionListener;
 import com.ultikits.plugins.logincompat.OpenSignProtectionListener;
 import com.ultikits.plugins.logincompat.PickItemProtectionListener;

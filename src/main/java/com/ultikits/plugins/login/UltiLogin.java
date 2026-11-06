@@ -9,7 +9,7 @@ import com.ultikits.plugins.login.logging.PasswordLogFilterInstaller;
 import com.ultikits.plugins.login.util.Placeholders;
 import com.ultikits.plugins.login.service.LoginService;
 import com.ultikits.plugins.login.listener.LoginProtectionListener;
-import com.ultikits.plugins.logincompat.EquipmentSwapProtectionListener;
+import com.ultikits.plugins.compat.login.EquipmentSwapProtectionListener;
 import com.ultikits.plugins.logincompat.MountProtectionListener;
 import com.ultikits.plugins.logincompat.OpenSignProtectionListener;
 import com.ultikits.plugins.logincompat.PickItemProtectionListener;

@@ -1,4 +1,4 @@
-package com.ultikits.plugins.logincompat;
+package com.ultikits.plugins.compat.login;
 
 import com.ultikits.plugins.login.listener.LoginProtectionListener;
 import com.ultikits.plugins.login.service.LoginService;
@@ -11,8 +11,10 @@ import org.bukkit.event.Listener;
 /**
  * The optional dedicated equipment-slot-swap protection (UltiKits/UltiLogin#83).
  *
- * <p>This class must stay outside {@code com.ultikits.plugins.login}, the module's component-scan
- * root. The scanner reflects methods even on classes without a component annotation. Only after
+ * <p>This class's package must not start with any declared component-scan root, including
+ * {@code com.ultikits.plugins.login}: older framework JAR scanning uses a raw string prefix,
+ * without a package boundary. {@code com.ultikits.plugins.compat.login} stays outside that prefix.
+ * The scanner reflects methods even on classes without a component annotation. Only after
  * probing the event's presence does UltiLogin construct and register this plain listener; it also
  * unregisters it explicitly on unload. Ordinary right-click equipment use remains protected by
  * the core PlayerInteractEvent handler on servers without this dedicated event.

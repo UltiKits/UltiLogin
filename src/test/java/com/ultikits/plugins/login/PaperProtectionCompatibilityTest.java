@@ -7,7 +7,7 @@ import com.ultikits.plugins.login.listener.LoginProtectionListener;
 import com.ultikits.plugins.login.listener.LoginProtectionPaperListener;
 import com.ultikits.plugins.login.logging.PasswordLogFilterInstaller;
 import com.ultikits.plugins.login.service.LoginService;
-import com.ultikits.plugins.logincompat.EquipmentSwapProtectionListener;
+import com.ultikits.plugins.compat.login.EquipmentSwapProtectionListener;
 import com.ultikits.plugins.logincompat.MountProtectionListener;
 import com.ultikits.plugins.logincompat.OpenSignProtectionListener;
 import com.ultikits.plugins.logincompat.PickItemProtectionListener;
@@ -480,8 +480,10 @@ class PaperProtectionCompatibilityTest {
         @Override protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
             if (missing.contains(name)) throw new ClassNotFoundException("test hides " + name);
             if (PAPER_LISTENER.equals(name) || CORE_LISTENER.equals(name) || UltiLogin.class.getName().equals(name)
-                    || name.startsWith("com.ultikits.plugins.logincompat.")) {
-                if (name.startsWith("com.ultikits.plugins.logincompat.")) optionalRequested = true;
+                    || OPTIONAL_LISTENER.equals(name) || name.startsWith("com.ultikits.plugins.logincompat.")) {
+                if (OPTIONAL_LISTENER.equals(name) || name.startsWith("com.ultikits.plugins.logincompat.")) {
+                    optionalRequested = true;
+                }
                 Class<?> type = findLoadedClass(name);
                 if (type == null) type = findClass(name);
                 if (resolve) resolveClass(type);
