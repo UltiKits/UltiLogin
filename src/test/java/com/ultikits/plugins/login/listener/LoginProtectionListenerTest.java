@@ -6,8 +6,8 @@ import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.gui.LoginGUIPage;
 import com.ultikits.plugins.login.gui.RegisterGUIPage;
 import com.ultikits.plugins.login.service.LoginService;
-import com.ultikits.plugins.logincompat.MountProtectionListener;
-import com.ultikits.plugins.logincompat.PickItemProtectionListener;
+import com.ultikits.plugins.compat.login.MountProtectionListener;
+import com.ultikits.plugins.compat.login.PickItemProtectionListener;
 
 import org.bukkit.ChatColor;
 import org.bukkit.Server;

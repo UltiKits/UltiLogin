@@ -1,4 +1,4 @@
-package com.ultikits.plugins.logincompat;
+package com.ultikits.plugins.compat.login;
 
 import com.ultikits.plugins.login.listener.LoginProtectionListener;
 import com.ultikits.plugins.login.service.LoginService;
@@ -14,6 +14,9 @@ import org.bukkit.event.Listener;
  * even on servers with no open hook. The unrelated deprecated Bukkit PlayerSignOpenEvent has its own
  * HandlerList and is not an equivalent on Paper 1.19.2/1.19.4, where neither open event exists.
  * Which event a server actually fires still needs version-specific real-server verification (#36).
+ * Its package must not start with any declared scan root: older framework JAR scanners match raw
+ * prefixes, so {@code com.ultikits.plugins.compat.login} avoids the {@code com.ultikits.plugins.login}
+ * prefix that {@code com.ultikits.plugins.logincompat} accidentally matched.
  */
 public class OpenSignProtectionListener implements Listener {
     private final LoginService loginService;

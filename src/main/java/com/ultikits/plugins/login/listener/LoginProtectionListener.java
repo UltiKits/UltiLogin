@@ -478,7 +478,7 @@ public class LoginProtectionListener implements Listener {
      *   cancelling {@link PlayerInteractEvent} cannot suppress it. There is also no book-editor-open
      *   event to cancel: {@code paper-api} 1.21.11 carries seven book events (recipe book, lectern,
      *   and this one) and none of them is an "editor opened" — unlike signs, which have
-     *   {@code PlayerOpenSignEvent}, which is why {@link com.ultikits.plugins.logincompat.OpenSignProtectionListener#onPlayerOpenSign}
+     *   {@code PlayerOpenSignEvent}, which is why {@link com.ultikits.plugins.compat.login.OpenSignProtectionListener#onPlayerOpenSign}
      *   can prevent that editor and nothing can prevent this one.</li>
      *   <li>{@code ServerGamePacketListenerImpl#handleEditBook} reaches
      *   {@code CraftEventFactory#handleEditBookEvent} — which fires this event unconditionally —
@@ -527,7 +527,7 @@ public class LoginProtectionListener implements Listener {
      * co-installed plugin that opens a sign editor for a joining player reaches this event, and this
      * handler is the only thing refusing the write.
      * <p>
-     * {@link com.ultikits.plugins.logincompat.OpenSignProtectionListener#onPlayerOpenSign} refuses the editor at the point it opens;
+     * {@link com.ultikits.plugins.compat.login.OpenSignProtectionListener#onPlayerOpenSign} refuses the editor at the point it opens;
      * the two are complementary rather than redundant — that one prevents, this one is the backstop.
      * <p>
      * {@code SignChangeEvent#getPlayer()} is annotated {@code @NotNull}, so the null branch below

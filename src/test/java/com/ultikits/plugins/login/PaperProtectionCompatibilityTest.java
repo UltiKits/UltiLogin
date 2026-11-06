@@ -8,9 +8,9 @@ import com.ultikits.plugins.login.listener.LoginProtectionPaperListener;
 import com.ultikits.plugins.login.logging.PasswordLogFilterInstaller;
 import com.ultikits.plugins.login.service.LoginService;
 import com.ultikits.plugins.compat.login.EquipmentSwapProtectionListener;
-import com.ultikits.plugins.logincompat.MountProtectionListener;
-import com.ultikits.plugins.logincompat.OpenSignProtectionListener;
-import com.ultikits.plugins.logincompat.PickItemProtectionListener;
+import com.ultikits.plugins.compat.login.MountProtectionListener;
+import com.ultikits.plugins.compat.login.OpenSignProtectionListener;
+import com.ultikits.plugins.compat.login.PickItemProtectionListener;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
@@ -204,7 +204,10 @@ class PaperProtectionCompatibilityTest {
     void optionalListenersStayOutsideAllScanRootsWithTheOriginalPriority() {
         for (Class<?> optional : OPTIONAL_LISTENERS) {
             for (String root : UltiLogin.class.getAnnotation(UltiToolsModule.class).scanBasePackages()) {
-                assertThat(optional.getName()).doesNotStartWith(root + ".");
+                // Older framework JAR scanning uses a raw prefix, without a package boundary.
+                assertThat(optional.getPackage().getName())
+                        .as("%s must escape scan prefix %s", optional.getName(), root)
+                        .doesNotStartWith(root);
             }
             assertThat(optional.getAnnotations()).isEmpty();
             assertThat(Arrays.stream(optional.getDeclaredMethods())
@@ -480,10 +483,8 @@ class PaperProtectionCompatibilityTest {
         @Override protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
             if (missing.contains(name)) throw new ClassNotFoundException("test hides " + name);
             if (PAPER_LISTENER.equals(name) || CORE_LISTENER.equals(name) || UltiLogin.class.getName().equals(name)
-                    || OPTIONAL_LISTENER.equals(name) || name.startsWith("com.ultikits.plugins.logincompat.")) {
-                if (OPTIONAL_LISTENER.equals(name) || name.startsWith("com.ultikits.plugins.logincompat.")) {
-                    optionalRequested = true;
-                }
+                    || name.startsWith("com.ultikits.plugins.compat.login.")) {
+                if (name.startsWith("com.ultikits.plugins.compat.login.")) optionalRequested = true;
                 Class<?> type = findLoadedClass(name);
                 if (type == null) type = findClass(name);
                 if (resolve) resolveClass(type);

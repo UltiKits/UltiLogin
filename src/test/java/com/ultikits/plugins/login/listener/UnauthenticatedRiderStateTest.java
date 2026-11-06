@@ -3,7 +3,7 @@ package com.ultikits.plugins.login.listener;
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.service.LoginService;
-import com.ultikits.plugins.logincompat.MountProtectionListener;
+import com.ultikits.plugins.compat.login.MountProtectionListener;
 
 import org.bukkit.Location;
 import org.bukkit.World;

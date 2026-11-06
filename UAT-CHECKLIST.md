@@ -329,9 +329,8 @@ blocks the delivery/cancellation clause. Record each numbered clause separately.
 Expected owner is Bukkit `UltiTools` for every product entry. Core `LoginProtectionListener` has
 22 automatic entries (20 protections plus join/quit); every protection is LOWEST/not ignoring
 cancelled events, quit keeps NORMAL. Stable `LoginProtectionPaperListener` has **only recipe-book**.
-Optional entry classes are `com.ultikits.plugins.logincompat.MountProtectionListener`,
-`PickItemProtectionListener`, `OpenSignProtectionListener`,
-`com.ultikits.plugins.compat.login.EquipmentSwapProtectionListener`,
+Optional entry classes are `com.ultikits.plugins.compat.login.MountProtectionListener`,
+`PickItemProtectionListener`, `OpenSignProtectionListener`, `EquipmentSwapProtectionListener`,
 all LOWEST/not ignoring cancelled events. Legacy mount is a plain Listener created by
 `UltiLogin#createLegacyMountListener` plus its registerEvent executor, not a second core bean.
 Record its actual instance/class rather than assuming an anonymous-class number. The selected mount
