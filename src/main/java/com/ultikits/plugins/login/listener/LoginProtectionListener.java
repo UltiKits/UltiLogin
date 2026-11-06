@@ -12,6 +12,8 @@ import mc.obliviate.inventory.InventoryAPI;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Location;
+import org.bukkit.World;
+import org.bukkit.util.BoundingBox;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Cancellable;
 import org.bukkit.plugin.Plugin;
@@ -34,6 +36,8 @@ import org.bukkit.entity.Entity;
 import org.bukkit.inventory.Inventory;
 
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -197,15 +201,12 @@ public class LoginProtectionListener implements Listener {
     }
     
     /**
-     * Refuse block-column changes and upward block changes, but never restore the old Y on descent.
-     * Holding an airborne player at their old Y triggers Paper's floating kick before they can
-     * log in (see {@code ultilogin.protection.movement-block.airborne-rejoin} in UAT-CHECKLIST.md).
-     * Paper treats a changed move destination as a teleport and returns before updating its floating
-     * flag; that same-world teleport does not reset the floating counter. Returning a sideways fall
-     * to the previous fractional X/Z lets repeated moves converge on a column edge. Instead, keep
-     * the lower Y and previous facing at the centre of the from-block column: the distance to its
-     * edges leaves ordinary free-fall ticks between reverts to clear the floating flag. Looking
-     * around and movement within a block remain untouched.
+     * Refuse block-column changes and upward block changes without holding a falling player at the
+     * old Y when a lower safe Y exists (UltiKits/UltiLogin#73, #74). A sideways descent keeps the
+     * original fractional X/Z and facing, choosing the lowest noncolliding Y from the descended Y
+     * through the original Y, within world height. If the whole interval is obstructed, cancel the
+     * move instead of creating an unsafe destination. Rotation-only and same-column descent remain
+     * untouched. See the airborne-rejoin and collision scenarios in UAT-CHECKLIST.md.
      */
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerMove(PlayerMoveEvent event) {
@@ -218,17 +219,82 @@ public class LoginProtectionListener implements Listener {
                 || from.getBlockZ() != to.getBlockZ();
         if (to.getY() < from.getY()) {
             if (changesColumn) {
-                Location falling = from.clone();
-                falling.setX(from.getBlockX() + 0.5);
-                falling.setY(to.getY());
-                falling.setZ(from.getBlockZ() + 0.5);
-                event.setTo(falling);
+                double safeY = lowestSafeDescentY(event.getPlayer(), from, to.getY());
+                if (Double.isNaN(safeY)) {
+                    event.setCancelled(true);
+                } else {
+                    Location falling = from.clone();
+                    falling.setY(safeY);
+                    event.setTo(falling);
+                }
             }
         } else if (changesColumn || from.getBlockY() != to.getBlockY()) {
             event.setTo(from);
         }
     }
-    
+
+    /**
+     * Sweep the open intervals of feet Y blocked by actual block-shape components. Their endpoints
+     * are safe face contact, so fractional surfaces and exact-fit gaps must not be rounded to blocks.
+     * The entity box is world-space; block collision-shape boxes are block-local in CraftBukkit.
+     */
+    private static double lowestSafeDescentY(Player player, Location from, double descendedY) {
+        World world = from.getWorld();
+        Location current = player.getLocation();
+        BoundingBox relative = player.getBoundingBox().clone().shift(
+                -current.getX(), -current.getY(), -current.getZ());
+        double lower = Math.max(descendedY, world.getMinHeight() - relative.getMinY());
+        double upper = Math.min(from.getY(), world.getMaxHeight() - relative.getMaxY());
+        if (lower > upper) {
+            return Double.NaN;
+        }
+
+        BoundingBox footprint = relative.clone().shift(from.getX(), 0, from.getZ());
+        List<BoundingBox> obstacles = new ArrayList<>();
+        // Neighbouring owning blocks can protrude into the swept box (e.g. a 1.5-high fence).
+        int minX = (int) Math.floor(footprint.getMinX()) - 1;
+        int maxX = (int) Math.floor(footprint.getMaxX()) + 1;
+        int minZ = (int) Math.floor(footprint.getMinZ()) - 1;
+        int maxZ = (int) Math.floor(footprint.getMaxZ()) + 1;
+        int minY = Math.max(world.getMinHeight(),
+                (int) Math.floor(lower + relative.getMinY()) - 1);
+        int maxY = Math.min(world.getMaxHeight() - 1,
+                (int) Math.floor(upper + relative.getMaxY()) + 1);
+        for (int x = minX; x <= maxX; x++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                for (int y = minY; y <= maxY; y++) {
+                    for (BoundingBox local : world.getBlockAt(x, y, z)
+                            .getCollisionShape().getBoundingBoxes()) {
+                        BoundingBox shape = local.clone().shift(x, y, z);
+                        if (footprint.getMinX() < shape.getMaxX()
+                                && footprint.getMaxX() > shape.getMinX()
+                                && footprint.getMinZ() < shape.getMaxZ()
+                                && footprint.getMaxZ() > shape.getMinZ()) {
+                            obstacles.add(shape);
+                        }
+                    }
+                }
+            }
+        }
+
+        obstacles.sort(Comparator.comparingDouble(BoundingBox::getMinY));
+        double candidate = lower;
+        for (BoundingBox obstacle : obstacles) {
+            double start = obstacle.getMinY() - relative.getMaxY();
+            double end = obstacle.getMaxY() - relative.getMinY();
+            if (candidate <= start) {
+                break;
+            }
+            if (candidate < end) {
+                candidate = end;
+                if (candidate > upper) {
+                    return Double.NaN;
+                }
+            }
+        }
+        return candidate;
+    }
+
     /**
      * Refuse a mount by an unauthenticated player (UltiKits/UltiLogin#41).
      * <p>
