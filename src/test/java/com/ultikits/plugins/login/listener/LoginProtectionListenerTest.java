@@ -16,6 +16,8 @@ import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.player.*;
 import org.bukkit.scheduler.BukkitScheduler;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 
@@ -332,22 +334,26 @@ class LoginProtectionListenerTest {
             return loc;
         }
 
-        @org.junit.jupiter.params.ParameterizedTest
-        @org.junit.jupiter.params.provider.CsvSource({"64.2, 62.8", "64.8, 64.2", "0.2, -1.2"})
+        @ParameterizedTest
+        @CsvSource({"64.2, 62.8", "64.8, 64.2", "0.2, -1.2"})
         @DisplayName("An unauthenticated straight fall keeps the original destination (UltiLogin#73)")
         void straightFallKeepsDestination(double fromY, double toY) {
             org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.2, fromY, -0.2, 15, 25);
             org.bukkit.Location to = new org.bukkit.Location(mockWorld, 0.8, toY, -0.8, 45, 55);
             PlayerMoveEvent event = new PlayerMoveEvent(player, from, to);
             org.bukkit.Location originalTo = event.getTo();
+            org.bukkit.Location expectedFrom = from.clone();
+            org.bukkit.Location expectedTo = originalTo.clone();
 
             listener.onPlayerMove(event);
 
-            assertThat(event.getTo()).isSameAs(originalTo);
+            assertThat(event.getTo()).isSameAs(originalTo).isEqualTo(expectedTo);
+            assertThat(from).isEqualTo(expectedFrom);
+            assertThat(to).isEqualTo(expectedTo);
         }
 
-        @org.junit.jupiter.params.ParameterizedTest
-        @org.junit.jupiter.params.provider.CsvSource({"1.2, 62.8, -0.2", "0.2, 62.8, -1.2", "1.2, 62.8, -1.2",
+        @ParameterizedTest
+        @CsvSource({"1.2, 62.8, -0.2", "0.2, 62.8, -1.2", "1.2, 62.8, -1.2",
                 "1.2, 64.1, -1.2"})
         @DisplayName("A sideways fall keeps the lower Y at the column centre with the previous facing (UltiLogin#73)")
         void sidewaysFallKeepsLowerY(double toX, double toY, double toZ) {
@@ -391,17 +397,38 @@ class LoginProtectionListenerTest {
             assertThat(event.getTo()).isEqualTo(from);
         }
 
+        @ParameterizedTest
+        @CsvSource({"1.2, -0.2", "0.2, -1.2", "1.2, -1.2"})
+        @DisplayName("An unauthenticated equal-height column change is reverted on real locations")
+        void equalHeightColumnChangeIsReverted(double toX, double toZ) {
+            org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.2, 64.8, -0.2, 15, 25);
+            org.bukkit.Location to = new org.bukkit.Location(mockWorld, toX, 64.8, toZ, 45, 55);
+            org.bukkit.Location expectedFrom = from.clone();
+            org.bukkit.Location expectedTo = to.clone();
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from, to);
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.getTo()).isEqualTo(expectedFrom);
+            assertThat(from).isEqualTo(expectedFrom);
+            assertThat(to).isEqualTo(expectedTo);
+        }
+
         @Test
         @DisplayName("A look-only move keeps its destination and new facing (UltiLogin#73)")
         void lookOnlyKeepsDestination() {
             org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.2, 64.8, -0.2, 15, 25);
-            PlayerMoveEvent event = new PlayerMoveEvent(player, from,
-                    new org.bukkit.Location(mockWorld, 0.2, 64.8, -0.2, 45, 55));
+            org.bukkit.Location to = new org.bukkit.Location(mockWorld, 0.2, 64.8, -0.2, 45, 55);
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from, to);
             org.bukkit.Location originalTo = event.getTo();
+            org.bukkit.Location expectedFrom = from.clone();
+            org.bukkit.Location expectedTo = originalTo.clone();
 
             listener.onPlayerMove(event);
 
-            assertThat(event.getTo()).isSameAs(originalTo);
+            assertThat(event.getTo()).isSameAs(originalTo).isEqualTo(expectedTo);
+            assertThat(from).isEqualTo(expectedFrom);
+            assertThat(to).isEqualTo(expectedTo);
         }
 
         @Test
