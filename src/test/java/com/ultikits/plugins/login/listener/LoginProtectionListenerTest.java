@@ -372,7 +372,9 @@ class LoginProtectionListenerTest {
 
             assertThat(event.isCancelled()).isFalse();
             org.bukkit.Location target = expectedFrom.clone();
+            target.setX(expectedFrom.getBlockX() + 0.5);
             target.setY(expectedY);
+            target.setZ(expectedFrom.getBlockZ() + 0.5);
             assertThat(event.getTo()).isEqualTo(target);
             assertThat(event.getFrom()).isEqualTo(expectedFrom);
             assertThat(originalTo).isEqualTo(expectedTo);
@@ -420,9 +422,25 @@ class LoginProtectionListenerTest {
 
         @Test
         void sidewaysDescentChecksNeighbouringColumnsAcrossWholeBoundingBox() {
-            // The player's centre is in X=0, but its left side extends into X=-1.
+            // A wide actual box still extends into X=-1 after recentering in X=0.
+            geometry(new org.bukkit.Location(mockWorld, 0.2, 64.2, -0.2),
+                    -0.6, 0, -0.3, 0.6, 1.8, 0.3);
             shapeAt(-1, 64, -1, new org.bukkit.util.BoundingBox(0, 0, 0, 1, 1, 1));
             assertSafeDestination(sidewaysDescent(65.2, 64.7), 65.0);
+        }
+
+        @Test
+        void sidewaysDescentChecksCollisionAtColumnCentreRatherThanOriginalFraction() {
+            // This upper component misses the old footprint but intersects the centred box.
+            shapeAt(0, 64, -1, new org.bukkit.util.BoundingBox(0.5, 0, 0, 1, 1, 1));
+            assertSafeDestination(sidewaysDescent(65.2, 64.7), 65.0);
+        }
+
+        @Test
+        void sidewaysDescentIgnoresObstacleOutsideCentredBoundingBox() {
+            // The normal-width box no longer overlaps X=-1 after recentering.
+            shapeAt(-1, 64, -1, new org.bukkit.util.BoundingBox(0, 0, 0, 1, 1, 1));
+            assertSafeDestination(sidewaysDescent(65.2, 64.7), 64.7);
         }
 
         @Test
@@ -438,7 +456,7 @@ class LoginProtectionListenerTest {
         void sidewaysDescentConsidersEveryStairShapeComponent() {
             shapeAt(0, 64, -1,
                     new org.bukkit.util.BoundingBox(0, 0, 0, 1, 0.5, 1),
-                    new org.bukkit.util.BoundingBox(0.5, 0.5, 0, 1, 1, 1));
+                    new org.bukkit.util.BoundingBox(0.8, 0.5, 0, 1, 1, 1));
             // The upper component only touches the body's X face; its lower tread is safe.
             assertSafeDestination(sidewaysDescent(65.2, 64.1), 64.5);
         }
@@ -531,7 +549,7 @@ class LoginProtectionListenerTest {
         @ParameterizedTest
         @CsvSource({"1.2, 62.8, -0.2", "0.2, 62.8, -1.2", "1.2, 62.8, -1.2",
                 "1.2, 64.1, -1.2"})
-        @DisplayName("A sideways fall keeps the lower Y at the original X/Z with the previous facing (UltiLogin#73, #74)")
+        @DisplayName("A sideways fall keeps the lower Y at the column centre with the previous facing (UltiLogin#73, #74)")
         void sidewaysFallKeepsLowerY(double toX, double toY, double toZ) {
             org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.2, 64.2, -0.2, 15, 25);
             org.bukkit.Location to = new org.bukkit.Location(mockWorld, toX, toY, toZ, 45, 55);
@@ -542,7 +560,9 @@ class LoginProtectionListenerTest {
             listener.onPlayerMove(event);
 
             assertThat(event.getTo()).isEqualTo(new org.bukkit.Location(mockWorld,
-                    expectedFrom.getX(), toY, expectedFrom.getZ(), 15, 25));
+                    expectedFrom.getBlockX() + 0.5, toY, expectedFrom.getBlockZ() + 0.5, 15, 25));
+            assertThat(event.getTo().getX()).isNotEqualTo(from.getX());
+            assertThat(event.getTo().getZ()).isNotEqualTo(from.getZ());
             assertThat(from).isEqualTo(expectedFrom);
             assertThat(to).isEqualTo(expectedTo);
             assertThat(from.getY()).isEqualTo(64.2);

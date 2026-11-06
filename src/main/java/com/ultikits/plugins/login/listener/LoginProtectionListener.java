@@ -202,11 +202,17 @@ public class LoginProtectionListener implements Listener {
     
     /**
      * Refuse block-column changes and upward block changes without holding a falling player at the
-     * old Y when a lower safe Y exists (UltiKits/UltiLogin#73, #74). A sideways descent keeps the
-     * original fractional X/Z and facing, choosing the lowest noncolliding Y from the descended Y
-     * through the original Y, within world height. If the whole interval is obstructed, cancel the
-     * move instead of creating an unsafe destination. Rotation-only and same-column descent remain
-     * untouched. See the airborne-rejoin and collision scenarios in UAT-CHECKLIST.md.
+     * old Y when a lower safe Y exists (UltiKits/UltiLogin#73, #74).
+     * Paper treats a changed move destination as a teleport and returns before updating its floating
+     * flag; that same-world teleport does not reset the floating counter. Returning a sideways fall
+     * to the previous fractional X/Z lets repeated moves converge on a column edge. Instead, use the
+     * centre of the from-block column with the previous facing: the distance to its edges leaves
+     * ordinary free-fall ticks between reverts to clear the floating flag. At that centre, choose
+     * the lowest noncolliding Y from the descended Y through the original Y, within world height.
+     * If the whole interval is obstructed, cancel the move instead of creating an unsafe destination.
+     * Rotation-only and same-column descent remain untouched. See
+     * {@code ultilogin.protection.movement-block.airborne-rejoin} and the collision scenarios in
+     * UAT-CHECKLIST.md.
      */
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerMove(PlayerMoveEvent event) {
@@ -219,11 +225,13 @@ public class LoginProtectionListener implements Listener {
                 || from.getBlockZ() != to.getBlockZ();
         if (to.getY() < from.getY()) {
             if (changesColumn) {
-                double safeY = lowestSafeDescentY(event.getPlayer(), from, to.getY());
+                Location falling = from.clone();
+                falling.setX(from.getBlockX() + 0.5);
+                falling.setZ(from.getBlockZ() + 0.5);
+                double safeY = lowestSafeDescentY(event.getPlayer(), falling, to.getY());
                 if (Double.isNaN(safeY)) {
                     event.setCancelled(true);
                 } else {
-                    Location falling = from.clone();
                     falling.setY(safeY);
                     event.setTo(falling);
                 }
