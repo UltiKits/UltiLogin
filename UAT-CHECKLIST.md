@@ -302,7 +302,7 @@ cancellation/results, unregister or replace product listeners, spoof login state
 `PluginManager#callEvent`/construct synthetic events. Record listener class, priority,
 `isIgnoringCancelled()` and owning plugin for each relevant list. Expected owner is `UltiTools`;
 expected listener is `LoginProtectionPaperListener` for the retained three and
-`com.ultikits.plugins.logincompat.EquipmentSwapProtectionListener` for equipment swap, each LOWEST,
+`com.ultikits.plugins.compat.login.EquipmentSwapProtectionListener` for equipment swap, each LOWEST,
 not ignoring cancelled events. A list entry proves registration, not delivery/cancellation. On
 1.21.4 resolve the optional class by name before inspecting its list: report absent, never link it
 through the helper's signatures. Prove the observer works with each logged-in same-action control.

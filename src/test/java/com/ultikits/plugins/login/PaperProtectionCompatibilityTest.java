@@ -5,7 +5,7 @@ import com.ultikits.plugins.login.i18n.CatalogueText;
 import com.ultikits.plugins.login.listener.LoginProtectionPaperListener;
 import com.ultikits.plugins.login.logging.PasswordLogFilterInstaller;
 import com.ultikits.plugins.login.service.LoginService;
-import com.ultikits.plugins.logincompat.EquipmentSwapProtectionListener;
+import com.ultikits.plugins.compat.login.EquipmentSwapProtectionListener;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
@@ -127,8 +127,13 @@ class PaperProtectionCompatibilityTest {
 
     @Test
     void optionalListenerIsOutsideEveryDeclaredScanRootAndNotAnIocComponent() throws Exception {
-        for (String root : UltiLogin.class.getAnnotation(UltiToolsModule.class).scanBasePackages()) {
-            assertThat(OPTIONAL_LISTENER).doesNotStartWith(root + ".");
+        for (Class<?> compatClass : Arrays.<Class<?>>asList(EquipmentSwapProtectionListener.class)) {
+            for (String root : UltiLogin.class.getAnnotation(UltiToolsModule.class).scanBasePackages()) {
+                // Older framework JAR scanning uses a raw prefix, without a package boundary.
+                assertThat(compatClass.getPackage().getName())
+                        .as("%s must escape scan prefix %s", compatClass.getName(), root)
+                        .doesNotStartWith(root);
+            }
         }
         assertThat(EquipmentSwapProtectionListener.class.getAnnotations()).isEmpty();
         EventHandler handler = EquipmentSwapProtectionListener.class

@@ -8,7 +8,7 @@ import com.ultikits.plugins.login.logging.PasswordCommandMask;
 import com.ultikits.plugins.login.logging.PasswordLogFilterInstaller;
 import com.ultikits.plugins.login.util.Placeholders;
 import com.ultikits.plugins.login.service.LoginService;
-import com.ultikits.plugins.logincompat.EquipmentSwapProtectionListener;
+import com.ultikits.plugins.compat.login.EquipmentSwapProtectionListener;
 import org.bukkit.Bukkit;
 import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
