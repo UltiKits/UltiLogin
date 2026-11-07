@@ -6,7 +6,6 @@ import com.ultikits.ultitools.annotations.EventListener;
 import com.destroystokyo.paper.event.player.PlayerRecipeBookClickEvent;
 import io.papermc.paper.event.player.PlayerOpenSignEvent;
 import io.papermc.paper.event.player.PlayerPickItemEvent;
-import io.papermc.paper.event.player.PlayerSwapWithEquipmentSlotEvent;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Cancellable;
 import org.bukkit.event.EventHandler;
@@ -20,8 +19,8 @@ import org.bukkit.event.Listener;
  *
  * <h2>Why these are not in {@code LoginProtectionListener}</h2>
  *
- * <strong>So that a server missing one of these classes loses only these four handlers instead of all
- * twenty-one core ones.</strong> This is measured, not precautionary. Bukkit's
+ * <strong>So that a server missing one of these classes loses only these three handlers instead of all
+ * core ones.</strong> This is measured, not precautionary. Bukkit's
  * {@code JavaPluginLoader#createRegisteredListeners} wraps its {@code getMethods()} /
  * {@code getDeclaredMethods()} calls in a {@code catch (NoClassDefFoundError)} that logs one
  * {@code severe} line and then <em>returns early</em> — verified in the bytecode of the resolved
@@ -30,7 +29,7 @@ import org.bukkit.event.Listener;
  * map comes back empty.
  *
  * <p>So a single handler whose parameter type is absent at runtime disables every other handler in the
- * same class. These four events are Paper-only and comparatively recent, while this module declares
+ * same class. These three events are Paper-only and comparatively recent, while this module declares
  * Bukkit {@code api-version} compatibility well below the version it compiles against, so that is a
  * live risk rather than a hypothetical one — and its blast radius is exactly the catastrophic outcome
  * of a listener class failing to register, reached by a version difference instead of a refactor. The
@@ -42,6 +41,11 @@ import org.bukkit.event.Listener;
  * onPlayerPickItem(PlayerPickItemEvent)}" to the existing listener), taken because of the
  * measurement above. The coverage is the same; the failure mode is not.
  *
+ * <p>The newer equipment-slot-swap hook is deliberately not declared here: it is absent on Paper
+ * 1.21.4. UltiLogin probes for that event and manually registers a separate listener outside this
+ * module's component-scan package, so neither scanner nor listener reflection resolves its missing
+ * handler parameter before the probe (UltiKits/UltiLogin#83).
+ *
  * <h2>What these cover</h2>
  *
  * Each is a distinct client intent with its own {@code HandlerList} that descends from no event
@@ -52,7 +56,6 @@ import org.bukkit.event.Listener;
  *   of the player will be set to the target slot". It is {@code abstract} and its two concrete
  *   subclasses ({@code PlayerPickBlockEvent}, {@code PlayerPickEntityEvent}) declare no
  *   {@code HandlerList} of their own, so this one handler receives both.</li>
- *   <li>{@link PlayerSwapWithEquipmentSlotEvent} — swapping the held item with an equipment slot.</li>
  *   <li>{@link PlayerRecipeBookClickEvent} — a recipe-book click, which moves items into the crafting
  *   grid of an already-open inventory.</li>
  *   <li>{@link PlayerOpenSignEvent} — refuses the sign editor at the point it would open, rather than
@@ -81,14 +84,6 @@ public class LoginProtectionPaperListener implements Listener {
      */
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerPickItem(PlayerPickItemEvent event) {
-        cancelIfNotLoggedIn(event.getPlayer(), event);
-    }
-
-    /**
-     * Cancel swapping the held item with an equipment slot for an unauthenticated player.
-     */
-    @EventHandler(priority = EventPriority.LOWEST)
-    public void onPlayerSwapWithEquipmentSlot(PlayerSwapWithEquipmentSlotEvent event) {
         cancelIfNotLoggedIn(event.getPlayer(), event);
     }
 
@@ -129,7 +124,7 @@ public class LoginProtectionPaperListener implements Listener {
      * Cancel {@code event} unless {@code player} is authenticated or is a plugin NPC
      * ({@link LoginProtectionListener#isPluginNpc}, UltiKits/UltiLogin#42).
      * <p>
-     * A {@code null} player cancels, rather than throwing. None of these four events documents a
+     * A {@code null} player cancels, rather than throwing. None of these three events documents a
      * nullable player, but an unchecked exception thrown out of a handler is logged and swallowed by
      * Bukkit and leaves the event <em>uncancelled</em> — so the only failure mode worth having here is
      * the closed one.

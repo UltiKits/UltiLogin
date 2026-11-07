@@ -9,8 +9,11 @@ import com.ultikits.plugins.login.logging.PasswordLogFilterInstaller;
 import com.ultikits.plugins.login.util.Placeholders;
 import com.ultikits.plugins.login.util.RuntimeCompatibility;
 import com.ultikits.plugins.login.service.LoginService;
+import com.ultikits.plugins.compat.login.EquipmentSwapProtectionListener;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.Plugin;
+import org.bukkit.event.HandlerList;
+import org.bukkit.event.Listener;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
@@ -49,6 +52,9 @@ import java.io.IOException;
 @UltiToolsModule(scanBasePackages = {"com.ultikits.plugins.login"})
 public class UltiLogin extends UltiToolsPlugin {
 
+    private Listener equipmentSwapListener;
+    private boolean equipmentSwapProtectionInitialized;
+
     /** Package-private seam so enable tests can exercise the runtime check without core bootstrap. */
     boolean refusesUnsupportedRuntime() {
         String server = Bukkit.getBukkitVersion();
@@ -85,6 +91,7 @@ public class UltiLogin extends UltiToolsPlugin {
         warnAboutRemovedConfigKeys();
         warnAboutUnusableLockoutType();
         writeConfigTextInServerLanguage();
+        registerEquipmentSwapProtection();
         return true;
     }
 
@@ -106,10 +113,64 @@ public class UltiLogin extends UltiToolsPlugin {
      */
     @Override
     protected void onUnregister() {
-        String problem = PasswordLogFilterInstaller.uninstall();
-        if (problem != null) {
-            getLogger().warn(Placeholders.fill(i18n("log_password_filter_removal_failed"), "{REASON}", problem));
+        try {
+            unregisterEquipmentSwapProtection();
+        } finally {
+            String problem = PasswordLogFilterInstaller.uninstall();
+            if (problem != null) {
+                getLogger().warn(Placeholders.fill(i18n("log_password_filter_removal_failed"), "{REASON}", problem));
+            }
         }
+    }
+
+    /**
+     * Registers the optional hook once per enable, without exposing its event type to component
+     * scanning or IoC method reflection. No config reload repeats this startup-only work.
+     */
+    void registerEquipmentSwapProtection() {
+        if (equipmentSwapProtectionInitialized) {
+            return;
+        }
+        if (!equipmentSwapEventAvailable()) {
+            equipmentSwapProtectionInitialized = true;
+            getLogger().warn(i18n("log_equipment_swap_hook_unavailable"));
+            return;
+        }
+        Listener listener = createEquipmentSwapListener();
+        Bukkit.getPluginManager().registerEvents(listener, Bukkit.getPluginManager().getPlugin("UltiTools"));
+        equipmentSwapListener = listener;
+        equipmentSwapProtectionInitialized = true;
+    }
+
+    /** Package-private presence seam; production uses the module's defining loader. */
+    boolean equipmentSwapEventAvailable() {
+        return equipmentSwapEventAvailable(UltiLogin.class.getClassLoader());
+    }
+
+    static boolean equipmentSwapEventAvailable(ClassLoader loader) {
+        try {
+            Class.forName("io.papermc.paper.event.player.PlayerSwapWithEquipmentSlotEvent", false, loader);
+            return true;
+        } catch (ClassNotFoundException | LinkageError absent) {
+            return false;
+        }
+    }
+
+    /**
+     * The optional class appears only in this guarded method body, never a scanned signature.
+     * Returning Listener keeps method reflection safe before the event-presence probe.
+     */
+    Listener createEquipmentSwapListener() {
+        return new EquipmentSwapProtectionListener(getContext().getBean(LoginService.class));
+    }
+
+    /** Direct Bukkit registration is not tracked by the framework's ListenerManager. */
+    void unregisterEquipmentSwapProtection() {
+        if (equipmentSwapListener != null) {
+            HandlerList.unregisterAll(equipmentSwapListener);
+            equipmentSwapListener = null;
+        }
+        equipmentSwapProtectionInitialized = false;
     }
 
     /**

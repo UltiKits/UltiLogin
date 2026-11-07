@@ -13,6 +13,8 @@ import org.bukkit.Bukkit;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.PluginDescriptionFile;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedStatic;
 
 import java.lang.reflect.Method;
@@ -57,6 +59,7 @@ class RuntimeCompatibilityEnableTest {
             verify(module.getLogger(), never()).info(anyString());
             verify(module, never()).sensitiveCommandRegistry();
             verify(module, never()).activatePlayerLinks();
+            verify(module, never()).registerEquipmentSwapProtection();
             verify(module, never()).getConfig(any(Class.class));
             filters.verifyNoInteractions();
         }
@@ -98,6 +101,23 @@ class RuntimeCompatibilityEnableTest {
             verify(module.getLogger(), never()).warn(anyString());
         } finally {
             PasswordLogFilterInstaller.uninstall();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"6.4.0", "6.4.0-SNAPSHOT"})
+    void oldServerWithCompatibleFrameworkActivatesBothHooks(String framework) {
+        UltiLogin module = module("en");
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class);
+             MockedStatic<PasswordLogFilterInstaller> filters = mockStatic(PasswordLogFilterInstaller.class)) {
+            runtime(bukkit, "1.19.2-R0.1-SNAPSHOT", framework);
+            assertThat(module.registerSelf()).isTrue();
+            org.mockito.InOrder hooks = inOrder(module);
+            hooks.verify(module).refusesUnsupportedRuntime();
+            hooks.verify(module).activatePlayerLinks();
+            hooks.verify(module).registerEquipmentSwapProtection();
+            verify(module.getLogger(), never()).error(anyString());
+            verify(module.getLogger(), never()).warn(anyString());
         }
     }
 

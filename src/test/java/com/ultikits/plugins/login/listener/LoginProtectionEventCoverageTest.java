@@ -4,6 +4,7 @@ import com.ultikits.plugins.login.i18n.LoginSeams;
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.service.LoginService;
+import com.ultikits.plugins.compat.login.EquipmentSwapProtectionListener;
 
 import org.bukkit.Server;
 import org.bukkit.entity.HumanEntity;
@@ -141,7 +142,8 @@ class LoginProtectionEventCoverageTest {
      */
     private static final List<Class<?>> PROTECTION_LISTENERS =
             Collections.unmodifiableList(Arrays.<Class<?>>asList(
-                    LoginProtectionListener.class, LoginProtectionPaperListener.class));
+                    LoginProtectionListener.class, LoginProtectionPaperListener.class,
+                    EquipmentSwapProtectionListener.class));
 
     /**
      * Events through which an unauthenticated player would otherwise mutate world, entity or
@@ -166,8 +168,8 @@ class LoginProtectionEventCoverageTest {
                     "org.bukkit.event.block.SignChangeEvent",
                     "org.bukkit.event.entity.EntityDamageByEntityEvent",
                     // Paper's own namespaces, added after a review measured them as uncovered
-                    // client-intent entry points. They live in LoginProtectionPaperListener, for the
-                    // reason that class's javadoc records.
+                    // client-intent entry points. The dedicated equipment-swap handler lives in
+                    // the manually registered optional listener outside the component scan (#83).
                     "io.papermc.paper.event.player.PlayerPickItemEvent",
                     "io.papermc.paper.event.player.PlayerSwapWithEquipmentSlotEvent",
                     "com.destroystokyo.paper.event.player.PlayerRecipeBookClickEvent",
@@ -559,10 +561,13 @@ class LoginProtectionEventCoverageTest {
     class ProtectionListenersAreRegistered {
 
         @Test
-        @DisplayName("Should carry @EventListener with manualRegister = false on every protection "
-                + "listener, resolved exactly the way the framework resolves it")
-        void everyProtectionListenerIsAutoRegistered() {
-            for (Class<?> listener : PROTECTION_LISTENERS) {
+        @DisplayName("Should carry @EventListener with manualRegister = false on both stable protection "
+                + "listeners, resolved exactly the way the framework resolves it")
+        void stableProtectionListenersAreAutoRegistered() {
+            // Optional manual registration and lifecycle are exercised by
+            // PaperProtectionCompatibilityTest, including the missing-event branch.
+            for (Class<?> listener : Arrays.<Class<?>>asList(
+                    LoginProtectionListener.class, LoginProtectionPaperListener.class)) {
                 com.ultikits.ultitools.annotations.EventListener annotation =
                         MergedAnnotationResolver.find(
                                 listener, com.ultikits.ultitools.annotations.EventListener.class);
@@ -570,15 +575,15 @@ class LoginProtectionEventCoverageTest {
                 assertThat(annotation)
                         .as("%s carries no @EventListener, so ListenerManager#registerAll skips it "
                                 + "(`if (annotation == null || annotation.manualRegister()) continue;`) "
-                                + "and every @EventHandler in it is dead code. This module registers "
-                                + "no listener by hand, so nothing else would pick it up. Deleting "
+                                + "and every @EventHandler in it is dead code. These stable listeners "
+                                + "are not registered by hand, so nothing else would pick them up. Deleting "
                                 + "that one annotation is the largest bypass reachable while the rest "
                                 + "of this class is green -- a review measured all 544 tests "
                                 + "passing with it removed.", listener.getName())
                         .isNotNull();
                 assertThat(annotation.manualRegister())
-                        .as("%s asks for manual registration, but this module registers no listener "
-                                + "by hand, so its handlers would never be wired up",
+                        .as("%s asks for manual registration, but only the optional equipment listener "
+                                + "is registered by hand, so these handlers would never be wired up",
                                 listener.getName())
                         .isFalse();
             }
@@ -671,6 +676,7 @@ class LoginProtectionEventCoverageTest {
 
         private LoginProtectionListener listener;
         private LoginProtectionPaperListener paperListener;
+        private EquipmentSwapProtectionListener equipmentListener;
         private LoginService loginService;
         private Player player;
         private UUID playerUuid;
@@ -696,6 +702,7 @@ class LoginProtectionEventCoverageTest {
 
             listener = new LoginProtectionListener(UltiLoginTestHelper.getMockPlugin(), loginService);
             paperListener = new LoginProtectionPaperListener(loginService);
+            equipmentListener = new EquipmentSwapProtectionListener(loginService);
             playerUuid = UUID.randomUUID();
             player = UltiLoginTestHelper.createMockPlayer("TestPlayer", playerUuid);
         }
@@ -999,6 +1006,9 @@ class LoginProtectionEventCoverageTest {
             }
             if (declaringClass == LoginProtectionPaperListener.class) {
                 return paperListener;
+            }
+            if (declaringClass == EquipmentSwapProtectionListener.class) {
+                return equipmentListener;
             }
             throw new IllegalStateException("PROTECTION_LISTENERS gained " + declaringClass.getName()
                     + " but this test has no instance of it -- construct one in setUp()");
