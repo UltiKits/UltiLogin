@@ -365,7 +365,10 @@ IP-mode counts expire `lockout-duration` seconds after the address's latest fail
 membership in an address's collection expires that many seconds after **that account's** latest failure at that
 address. Unlocked UUID and pair counts do not time-expire: their own success or their corresponding lock's expiry
 resets them. Each lock keeps its recorded unlock time; a success never removes or shortens it. These counts and
-locks are in memory and do not survive a server restart.
+locks are in memory and do not survive a server restart. Expired pair locks and their associated counts are
+reclaimed on the next failure-protection check or update, even for a different pair; the expired pair does not
+need to return. This is activity-driven housekeeping, not a periodic timer: with no further protection activity,
+the expired records can remain until shutdown without extending a lock.
 
 **Upgrading:** an existing `login.yml` keeps its `security.lockout-type` value byte for byte, including `IP` or
 lowercase `uuid`. Only a missing key gets `BOTH`. To opt in, explicitly set `security.lockout-type: BOTH` and run
@@ -387,7 +390,8 @@ an attacker from distributing guesses over many addresses.
 
 IP 计数在该地址最近一次失败的 `lockout-duration` 秒后过期；BOTH 地址集合中的每个账号在该账号于该地址最近一次失败的相同时长后过期。
 未封禁的 UUID 和组合计数不随时间过期，只在自身成功或对应封禁到期时重置。每项封禁保留自己的解锁时间，成功不会解除或缩短封禁；
-这些计数和封禁只在内存中保存，重启后不保留。
+这些计数和封禁只在内存中保存，重启后不保留。过期的组合封禁及其计数会在下一次失败防护检查或更新时回收，即使访问的是另一个组合，
+也不需要原组合再次出现。这是随访问执行的清理，不是定时器；若之后完全没有防护活动，过期记录仍可保留至关闭，但不会延长封禁。
 
 **升级：** 现有 `login.yml` 的 `security.lockout-type` 值逐字节保留，包括 `IP`、小写 `uuid`；只有缺少该键时才写入 `BOTH`。
 如需采用新默认，请主动设置 `security.lockout-type: BOTH` 并执行 `/ul reload UltiLogin`。值忽略大小写和两端空格；
