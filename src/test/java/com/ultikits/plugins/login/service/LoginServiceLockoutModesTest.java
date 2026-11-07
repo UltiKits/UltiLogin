@@ -10,6 +10,7 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -81,6 +82,14 @@ class LoginServiceLockoutModesTest {
         for (int i = 0; i < count; i++) {
             assertThat(service.login(player, "wrong").isSuccess()).isFalse();
         }
+    }
+
+    // Retention is not observable through login replies: revisiting a pair already expires it.
+    // Inspect the real maps without adding a production accessor or modifying their state.
+    private Map<?, ?> protectionState(String fieldName) throws ReflectiveOperationException {
+        Field field = LoginService.class.getDeclaredField(fieldName);
+        field.setAccessible(true);
+        return (Map<?, ?>) field.get(service);
     }
 
     @Test
@@ -243,6 +252,76 @@ class LoginServiceLockoutModesTest {
             assertThat(service.isLocked(first)).isFalse();
             fail(first, 1);
             assertThat(service.getRemainingAttempts(first)).isEqualTo(2);
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"BOTH", "IP", "UUID"})
+        @DisplayName("An unrelated check reclaims a dormant pair at its recorded expiry, even after a mode change")
+        void unrelatedCheckReclaimsExpiredDormantPair(String mode) throws Exception {
+            Player dormant = player("10.0.0.1");
+            fail(dormant, 3);
+            Map<?, ?> locks = protectionState("lockedPairs");
+            Map<?, ?> counts = protectionState("failedAttemptsByPair");
+            assertThat(locks).hasSize(1);
+            assertThat(counts).hasSize(1);
+
+            when(config.getLockoutType()).thenReturn(mode);
+            Player unrelated = player("10.0.0.2");
+            now.addAndGet(9_999);
+            assertThat(service.isLocked(unrelated)).isFalse();
+            assertThat(locks).hasSize(1);
+            assertThat(counts).hasSize(1);
+
+            now.incrementAndGet();
+            assertThat(service.isLocked(unrelated)).isFalse();
+            // Do not revisit dormant before these assertions: that would mask the retention bug.
+            assertThat(locks).isEmpty();
+            assertThat(counts).isEmpty();
+
+            when(config.getLockoutType()).thenReturn("BOTH");
+            assertThat(service.getRemainingAttempts(dormant)).isEqualTo(3);
+            fail(dormant, 1);
+            assertThat(service.getRemainingAttempts(dormant)).isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("Global pair expiry preserves younger locks and unlocked pair/UUID counts")
+        void pairSweepPreservesActiveLocksAndUnlockedCounters() throws Exception {
+            Player expired = player("10.0.0.1");
+            Player unlockedPair = player("10.0.0.2");
+            Player unlockedUuid = player("10.0.0.3");
+            fail(expired, 3);
+            fail(unlockedPair, 2);
+            when(config.getLockoutType()).thenReturn("UUID");
+            fail(unlockedUuid, 2);
+            when(config.getLockoutType()).thenReturn("BOTH");
+            now.addAndGet(5_000);
+            Player younger = player("10.0.0.4");
+            fail(younger, 3);
+            assertThat(protectionState("lockedPairs")).hasSize(2);
+            assertThat(protectionState("failedAttemptsByPair")).hasSize(3);
+
+            // A reload must not replace either lock's recorded deadline with the new duration.
+            when(config.getLockoutDuration()).thenReturn(1);
+            now.addAndGet(5_000);
+            Player unrelated = player("10.0.0.5");
+            assertThat(service.isLocked(unrelated)).isFalse();
+            assertThat(protectionState("lockedPairs")).hasSize(1);
+            assertThat(protectionState("failedAttemptsByPair")).hasSize(2);
+            assertThat(service.getRemainingLockoutTime(younger)).isEqualTo(5);
+            assertThat(service.getRemainingAttempts(unlockedPair)).isEqualTo(1);
+            when(config.getLockoutType()).thenReturn("UUID");
+            assertThat(service.getRemainingAttempts(unlockedUuid)).isEqualTo(1);
+
+            now.addAndGet(5_000);
+            assertThat(service.isLocked(unrelated)).isFalse();
+            assertThat(protectionState("lockedPairs")).isEmpty();
+            assertThat(protectionState("failedAttemptsByPair")).hasSize(1);
+            assertThat(service.getRemainingAttempts(unlockedUuid)).isEqualTo(1);
+            when(config.getLockoutType()).thenReturn("BOTH");
+            assertThat(service.getRemainingAttempts(unlockedPair)).isEqualTo(1);
+            assertThat(service.getRemainingAttempts(expired)).isEqualTo(3);
+            assertThat(service.getRemainingAttempts(younger)).isEqualTo(3);
         }
 
         @Test

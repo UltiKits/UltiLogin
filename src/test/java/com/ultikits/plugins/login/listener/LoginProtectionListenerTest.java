@@ -18,6 +18,8 @@ import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.player.*;
 import org.bukkit.scheduler.BukkitScheduler;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 
@@ -317,10 +319,202 @@ class LoginProtectionListenerTest {
     class OnPlayerMove {
 
         private org.bukkit.World mockWorld;
+        private final java.util.Map<String, java.util.List<org.bukkit.util.BoundingBox>> shapes =
+                new java.util.HashMap<>();
 
         @BeforeEach
         void setUpWorld() {
             mockWorld = mock(org.bukkit.World.class);
+            lenient().when(mockWorld.getMinHeight()).thenReturn(-64);
+            lenient().when(mockWorld.getMaxHeight()).thenReturn(320);
+            geometry(new org.bukkit.Location(mockWorld, 0.2, 64.2, -0.2),
+                    -0.3, 0, -0.3, 0.3, 1.8, 0.3);
+            lenient().when(mockWorld.getBlockAt(anyInt(), anyInt(), anyInt())).thenAnswer(call -> {
+                int x = call.getArgument(0);
+                int y = call.getArgument(1);
+                int z = call.getArgument(2);
+                assertThat(y).isGreaterThanOrEqualTo(mockWorld.getMinHeight())
+                        .isLessThan(mockWorld.getMaxHeight());
+                org.bukkit.block.Block block = mock(org.bukkit.block.Block.class);
+                lenient().when(block.getX()).thenReturn(x);
+                lenient().when(block.getY()).thenReturn(y);
+                lenient().when(block.getZ()).thenReturn(z);
+                org.bukkit.util.VoxelShape shape = mock(org.bukkit.util.VoxelShape.class);
+                when(shape.getBoundingBoxes()).thenAnswer(ignored -> shapes.getOrDefault(
+                        x + ":" + y + ":" + z, java.util.Collections.emptyList()));
+                when(block.getCollisionShape()).thenReturn(shape);
+                return block;
+            });
+        }
+
+        private void geometry(org.bukkit.Location current, double minX, double minY, double minZ,
+                double maxX, double maxY, double maxZ) {
+            lenient().when(player.getLocation()).thenAnswer(call -> current.clone());
+            org.bukkit.util.BoundingBox box = new org.bukkit.util.BoundingBox(
+                    current.getX() + minX, current.getY() + minY, current.getZ() + minZ,
+                    current.getX() + maxX, current.getY() + maxY, current.getZ() + maxZ);
+            lenient().when(player.getBoundingBox()).thenReturn(box);
+        }
+
+        private void shapeAt(int x, int y, int z, org.bukkit.util.BoundingBox... components) {
+            shapes.put(x + ":" + y + ":" + z, java.util.Arrays.asList(components));
+        }
+
+        private PlayerMoveEvent sidewaysDescent(double fromY, double toY) {
+            return new PlayerMoveEvent(player,
+                    new org.bukkit.Location(mockWorld, 0.2, fromY, -0.2, 15, 25),
+                    new org.bukkit.Location(mockWorld, 1.2, toY, -1.2, 45, 55));
+        }
+
+        private void assertSafeDestination(PlayerMoveEvent event, double expectedY) {
+            org.bukkit.Location expectedFrom = event.getFrom().clone();
+            org.bukkit.Location originalTo = event.getTo();
+            org.bukkit.Location expectedTo = originalTo.clone();
+            org.bukkit.util.BoundingBox originalBox = player.getBoundingBox();
+            org.bukkit.util.BoundingBox expectedBox = originalBox.clone();
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.isCancelled()).isFalse();
+            org.bukkit.Location target = expectedFrom.clone();
+            target.setX(expectedFrom.getBlockX() + 0.5);
+            target.setY(expectedY);
+            target.setZ(expectedFrom.getBlockZ() + 0.5);
+            assertThat(event.getTo()).isEqualTo(target);
+            assertThat(event.getFrom()).isEqualTo(expectedFrom);
+            assertThat(originalTo).isEqualTo(expectedTo);
+            assertThat(originalBox).isEqualTo(expectedBox);
+            org.bukkit.Location current = player.getLocation();
+            org.bukkit.util.BoundingBox moved = originalBox.clone().shift(
+                    target.getX() - current.getX(), target.getY() - current.getY(),
+                    target.getZ() - current.getZ());
+            for (java.util.Map.Entry<String, java.util.List<org.bukkit.util.BoundingBox>> entry : shapes.entrySet()) {
+                String[] coordinates = entry.getKey().split(":");
+                for (org.bukkit.util.BoundingBox local : entry.getValue()) {
+                    org.bukkit.util.BoundingBox worldShape = local.clone().shift(
+                            Integer.parseInt(coordinates[0]), Integer.parseInt(coordinates[1]),
+                            Integer.parseInt(coordinates[2]));
+                    assertThat(moved.overlaps(worldShape)).as("destination does not overlap %s", worldShape).isFalse();
+                }
+            }
+        }
+
+        @Test
+        void sidewaysDescentOntoFullBlockUsesLowestSafeY() {
+            shapeAt(0, 64, -1, new org.bukkit.util.BoundingBox(0, 0, 0, 1, 1, 1));
+            assertSafeDestination(sidewaysDescent(65.2, 64.7), 65.0);
+        }
+
+        @Test
+        void sidewaysDescentOntoBottomSlabUsesFractionalSurfaceY() {
+            shapeAt(0, 64, -1, new org.bukkit.util.BoundingBox(0, 0, 0, 1, 0.5, 1));
+            assertSafeDestination(sidewaysDescent(65.2, 64.1), 64.5);
+        }
+
+        @Test
+        void sidewaysDescentWithoutSafeYIsCancelled() {
+            shapeAt(0, 65, -1, new org.bukkit.util.BoundingBox(0, 0, 0, 1, 1, 1));
+            PlayerMoveEvent event = sidewaysDescent(65.2, 64.7);
+            org.bukkit.Location originalFrom = event.getFrom().clone();
+            org.bukkit.Location originalTo = event.getTo().clone();
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.isCancelled()).isTrue();
+            assertThat(event.getFrom()).isEqualTo(originalFrom);
+            assertThat(event.getTo()).isEqualTo(originalTo);
+        }
+
+        @Test
+        void sidewaysDescentChecksNeighbouringColumnsAcrossWholeBoundingBox() {
+            // A wide actual box still extends into X=-1 after recentering in X=0.
+            geometry(new org.bukkit.Location(mockWorld, 0.2, 64.2, -0.2),
+                    -0.6, 0, -0.3, 0.6, 1.8, 0.3);
+            shapeAt(-1, 64, -1, new org.bukkit.util.BoundingBox(0, 0, 0, 1, 1, 1));
+            assertSafeDestination(sidewaysDescent(65.2, 64.7), 65.0);
+        }
+
+        @Test
+        void sidewaysDescentChecksCollisionAtColumnCentreRatherThanOriginalFraction() {
+            // This upper component misses the old footprint but intersects the centred box.
+            shapeAt(0, 64, -1, new org.bukkit.util.BoundingBox(0.5, 0, 0, 1, 1, 1));
+            assertSafeDestination(sidewaysDescent(65.2, 64.7), 65.0);
+        }
+
+        @Test
+        void sidewaysDescentIgnoresObstacleOutsideCentredBoundingBox() {
+            // The normal-width box no longer overlaps X=-1 after recentering.
+            shapeAt(-1, 64, -1, new org.bukkit.util.BoundingBox(0, 0, 0, 1, 1, 1));
+            assertSafeDestination(sidewaysDescent(65.2, 64.7), 64.7);
+        }
+
+        @Test
+        void sidewaysDescentUsesActualBoundingBoxOffsets() {
+            // The live entity is not at event.from; its feet offset and size must be translated.
+            geometry(new org.bukkit.Location(mockWorld, 42, 80, 42),
+                    -0.125, 0.25, -0.125, 0.125, 1.25, 0.125);
+            shapeAt(0, 64, -1, new org.bukkit.util.BoundingBox(0, 0, 0, 1, 0.5, 1));
+            assertSafeDestination(sidewaysDescent(65.2, 64.1), 64.25);
+        }
+
+        @Test
+        void sidewaysDescentConsidersEveryStairShapeComponent() {
+            shapeAt(0, 64, -1,
+                    new org.bukkit.util.BoundingBox(0, 0, 0, 1, 0.5, 1),
+                    new org.bukkit.util.BoundingBox(0.8, 0.5, 0, 1, 1, 1));
+            // The upper component only touches the body's X face; its lower tread is safe.
+            assertSafeDestination(sidewaysDescent(65.2, 64.1), 64.5);
+        }
+
+        @Test
+        void sidewaysDescentAllowsExactFloorAndCeilingContactInLowerGap() {
+            geometry(new org.bukkit.Location(mockWorld, 0, 64, 0),
+                    -0.3, 0, -0.3, 0.3, 1.5, 0.3);
+            shapeAt(0, 64, -1, new org.bukkit.util.BoundingBox(0, 0, 0, 1, 0.5, 1));
+            shapeAt(0, 66, -1, new org.bukkit.util.BoundingBox(0, 0, 0, 1, 1, 1));
+            assertSafeDestination(sidewaysDescent(65.2, 64.1), 64.5);
+        }
+
+        @Test
+        void sidewaysDescentIncludesSafeOriginalYEndpoint() {
+            shapeAt(0, 64, -1, new org.bukkit.util.BoundingBox(0, 0, 0, 1, 1, 1));
+            assertSafeDestination(sidewaysDescent(65.0, 64.7), 65.0);
+        }
+
+        @Test
+        void sidewaysDescentChecksProtrudingShapeFromLowerBlock() {
+            shapeAt(0, 63, -1, new org.bukkit.util.BoundingBox(0.25, 0, 0.25, 0.75, 1.5, 0.75));
+            assertSafeDestination(sidewaysDescent(65.2, 64.1), 64.5);
+        }
+
+        @Test
+        void sidewaysDescentRespectsWorldMinimum() {
+            when(mockWorld.getMinHeight()).thenReturn(63);
+            assertSafeDestination(sidewaysDescent(65.2, 62.7), 63.0);
+        }
+
+        @Test
+        void sidewaysDescentAllowsBodyTopExactlyAtWorldMaximum() {
+            geometry(new org.bukkit.Location(mockWorld, 0, 64, 0),
+                    -0.3, 0, -0.3, 0.3, 1.5, 0.3);
+            when(mockWorld.getMaxHeight()).thenReturn(66);
+            assertSafeDestination(sidewaysDescent(65.2, 64.5), 64.5);
+        }
+
+        @Test
+        void sidewaysDescentCancelsWhenWholeBodyCannotFitWithinWorldBounds() {
+            when(mockWorld.getMinHeight()).thenReturn(64);
+            when(mockWorld.getMaxHeight()).thenReturn(65);
+            PlayerMoveEvent event = sidewaysDescent(64.8, 64.1);
+            org.bukkit.Location expectedFrom = event.getFrom().clone();
+            org.bukkit.Location expectedTo = event.getTo().clone();
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.isCancelled()).isTrue();
+            assertThat(event.getFrom()).isEqualTo(expectedFrom);
+            assertThat(event.getTo()).isEqualTo(expectedTo);
+            verify(mockWorld, never()).getBlockAt(anyInt(), anyInt(), anyInt());
         }
 
         private org.bukkit.Location createMockLocation(int x, int y, int z) {
@@ -337,13 +531,106 @@ class LoginProtectionListenerTest {
             return loc;
         }
 
-        @org.junit.jupiter.params.ParameterizedTest
-        @org.junit.jupiter.params.provider.CsvSource({"64.2, 62.8", "64.8, 64.2", "0.2, -1.2"})
-        @DisplayName("An unauthenticated straight fall keeps the original destination (UltiLogin#73)")
-        void straightFallKeepsDestination(double fromY, double toY) {
-            org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.2, fromY, -0.2, 15, 25);
-            org.bukkit.Location to = new org.bukkit.Location(mockWorld, 0.8, toY, -0.8, 45, 55);
-            PlayerMoveEvent event = new PlayerMoveEvent(player, from, to);
+        /**
+         * Paper 1.21.11 {@code ServerGamePacketListenerImpl#handleMovePlayer} (read with
+         * {@code javap -c}): the event fires only when the squared distance from the last evented
+         * position exceeds {@code 1/256} (facing is constant here); its {@code from} is that last
+         * position; a changed {@code to} or a cancellation becomes a teleport that resets it. A
+         * smaller step is accepted without any event (UltiKits/UltiLogin#74).
+         */
+        private final class PaperMoves {
+            private org.bukkit.Location lastEvented;
+            private org.bukkit.Location server;
+
+            PaperMoves(org.bukkit.Location start) {
+                lastEvented = start.clone();
+                server = start.clone();
+            }
+
+            org.bukkit.Location step(double x, double y, double z) {
+                org.bukkit.Location client = server.clone();
+                client.setX(x);
+                client.setY(y);
+                client.setZ(z);
+                if (client.distanceSquared(lastEvented) <= 1.0 / 256) {
+                    server = client;
+                    return server.clone();
+                }
+                PlayerMoveEvent event = new PlayerMoveEvent(player, lastEvented.clone(), client.clone());
+                listener.onPlayerMove(event);
+                org.bukkit.Location result = event.isCancelled() ? event.getFrom() : event.getTo();
+                lastEvented = result.clone();
+                server = result.clone();
+                return server.clone();
+            }
+        }
+
+        @Test
+        @DisplayName("The measured landing and sub-threshold creep stay in block column 100 (UltiLogin#74)")
+        void observedLandingCreepStaysInColumn() {
+            shapeAt(100, 63, 100, new org.bukkit.util.BoundingBox(0, 0, 0, 1, 1, 1));
+            PaperMoves paper = new PaperMoves(new org.bukkit.Location(
+                    mockWorld, 100.61070276164378, 65.19265607226204, 100.5, -90, 0));
+
+            org.bukkit.Location landed = paper.step(100.96036416253371, 64.0, 100.5);
+            org.bukkit.Location crept = paper.step(101.01740016288296, 64.0, 100.5);
+
+            assertThat(landed.getBlockX()).isEqualTo(100);
+            assertThat(landed.getY()).isEqualTo(64.0);
+            assertThat(crept.getBlockX()).as("server X after the event-free step").isEqualTo(100);
+            assertThat(crept.getBlockZ()).isEqualTo(100);
+        }
+
+        @ParameterizedTest
+        @CsvSource({"1, 0.25", "2, 0.12", "3, 0.06", "4, 0.3"})
+        @DisplayName("Event-free steps below Paper's threshold never leave the origin column (UltiLogin#74)")
+        void subThresholdStepsNeverLeaveTheColumn(long seed, double maxStep) {
+            java.util.Random random = new java.util.Random(seed);
+            PaperMoves paper = new PaperMoves(new org.bukkit.Location(mockWorld, 100.5, 200, 100.5, -90, 0));
+            org.bukkit.Location position = paper.server.clone();
+            for (int i = 0; i < 5000; i++) {
+                double dx = (random.nextDouble() * 2 - 1) * maxStep;
+                double dz = (random.nextDouble() * 2 - 1) * maxStep;
+                double dy = random.nextInt(3) == 0 ? 0 : -random.nextDouble() * 0.4;
+                position = paper.step(position.getX() + dx,
+                        Math.max(0, position.getY() + dy), position.getZ() + dz);
+                assertThat(position.getBlockX()).as("step %d X=%s", i, position.getX()).isEqualTo(100);
+                assertThat(position.getBlockZ()).as("step %d Z=%s", i, position.getZ()).isEqualTo(100);
+            }
+        }
+
+        @ParameterizedTest
+        @CsvSource({"0.96, 0.5", "0.04, 0.5", "0.5, 0.95", "0.5, 0.05"})
+        @DisplayName("A same-column fall ending at the column edge goes to the column centre (UltiLogin#74)")
+        void sameColumnFallIntoEdgeMarginGoesToCentre(double toX, double toZ) {
+            org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.5, 65.2, 0.5, 15, 25);
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from,
+                    new org.bukkit.Location(mockWorld, toX, 64.7, toZ, 45, 55));
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.isCancelled()).isFalse();
+            assertThat(event.getTo()).isEqualTo(new org.bukkit.Location(mockWorld, 0.5, 64.7, 0.5, 15, 25));
+        }
+
+        @Test
+        @DisplayName("An equal-height step ending at the column edge is reverted (UltiLogin#74)")
+        void equalHeightStepIntoEdgeMarginIsReverted() {
+            org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.9, 64.0, 0.5, 15, 25);
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from,
+                    new org.bukkit.Location(mockWorld, 0.97, 64.0, 0.5, 45, 55));
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.getTo()).isEqualTo(from);
+        }
+
+        @Test
+        @DisplayName("Looking around at a column edge keeps the destination (UltiLogin#74)")
+        void lookOnlyAtColumnEdgeKeepsDestination() {
+            org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.98, 64.0, 0.01, 15, 25);
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from,
+                    new org.bukkit.Location(mockWorld, 0.98, 64.0, 0.01, 45, 55));
             org.bukkit.Location originalTo = event.getTo();
 
             listener.onPlayerMove(event);
@@ -351,21 +638,45 @@ class LoginProtectionListenerTest {
             assertThat(event.getTo()).isSameAs(originalTo);
         }
 
-        @org.junit.jupiter.params.ParameterizedTest
-        @org.junit.jupiter.params.provider.CsvSource({"1.2, 62.8, -0.2", "0.2, 62.8, -1.2", "1.2, 62.8, -1.2",
+        @ParameterizedTest
+        @CsvSource({"64.2, 62.8", "64.8, 64.2", "0.2, -1.2"})
+        @DisplayName("An unauthenticated straight fall keeps the original destination (UltiLogin#73)")
+        void straightFallKeepsDestination(double fromY, double toY) {
+            org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.2, fromY, -0.2, 15, 25);
+            org.bukkit.Location to = new org.bukkit.Location(mockWorld, 0.8, toY, -0.8, 45, 55);
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from, to);
+            org.bukkit.Location originalTo = event.getTo();
+            org.bukkit.Location expectedFrom = from.clone();
+            org.bukkit.Location expectedTo = originalTo.clone();
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.getTo()).isSameAs(originalTo).isEqualTo(expectedTo);
+            assertThat(from).isEqualTo(expectedFrom);
+            assertThat(to).isEqualTo(expectedTo);
+            verify(player, never()).getBoundingBox();
+            verify(mockWorld, never()).getBlockAt(anyInt(), anyInt(), anyInt());
+        }
+
+        @ParameterizedTest
+        @CsvSource({"1.2, 62.8, -0.2", "0.2, 62.8, -1.2", "1.2, 62.8, -1.2",
                 "1.2, 64.1, -1.2"})
-        @DisplayName("A sideways fall keeps the lower Y at the column centre with the previous facing (UltiLogin#73)")
+        @DisplayName("A sideways fall keeps the lower Y at the column centre with the previous facing (UltiLogin#73, #74)")
         void sidewaysFallKeepsLowerY(double toX, double toY, double toZ) {
             org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.2, 64.2, -0.2, 15, 25);
             org.bukkit.Location to = new org.bukkit.Location(mockWorld, toX, toY, toZ, 45, 55);
             PlayerMoveEvent event = new PlayerMoveEvent(player, from, to);
+            org.bukkit.Location expectedFrom = from.clone();
+            org.bukkit.Location expectedTo = to.clone();
 
             listener.onPlayerMove(event);
 
             assertThat(event.getTo()).isEqualTo(new org.bukkit.Location(mockWorld,
-                    from.getBlockX() + 0.5, toY, from.getBlockZ() + 0.5, 15, 25));
+                    expectedFrom.getBlockX() + 0.5, toY, expectedFrom.getBlockZ() + 0.5, 15, 25));
             assertThat(event.getTo().getX()).isNotEqualTo(from.getX());
             assertThat(event.getTo().getZ()).isNotEqualTo(from.getZ());
+            assertThat(from).isEqualTo(expectedFrom);
+            assertThat(to).isEqualTo(expectedTo);
             assertThat(from.getY()).isEqualTo(64.2);
             assertThat(to.getX()).isEqualTo(toX);
             assertThat(to.getZ()).isEqualTo(toZ);
@@ -396,17 +707,40 @@ class LoginProtectionListenerTest {
             assertThat(event.getTo()).isEqualTo(from);
         }
 
+        @ParameterizedTest
+        @CsvSource({"1.2, -0.2", "0.2, -1.2", "1.2, -1.2"})
+        @DisplayName("An unauthenticated equal-height column change is reverted on real locations")
+        void equalHeightColumnChangeIsReverted(double toX, double toZ) {
+            org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.2, 64.8, -0.2, 15, 25);
+            org.bukkit.Location to = new org.bukkit.Location(mockWorld, toX, 64.8, toZ, 45, 55);
+            org.bukkit.Location expectedFrom = from.clone();
+            org.bukkit.Location expectedTo = to.clone();
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from, to);
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.getTo()).isEqualTo(expectedFrom);
+            assertThat(from).isEqualTo(expectedFrom);
+            assertThat(to).isEqualTo(expectedTo);
+        }
+
         @Test
         @DisplayName("A look-only move keeps its destination and new facing (UltiLogin#73)")
         void lookOnlyKeepsDestination() {
             org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.2, 64.8, -0.2, 15, 25);
-            PlayerMoveEvent event = new PlayerMoveEvent(player, from,
-                    new org.bukkit.Location(mockWorld, 0.2, 64.8, -0.2, 45, 55));
+            org.bukkit.Location to = new org.bukkit.Location(mockWorld, 0.2, 64.8, -0.2, 45, 55);
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from, to);
             org.bukkit.Location originalTo = event.getTo();
+            org.bukkit.Location expectedFrom = from.clone();
+            org.bukkit.Location expectedTo = originalTo.clone();
 
             listener.onPlayerMove(event);
 
-            assertThat(event.getTo()).isSameAs(originalTo);
+            assertThat(event.getTo()).isSameAs(originalTo).isEqualTo(expectedTo);
+            assertThat(from).isEqualTo(expectedFrom);
+            assertThat(to).isEqualTo(expectedTo);
+            verify(player, never()).getBoundingBox();
+            verify(mockWorld, never()).getBlockAt(anyInt(), anyInt(), anyInt());
         }
 
         @Test
