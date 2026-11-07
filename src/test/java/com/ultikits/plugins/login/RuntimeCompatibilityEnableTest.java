@@ -60,6 +60,14 @@ class RuntimeCompatibilityEnableTest {
             verify(module, never()).sensitiveCommandRegistry();
             verify(module, never()).activatePlayerLinks();
             verify(module, never()).registerEquipmentSwapProtection();
+            // UltiKits/UltiLogin#85's old-event fallback hooks (mount, pick-item, open-sign) stay off too.
+            verify(module, never()).registerVersionedProtections();
+            // Order: the gate runs first and nothing hook-related follows it on refusal.
+            org.mockito.InOrder order = inOrder(module);
+            order.verify(module).refusesUnsupportedRuntime();
+            order.verify(module, never()).activatePlayerLinks();
+            order.verify(module, never()).registerVersionedProtections();
+            order.verify(module, never()).registerEquipmentSwapProtection();
             verify(module, never()).getConfig(any(Class.class));
             filters.verifyNoInteractions();
         }
@@ -73,6 +81,9 @@ class RuntimeCompatibilityEnableTest {
             assertThat(module.registerSelf()).isFalse();
             verify(module.getLogger()).error(CatalogueText.entries("zh").get("log_runtime_incompatible")
                     .replace("{SERVER}", "1.19.2").replace("{FRAMEWORK}", "6.3.0"));
+            verify(module, never()).activatePlayerLinks();
+            verify(module, never()).registerVersionedProtections();
+            verify(module, never()).registerEquipmentSwapProtection();
         }
     }
 
@@ -115,6 +126,7 @@ class RuntimeCompatibilityEnableTest {
             org.mockito.InOrder hooks = inOrder(module);
             hooks.verify(module).refusesUnsupportedRuntime();
             hooks.verify(module).activatePlayerLinks();
+            hooks.verify(module).registerVersionedProtections();
             hooks.verify(module).registerEquipmentSwapProtection();
             verify(module.getLogger(), never()).error(anyString());
             verify(module.getLogger(), never()).warn(anyString());
@@ -158,6 +170,8 @@ class RuntimeCompatibilityEnableTest {
             assertThat(manager.getPluginList()).doesNotContain(module);
             verify(context).close();
             verify(module, never()).activatePlayerLinks();
+            verify(module, never()).registerVersionedProtections();
+            verify(module, never()).registerEquipmentSwapProtection();
             // onPluginRegistered is the path which schedules tasks; registerClass calls registerBukkit
             // only when this callback returns true (also checked against the actual 6.3.x bytecode).
             assertThat(manager.getTaskManager()).isNull();

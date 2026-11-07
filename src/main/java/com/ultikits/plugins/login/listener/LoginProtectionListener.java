@@ -25,7 +25,6 @@ import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.block.SignChangeEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
-import org.bukkit.event.entity.EntityMountEvent;
 import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
@@ -36,11 +35,12 @@ import org.bukkit.entity.Entity;
 import org.bukkit.inventory.Inventory;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Listener for login protection.
@@ -70,11 +70,11 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <h2>Sibling listener</h2>
  *
- * {@link LoginProtectionPaperListener} carries the handlers for events in Paper's own namespaces, kept
- * in a separate class on purpose. That class's javadoc has the measurement: one handler whose parameter
- * type is missing at runtime empties the <em>whole</em> listener's handler map, so isolating the
- * Paper-only events bounds that failure to them. Both classes are in the coverage contract's
- * {@code PROTECTION_LISTENERS}, so it does not matter to the tests which file a handler lives in.
+ * {@link LoginProtectionPaperListener} carries the stable recipe-book hook. Mount, item-pick,
+ * sign-open and equipment-swap hooks are independently probed and manually registered by UltiLogin;
+ * their optional typed listeners live outside the component-scan root. One missing handler parameter
+ * would otherwise disable a whole listener during reflection. Modern and legacy mount hooks both
+ * delegate to {@link #protectMount} on this same bean, sharing its connection-identity state.
  *
  * <h2>One event covered defensively</h2>
  *
@@ -131,18 +131,23 @@ public class LoginProtectionListener implements Listener {
     private final Plugin bukkitPlugin;
 
     /**
-     * Players whose join has not had its first tick yet. Paper restores the vehicle of a player who
-     * quit while riding in that tick, after {@link PlayerJoinEvent}; refusing that mount makes Paper
-     * discard the vehicle and everything riding it, so {@link #onEntityMount} lets it through for
-     * these players and the one-tick task in {@link #onPlayerJoin} takes an unauthenticated player
-     * off the vehicle instead (UltiKits/UltiLogin#41).
+     * Connections past their join/vehicle-restore window. Paper 1.19.2-307 and 1.21.4-232 restore
+     * before {@link PlayerJoinEvent}, while 1.21.11-132 restores after it (measured with javap).
+     * A new connection is absent until the one-tick task, regardless of that event order. Existing
+     * online players are seeded when this listener is enabled, so they receive no new exemption.
+     * <p>
+     * Identity is deliberate: CraftPlayer.equals compares UUIDs on modern Paper, and isOnline only
+     * asks whether that UUID has any online player. Neither distinguishes reconnecting objects.
+     * This set is accessed only by synchronous join/quit/mount handlers and the main-thread task.
      */
-    private final Set<UUID> inJoinTick = ConcurrentHashMap.newKeySet();
+    private final Set<Player> mountProtectionReady =
+            Collections.newSetFromMap(new IdentityHashMap<Player, Boolean>());
 
     public LoginProtectionListener(UltiToolsPlugin plugin, LoginService loginService) {
         this.plugin = plugin;
         this.loginService = loginService;
         this.bukkitPlugin = Bukkit.getPluginManager().getPlugin("UltiTools");
+        mountProtectionReady.addAll(Bukkit.getOnlinePlayers());
     }
     
     @EventHandler(priority = EventPriority.LOWEST)
@@ -152,24 +157,26 @@ public class LoginProtectionListener implements Listener {
             // Not a person who can log in: no tracking, no prompt, no timeout (UltiKits/UltiLogin#42).
             return;
         }
-        loginService.onPlayerJoin(player);
+        mountProtectionReady.remove(player);
 
-        // A player who quit while riding is put back in the vehicle AFTER this event: Paper 1.21.11's
-        // PrepareSpawnTask$Ready calls PlayerList#placeNewPlayer (which fires this event) and only
-        // then ServerPlayer#loadAndSpawnParentVehicle (read with javap -c). That mount must not be
-        // refused -- Paper would then discard the vehicle and everything riding it (offsets 172-232)
-        // -- so it is let through during this tick, and one tick later a player who is still riding
-        // and not logged in is taken off the vehicle, which stays where it is (UltiKits/UltiLogin#41).
+        // Older Paper restores the saved vehicle before this event; 1.21.11 restores after it.
+        // Both have already inserted the player into the UUID table, so !isOnline cannot identify
+        // the restore. Leave this connection exempt until the next tick, then dismount it instead
+        // of refusing the restore (which would make Paper discard the vehicle and its riders).
         UUID joining = player.getUniqueId();
-        inJoinTick.add(joining);
         Bukkit.getScheduler().runTaskLater(bukkitPlugin, () -> {
-            inJoinTick.remove(joining);
-            if (player.isOnline() && player.isInsideVehicle()
-                    && !loginService.isLoggedIn(joining)) {
+            // A stale task must neither promote nor dismount an old connection sharing this UUID.
+            if (Bukkit.getPlayer(joining) != player) {
+                return;
+            }
+            mountProtectionReady.add(player);
+            if (player.isInsideVehicle() && shouldCancel(player)) {
                 player.leaveVehicle();
             }
         }, 1L);
-        
+        // Register the end of the window even if a join-time account/session lookup fails.
+        loginService.onPlayerJoin(player);
+
         // Open GUI if enabled (with delay for proper loading)
         if (loginService.getConfig().isGuiModeEnabled()) {
             Bukkit.getScheduler().runTaskLater(bukkitPlugin, () -> {
@@ -196,7 +203,7 @@ public class LoginProtectionListener implements Listener {
     
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
-        inJoinTick.remove(event.getPlayer().getUniqueId());
+        mountProtectionReady.remove(event.getPlayer());
         loginService.onPlayerQuit(event.getPlayer());
     }
     
@@ -350,11 +357,10 @@ public class LoginProtectionListener implements Listener {
      * discard the vehicle and its riders, so the player is taken off it one tick later instead
      * ({@link #onPlayerJoin}).
      */
-    @EventHandler(priority = EventPriority.LOWEST)
-    public void onEntityMount(EntityMountEvent event) {
-        if (event.getEntity() instanceof Player) {
-            Player player = (Player) event.getEntity();
-            if (!inJoinTick.contains(player.getUniqueId())) {
+    public void protectMount(Entity entity, Cancellable event) {
+        if (entity instanceof Player) {
+            Player player = (Player) entity;
+            if (mountProtectionReady.contains(player)) {
                 cancelIfNotLoggedIn(player, event);
             }
         }
@@ -363,7 +369,7 @@ public class LoginProtectionListener implements Listener {
     /**
      * Drop an unauthenticated passenger from a moving minecart or boat (UltiKits/UltiLogin#41).
      * <p>
-     * A backstop for {@link #onEntityMount} and the one-tick check after a join: whatever put an
+     * A backstop for {@link #protectMount} and the one-tick check after a join: whatever put an
      * unauthenticated player into a vehicle, the vehicle does not carry them. {@link VehicleMoveEvent}
      * cannot be cancelled, and holding the vehicle back would also hold back its other riders, so the
      * unauthenticated passenger is dismounted instead — what {@link #onPlayerMove} already does to an
@@ -586,7 +592,7 @@ public class LoginProtectionListener implements Listener {
      *   cancelling {@link PlayerInteractEvent} cannot suppress it. There is also no book-editor-open
      *   event to cancel: {@code paper-api} 1.21.11 carries seven book events (recipe book, lectern,
      *   and this one) and none of them is an "editor opened" — unlike signs, which have
-     *   {@code PlayerOpenSignEvent}, which is why {@link LoginProtectionPaperListener#onPlayerOpenSign}
+     *   {@code PlayerOpenSignEvent}, which is why {@link com.ultikits.plugins.compat.login.OpenSignProtectionListener#onPlayerOpenSign}
      *   can prevent that editor and nothing can prevent this one.</li>
      *   <li>{@code ServerGamePacketListenerImpl#handleEditBook} reaches
      *   {@code CraftEventFactory#handleEditBookEvent} — which fires this event unconditionally —
@@ -635,7 +641,7 @@ public class LoginProtectionListener implements Listener {
      * co-installed plugin that opens a sign editor for a joining player reaches this event, and this
      * handler is the only thing refusing the write.
      * <p>
-     * {@link LoginProtectionPaperListener#onPlayerOpenSign} refuses the editor at the point it opens;
+     * {@link com.ultikits.plugins.compat.login.OpenSignProtectionListener#onPlayerOpenSign} refuses the editor at the point it opens;
      * the two are complementary rather than redundant — that one prevents, this one is the backstop.
      * <p>
      * {@code SignChangeEvent#getPlayer()} is annotated {@code @NotNull}, so the null branch below
