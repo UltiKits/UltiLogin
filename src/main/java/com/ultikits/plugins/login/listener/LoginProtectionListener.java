@@ -12,6 +12,8 @@ import mc.obliviate.inventory.InventoryAPI;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Location;
+import org.bukkit.World;
+import org.bukkit.util.BoundingBox;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Cancellable;
 import org.bukkit.plugin.Plugin;
@@ -34,6 +36,8 @@ import org.bukkit.entity.Entity;
 import org.bukkit.inventory.Inventory;
 
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -197,15 +201,39 @@ public class LoginProtectionListener implements Listener {
     }
     
     /**
-     * Refuse block-column changes and upward block changes, but never restore the old Y on descent.
-     * Holding an airborne player at their old Y triggers Paper's floating kick before they can
-     * log in (see {@code ultilogin.protection.movement-block.airborne-rejoin} in UAT-CHECKLIST.md).
-     * Paper treats a changed move destination as a teleport and returns before updating its floating
-     * flag; that same-world teleport does not reset the floating counter. Returning a sideways fall
-     * to the previous fractional X/Z lets repeated moves converge on a column edge. Instead, keep
-     * the lower Y and previous facing at the centre of the from-block column: the distance to its
-     * edges leaves ordinary free-fall ticks between reverts to clear the floating flag. Looking
-     * around and movement within a block remain untouched.
+     * Paper fires {@link PlayerMoveEvent} only when the squared distance from the last position it
+     * fired for exceeds {@code 1/256} (or the facing turns by more than 10 degrees); a smaller step is
+     * accepted without any event ({@code ServerGamePacketListenerImpl#handleMovePlayer}, Paper
+     * 1.21.11, read with {@code javap -c}). So every position this handler lets stand must lie more
+     * than {@code 1/16} block from the edges of its column, or an unseen step crosses into the
+     * neighbouring column (measured: a landing at X=100.96 crept to X=101.0174, UltiKits/UltiLogin#74).
+     */
+    static final double EDGE_MARGIN = 0.07;
+
+    /**
+     * Keep an unauthenticated player in the block column of the move's origin, and refuse upward
+     * block changes, without holding a falling player at the old Y when a lower safe Y exists
+     * (UltiKits/UltiLogin#73, #74).
+     * <p>
+     * One rule covers every move that shifts X/Z: the destination must stay inside the from-column
+     * shrunk by {@link #EDGE_MARGIN}, so the event-free steps Paper accepts below its movement
+     * threshold cannot reach the next column. A destination outside that interior is redirected:
+     * <ul>
+     *   <li>a descending move goes to the centre of the from-column with the previous facing. Paper
+     *   treats a changed destination as a teleport and returns before updating its floating flag;
+     *   that same-world teleport does not reset the floating counter. Returning a fall to the
+     *   previous fractional X/Z lets repeated moves converge on the interior's edge (a teleport every
+     *   tick, then the flying kick). The centre leaves ordinary free-fall ticks between redirects to
+     *   clear the flag. At the centre the lowest noncolliding Y from the descended Y through the
+     *   original Y is chosen, within world height; if the whole interval is obstructed, the move is
+     *   cancelled instead of creating an unsafe destination;</li>
+     *   <li>any other move goes back to its origin.</li>
+     * </ul>
+     * Rotation-only moves and descent inside the interior remain untouched. The rule assumes the
+     * origin itself lies inside the interior, which holds for every origin this handler produced; a
+     * player who joins within {@code 1/16} block of a column edge can still drift that far into the
+     * neighbour without an event (documented in UAT-CHECKLIST.md). See
+     * {@code ultilogin.protection.movement-block.airborne-rejoin} and the collision scenarios there.
      */
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerMove(PlayerMoveEvent event) {
@@ -214,21 +242,99 @@ public class LoginProtectionListener implements Listener {
         }
         Location from = event.getFrom();
         Location to = event.getTo();
-        boolean changesColumn = from.getBlockX() != to.getBlockX()
-                || from.getBlockZ() != to.getBlockZ();
+        boolean leavesColumnInterior = from.getBlockX() != to.getBlockX()
+                || from.getBlockZ() != to.getBlockZ()
+                || leavesInterior(from.getX(), to.getX(), from.getBlockX())
+                || leavesInterior(from.getZ(), to.getZ(), from.getBlockZ());
         if (to.getY() < from.getY()) {
-            if (changesColumn) {
+            if (leavesColumnInterior) {
                 Location falling = from.clone();
                 falling.setX(from.getBlockX() + 0.5);
-                falling.setY(to.getY());
                 falling.setZ(from.getBlockZ() + 0.5);
-                event.setTo(falling);
+                double safeY = lowestSafeDescentY(event.getPlayer(), falling, to.getY());
+                if (Double.isNaN(safeY)) {
+                    event.setCancelled(true);
+                } else {
+                    falling.setY(safeY);
+                    event.setTo(falling);
+                }
             }
-        } else if (changesColumn || from.getBlockY() != to.getBlockY()) {
+        } else if (leavesColumnInterior || from.getBlockY() != to.getBlockY()) {
             event.setTo(from);
         }
     }
-    
+
+    /**
+     * Whether a move along one horizontal axis ends within {@link #EDGE_MARGIN} of the edges of
+     * block {@code block}. An axis the move does not shift never counts, so a look-only move keeps
+     * its destination wherever the player stands.
+     */
+    private static boolean leavesInterior(double from, double to, int block) {
+        return to != from && (to < block + EDGE_MARGIN || to > block + 1 - EDGE_MARGIN);
+    }
+
+    /**
+     * Sweep the open intervals of feet Y blocked by actual block-shape components. Their endpoints
+     * are safe face contact, so fractional surfaces and exact-fit gaps must not be rounded to blocks.
+     * The entity box is world-space; block collision-shape boxes are block-local in CraftBukkit.
+     */
+    private static double lowestSafeDescentY(Player player, Location from, double descendedY) {
+        World world = from.getWorld();
+        Location current = player.getLocation();
+        BoundingBox relative = player.getBoundingBox().clone().shift(
+                -current.getX(), -current.getY(), -current.getZ());
+        double lower = Math.max(descendedY, world.getMinHeight() - relative.getMinY());
+        double upper = Math.min(from.getY(), world.getMaxHeight() - relative.getMaxY());
+        if (lower > upper) {
+            return Double.NaN;
+        }
+
+        BoundingBox footprint = relative.clone().shift(from.getX(), 0, from.getZ());
+        List<BoundingBox> obstacles = new ArrayList<>();
+        // Neighbouring owning blocks can protrude into the swept box (e.g. a 1.5-high fence).
+        int minX = (int) Math.floor(footprint.getMinX()) - 1;
+        int maxX = (int) Math.floor(footprint.getMaxX()) + 1;
+        int minZ = (int) Math.floor(footprint.getMinZ()) - 1;
+        int maxZ = (int) Math.floor(footprint.getMaxZ()) + 1;
+        int minY = Math.max(world.getMinHeight(),
+                (int) Math.floor(lower + relative.getMinY()) - 1);
+        int maxY = Math.min(world.getMaxHeight() - 1,
+                (int) Math.floor(upper + relative.getMaxY()) + 1);
+        for (int x = minX; x <= maxX; x++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                for (int y = minY; y <= maxY; y++) {
+                    for (BoundingBox local : world.getBlockAt(x, y, z)
+                            .getCollisionShape().getBoundingBoxes()) {
+                        BoundingBox shape = local.clone().shift(x, y, z);
+                        if (footprint.getMinX() < shape.getMaxX()
+                                && footprint.getMaxX() > shape.getMinX()
+                                && footprint.getMinZ() < shape.getMaxZ()
+                                && footprint.getMaxZ() > shape.getMinZ()) {
+                            obstacles.add(shape);
+                        }
+                    }
+                }
+            }
+        }
+
+        obstacles.sort(Comparator.comparingDouble(BoundingBox::getMinY));
+        double candidate = lower;
+        for (BoundingBox obstacle : obstacles) {
+            double start = obstacle.getMinY() - relative.getMaxY();
+            double end = obstacle.getMaxY() - relative.getMinY();
+            if (candidate <= start) {
+                break;
+            }
+            if (candidate < end) {
+                candidate = end;
+                if (candidate > upper) {
+                    return Double.NaN;
+                }
+            }
+        }
+        return candidate;
+    }
+
     /**
      * Refuse a mount by an unauthenticated player (UltiKits/UltiLogin#41).
      * <p>
