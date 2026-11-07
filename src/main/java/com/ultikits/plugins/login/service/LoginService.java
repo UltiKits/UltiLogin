@@ -364,10 +364,13 @@ public class LoginService {
     }
     
     /**
-     * Remove expired time-bearing counters on reads and writes, including idle addresses.
+     * Remove expired time-bearing counters and dormant pair locks on reads and writes.
+     * Pair locks reset their own counts at their recorded deadline, even if another pair is checked.
      * Unlocked UUID and pair counters deliberately have no time-based expiry.
      */
     private void pruneFailureWindows(long now) {
+        lockedPairs.forEach((pair, end) ->
+                activeLock(lockedPairs, pair, now, () -> failedAttemptsByPair.remove(pair)));
         long duration = config.getLockoutDuration() * 1000L;
         failedAttempts.forEach((ip, value) -> failedAttempts.computeIfPresent(ip,
                 (key, current) -> now - current.lastFailure >= duration ? null : current));

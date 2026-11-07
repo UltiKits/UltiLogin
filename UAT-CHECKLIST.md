@@ -55,6 +55,9 @@ for real-machine verification, not user-facing documentation.
   Every row whose Expected quotes text therefore carries `language: en` and quotes `lang/en.json`'s text
   with its colour codes left out, and assumes those settings hold the text this build writes under
   `language: en` unless its own Preconditions set one.
+- **Per-IP default scenario ID:** `ultilogin.config.login.max-register-per-ip.default-off` exercises
+  `FEATURES.md`'s `ultilogin.config.login.max-register-per-ip`; `.default-off` is a scenario suffix for the
+  shipped default and preservation of an existing value, not a separate configuration key.
 - **Movement scenario IDs:** `ultilogin.protection.movement-block.airborne-rejoin` and the
   `.collision-full-block`, `.collision-slab` and `.collision-no-safe-y` rows exercise the existing
   `FEATURES.md` feature `ultilogin.protection.movement-block`; these are scenario suffixes, not separate features.
