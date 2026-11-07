@@ -77,6 +77,13 @@ for real-machine verification, not user-facing documentation.
   Missing probe capabilities or unestablished fixture geometry mean `blocked`, not a gameplay pass.
   These probes score the handler and real server collision geometry only; `.airborne-rejoin` separately
   scores real-client descent and Paper's floating behaviour. They add no shipped test hook.
+- **Movement interior margin:** Paper accepts a movement step of at most 1/16 block from the last
+  position it fired `PlayerMoveEvent` for without firing the event, so the handler also redirects any
+  unauthenticated move whose X or Z ends within 0.07 block of its column's edge (a descent to the column
+  centre, any other move back to its origin). A player standing still does not count. Known limitation: a
+  player who joins within 1/16 block of a column edge can drift up to that distance into the neighbouring
+  column without an event; the first larger step returns them to their own column. Source-level guarantee:
+  `LoginProtectionListenerTest.OnPlayerMove#subThresholdStepsNeverLeaveTheColumn`.
 - **Config text rows:** `ultilogin.config.login.materialize-fresh` and `ultilogin.config.login.materialize-switch`
   exercise `FEATURES.md`'s `ultilogin.lifecycle.legacy-text-defaults` on a fresh file and across a `language`
   switch; they are named by the config-text naming convention (`<prefix>.config.<file stem>.materialize-*`)

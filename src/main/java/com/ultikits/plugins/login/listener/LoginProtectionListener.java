@@ -201,18 +201,39 @@ public class LoginProtectionListener implements Listener {
     }
     
     /**
-     * Refuse block-column changes and upward block changes without holding a falling player at the
-     * old Y when a lower safe Y exists (UltiKits/UltiLogin#73, #74).
-     * Paper treats a changed move destination as a teleport and returns before updating its floating
-     * flag; that same-world teleport does not reset the floating counter. Returning a sideways fall
-     * to the previous fractional X/Z lets repeated moves converge on a column edge. Instead, use the
-     * centre of the from-block column with the previous facing: the distance to its edges leaves
-     * ordinary free-fall ticks between reverts to clear the floating flag. At that centre, choose
-     * the lowest noncolliding Y from the descended Y through the original Y, within world height.
-     * If the whole interval is obstructed, cancel the move instead of creating an unsafe destination.
-     * Rotation-only and same-column descent remain untouched. See
-     * {@code ultilogin.protection.movement-block.airborne-rejoin} and the collision scenarios in
-     * UAT-CHECKLIST.md.
+     * Paper fires {@link PlayerMoveEvent} only when the squared distance from the last position it
+     * fired for exceeds {@code 1/256} (or the facing turns by more than 10 degrees); a smaller step is
+     * accepted without any event ({@code ServerGamePacketListenerImpl#handleMovePlayer}, Paper
+     * 1.21.11, read with {@code javap -c}). So every position this handler lets stand must lie more
+     * than {@code 1/16} block from the edges of its column, or an unseen step crosses into the
+     * neighbouring column (measured: a landing at X=100.96 crept to X=101.0174, UltiKits/UltiLogin#74).
+     */
+    static final double EDGE_MARGIN = 0.07;
+
+    /**
+     * Keep an unauthenticated player in the block column of the move's origin, and refuse upward
+     * block changes, without holding a falling player at the old Y when a lower safe Y exists
+     * (UltiKits/UltiLogin#73, #74).
+     * <p>
+     * One rule covers every move that shifts X/Z: the destination must stay inside the from-column
+     * shrunk by {@link #EDGE_MARGIN}, so the event-free steps Paper accepts below its movement
+     * threshold cannot reach the next column. A destination outside that interior is redirected:
+     * <ul>
+     *   <li>a descending move goes to the centre of the from-column with the previous facing. Paper
+     *   treats a changed destination as a teleport and returns before updating its floating flag;
+     *   that same-world teleport does not reset the floating counter. Returning a fall to the
+     *   previous fractional X/Z lets repeated moves converge on the interior's edge (a teleport every
+     *   tick, then the flying kick). The centre leaves ordinary free-fall ticks between redirects to
+     *   clear the flag. At the centre the lowest noncolliding Y from the descended Y through the
+     *   original Y is chosen, within world height; if the whole interval is obstructed, the move is
+     *   cancelled instead of creating an unsafe destination;</li>
+     *   <li>any other move goes back to its origin.</li>
+     * </ul>
+     * Rotation-only moves and descent inside the interior remain untouched. The rule assumes the
+     * origin itself lies inside the interior, which holds for every origin this handler produced; a
+     * player who joins within {@code 1/16} block of a column edge can still drift that far into the
+     * neighbour without an event (documented in UAT-CHECKLIST.md). See
+     * {@code ultilogin.protection.movement-block.airborne-rejoin} and the collision scenarios there.
      */
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerMove(PlayerMoveEvent event) {
@@ -221,10 +242,12 @@ public class LoginProtectionListener implements Listener {
         }
         Location from = event.getFrom();
         Location to = event.getTo();
-        boolean changesColumn = from.getBlockX() != to.getBlockX()
-                || from.getBlockZ() != to.getBlockZ();
+        boolean leavesColumnInterior = from.getBlockX() != to.getBlockX()
+                || from.getBlockZ() != to.getBlockZ()
+                || leavesInterior(from.getX(), to.getX(), from.getBlockX())
+                || leavesInterior(from.getZ(), to.getZ(), from.getBlockZ());
         if (to.getY() < from.getY()) {
-            if (changesColumn) {
+            if (leavesColumnInterior) {
                 Location falling = from.clone();
                 falling.setX(from.getBlockX() + 0.5);
                 falling.setZ(from.getBlockZ() + 0.5);
@@ -236,9 +259,18 @@ public class LoginProtectionListener implements Listener {
                     event.setTo(falling);
                 }
             }
-        } else if (changesColumn || from.getBlockY() != to.getBlockY()) {
+        } else if (leavesColumnInterior || from.getBlockY() != to.getBlockY()) {
             event.setTo(from);
         }
+    }
+
+    /**
+     * Whether a move along one horizontal axis ends within {@link #EDGE_MARGIN} of the edges of
+     * block {@code block}. An axis the move does not shift never counts, so a look-only move keeps
+     * its destination wherever the player stands.
+     */
+    private static boolean leavesInterior(double from, double to, int block) {
+        return to != from && (to < block + EDGE_MARGIN || to > block + 1 - EDGE_MARGIN);
     }
 
     /**

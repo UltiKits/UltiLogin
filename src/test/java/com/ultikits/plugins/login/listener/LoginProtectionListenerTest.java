@@ -526,6 +526,113 @@ class LoginProtectionListenerTest {
             return loc;
         }
 
+        /**
+         * Paper 1.21.11 {@code ServerGamePacketListenerImpl#handleMovePlayer} (read with
+         * {@code javap -c}): the event fires only when the squared distance from the last evented
+         * position exceeds {@code 1/256} (facing is constant here); its {@code from} is that last
+         * position; a changed {@code to} or a cancellation becomes a teleport that resets it. A
+         * smaller step is accepted without any event (UltiKits/UltiLogin#74).
+         */
+        private final class PaperMoves {
+            private org.bukkit.Location lastEvented;
+            private org.bukkit.Location server;
+
+            PaperMoves(org.bukkit.Location start) {
+                lastEvented = start.clone();
+                server = start.clone();
+            }
+
+            org.bukkit.Location step(double x, double y, double z) {
+                org.bukkit.Location client = server.clone();
+                client.setX(x);
+                client.setY(y);
+                client.setZ(z);
+                if (client.distanceSquared(lastEvented) <= 1.0 / 256) {
+                    server = client;
+                    return server.clone();
+                }
+                PlayerMoveEvent event = new PlayerMoveEvent(player, lastEvented.clone(), client.clone());
+                listener.onPlayerMove(event);
+                org.bukkit.Location result = event.isCancelled() ? event.getFrom() : event.getTo();
+                lastEvented = result.clone();
+                server = result.clone();
+                return server.clone();
+            }
+        }
+
+        @Test
+        @DisplayName("The measured landing and sub-threshold creep stay in block column 100 (UltiLogin#74)")
+        void observedLandingCreepStaysInColumn() {
+            shapeAt(100, 63, 100, new org.bukkit.util.BoundingBox(0, 0, 0, 1, 1, 1));
+            PaperMoves paper = new PaperMoves(new org.bukkit.Location(
+                    mockWorld, 100.61070276164378, 65.19265607226204, 100.5, -90, 0));
+
+            org.bukkit.Location landed = paper.step(100.96036416253371, 64.0, 100.5);
+            org.bukkit.Location crept = paper.step(101.01740016288296, 64.0, 100.5);
+
+            assertThat(landed.getBlockX()).isEqualTo(100);
+            assertThat(landed.getY()).isEqualTo(64.0);
+            assertThat(crept.getBlockX()).as("server X after the event-free step").isEqualTo(100);
+            assertThat(crept.getBlockZ()).isEqualTo(100);
+        }
+
+        @ParameterizedTest
+        @CsvSource({"1, 0.25", "2, 0.12", "3, 0.06", "4, 0.3"})
+        @DisplayName("Event-free steps below Paper's threshold never leave the origin column (UltiLogin#74)")
+        void subThresholdStepsNeverLeaveTheColumn(long seed, double maxStep) {
+            java.util.Random random = new java.util.Random(seed);
+            PaperMoves paper = new PaperMoves(new org.bukkit.Location(mockWorld, 100.5, 200, 100.5, -90, 0));
+            org.bukkit.Location position = paper.server.clone();
+            for (int i = 0; i < 5000; i++) {
+                double dx = (random.nextDouble() * 2 - 1) * maxStep;
+                double dz = (random.nextDouble() * 2 - 1) * maxStep;
+                double dy = random.nextInt(3) == 0 ? 0 : -random.nextDouble() * 0.4;
+                position = paper.step(position.getX() + dx,
+                        Math.max(0, position.getY() + dy), position.getZ() + dz);
+                assertThat(position.getBlockX()).as("step %d X=%s", i, position.getX()).isEqualTo(100);
+                assertThat(position.getBlockZ()).as("step %d Z=%s", i, position.getZ()).isEqualTo(100);
+            }
+        }
+
+        @ParameterizedTest
+        @CsvSource({"0.96, 0.5", "0.04, 0.5", "0.5, 0.95", "0.5, 0.05"})
+        @DisplayName("A same-column fall ending at the column edge goes to the column centre (UltiLogin#74)")
+        void sameColumnFallIntoEdgeMarginGoesToCentre(double toX, double toZ) {
+            org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.5, 65.2, 0.5, 15, 25);
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from,
+                    new org.bukkit.Location(mockWorld, toX, 64.7, toZ, 45, 55));
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.isCancelled()).isFalse();
+            assertThat(event.getTo()).isEqualTo(new org.bukkit.Location(mockWorld, 0.5, 64.7, 0.5, 15, 25));
+        }
+
+        @Test
+        @DisplayName("An equal-height step ending at the column edge is reverted (UltiLogin#74)")
+        void equalHeightStepIntoEdgeMarginIsReverted() {
+            org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.9, 64.0, 0.5, 15, 25);
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from,
+                    new org.bukkit.Location(mockWorld, 0.97, 64.0, 0.5, 45, 55));
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.getTo()).isEqualTo(from);
+        }
+
+        @Test
+        @DisplayName("Looking around at a column edge keeps the destination (UltiLogin#74)")
+        void lookOnlyAtColumnEdgeKeepsDestination() {
+            org.bukkit.Location from = new org.bukkit.Location(mockWorld, 0.98, 64.0, 0.01, 15, 25);
+            PlayerMoveEvent event = new PlayerMoveEvent(player, from,
+                    new org.bukkit.Location(mockWorld, 0.98, 64.0, 0.01, 45, 55));
+            org.bukkit.Location originalTo = event.getTo();
+
+            listener.onPlayerMove(event);
+
+            assertThat(event.getTo()).isSameAs(originalTo);
+        }
+
         @ParameterizedTest
         @CsvSource({"64.2, 62.8", "64.8, 64.2", "0.2, -1.2"})
         @DisplayName("An unauthenticated straight fall keeps the original destination (UltiLogin#73)")
