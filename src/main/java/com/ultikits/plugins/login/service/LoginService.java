@@ -6,7 +6,6 @@ import com.ultikits.plugins.login.gui.LoginGUIPage;
 import com.ultikits.plugins.login.gui.RegisterGUIPage;
 import com.ultikits.plugins.login.listener.LoginProtectionListener;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
-import com.ultikits.ultitools.annotations.PostConstruct;
 import com.ultikits.ultitools.annotations.PreDestroy;
 import com.ultikits.ultitools.annotations.Scheduled;
 import com.ultikits.ultitools.interfaces.DataOperator;
@@ -288,13 +287,13 @@ public class LoginService {
     }
 
     /**
-     * Install this module's handler for link completions and expiries with the framework's player-link API, once the
-     * service exists. The framework calls it for every completion and expiry of this server's links, including
+     * Install this module's handler for link completions and expiries with the framework's player-link API, after
+     * UltiLogin's registerSelf accepts the runtime compatibility gate, never from container refresh.
+     * The framework calls it for every completion and expiry of this server's links, including
      * completions redelivered after a restart. A framework that refuses the handler (not enabled, or another module
      * owns it) is reported once in the console: {@code /panel} can still create links, but nobody is logged in by
      * them until the module is loaded again.
      */
-    @PostConstruct
     public void registerPlayerLinkHandler() {
         if (!playerLinkPort.registerHandler(linkEventHandler)) {
             plugin.getLogger().warn(i18n("log_panel_link_handler_unavailable"));

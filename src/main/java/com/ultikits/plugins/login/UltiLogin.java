@@ -7,9 +7,11 @@ import com.ultikits.plugins.login.logging.CloudSensitiveCommands;
 import com.ultikits.plugins.login.logging.PasswordCommandMask;
 import com.ultikits.plugins.login.logging.PasswordLogFilterInstaller;
 import com.ultikits.plugins.login.util.Placeholders;
+import com.ultikits.plugins.login.util.RuntimeCompatibility;
 import com.ultikits.plugins.login.service.LoginService;
 import com.ultikits.plugins.compat.login.EquipmentSwapProtectionListener;
 import org.bukkit.Bukkit;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
 import com.ultikits.ultitools.UltiTools;
@@ -53,8 +55,34 @@ public class UltiLogin extends UltiToolsPlugin {
     private Listener equipmentSwapListener;
     private boolean equipmentSwapProtectionInitialized;
 
+    /** Package-private seam so enable tests can exercise the runtime check without core bootstrap. */
+    boolean refusesUnsupportedRuntime() {
+        String server = Bukkit.getBukkitVersion();
+        Plugin framework = Bukkit.getPluginManager().getPlugin("UltiTools");
+        String version = framework == null ? null : framework.getDescription().getVersion();
+        RuntimeCompatibility.Result result = RuntimeCompatibility.check(server, version);
+        if (result == RuntimeCompatibility.Result.UNKNOWN) {
+            getLogger().warn(Placeholders.fill(i18n("log_runtime_unknown"),
+                    "{SERVER}", String.valueOf(server), "{FRAMEWORK}", String.valueOf(version)));
+        } else if (result == RuntimeCompatibility.Result.REFUSE) {
+            getLogger().error(Placeholders.fill(i18n("log_runtime_incompatible"),
+                    "{SERVER}", server, "{FRAMEWORK}", version));
+            return true;
+        }
+        return false;
+    }
+
+    /** Player-link callbacks must not be installed by container refresh before the gate accepts. */
+    void activatePlayerLinks() {
+        getContext().getBean(LoginService.class).registerPlayerLinkHandler();
+    }
+
     @Override
     public boolean registerSelf() {
+        if (refusesUnsupportedRuntime()) {
+            return false;
+        }
+        activatePlayerLinks();
         getLogger().info(i18n("login_enabled"));
         registerSensitiveCommands();
         installPasswordLogFilter();
