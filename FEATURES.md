@@ -243,8 +243,13 @@ It is not in `allowed-commands`, so a player who has not logged in is answered b
 `LoginProtectionListener` and `LoginProtectionPaperListener` remain the two automatic
 `@EventListener` beans, with 22 and 1 annotated handlers. The core's 22 are 20 direct protections
 plus join/quit; mount is still the **21st core protection**, delegated to the same core bean's
-`protectMount(Entity, Cancellable)` by exactly one version-selected hook. Its join-tick set is
-shared, not copied. Four independent plain listeners outside `com.ultikits.plugins.login`
+`protectMount(Entity, Cancellable)` by exactly one version-selected hook. Its connection-identity
+set is shared, not copied: already-online players are protected when the listener is enabled;
+a new connection becomes protected one tick after join. Paper 1.19.2-307 and 1.21.4-232 restore the
+saved vehicle before `PlayerJoinEvent`, while 1.21.11-132 restores after it; both orders leave the
+restore uncancelled and dismount an unauthenticated rider after the join window. UUID membership or
+`isOnline()` alone cannot identify this window: both older builds insert the player in the online
+UUID table before restoring the vehicle. Four independent plain listeners outside `com.ultikits.plugins.login`
 (`MountProtectionListener`, `PickItemProtectionListener`, `OpenSignProtectionListener`,
 `EquipmentSwapProtectionListener`) contribute one annotated handler each: **27 declared methods**.
 The reflected legacy mount executor is the modern hook's alternative, not a 28th simultaneous

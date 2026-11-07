@@ -73,10 +73,13 @@ class LoginProtectionListenerTest {
         lenient().when(mockServer.getScheduler()).thenReturn(mockScheduler);
         serverField.set(null, mockServer);
 
-        listener = new LoginProtectionListener(UltiLoginTestHelper.getMockPlugin(), loginService);
-
         playerUuid = UUID.randomUUID();
         player = UltiLoginTestHelper.createMockPlayer("TestPlayer", playerUuid);
+        // This fixture represents an already joined connection, not a pre-join restore.
+        lenient().doReturn(java.util.Collections.singletonList(player)).when(mockServer).getOnlinePlayers();
+        lenient().when(mockServer.getPlayer(playerUuid))
+                .thenAnswer(invocation -> player.isOnline() ? player : null);
+        listener = new LoginProtectionListener(UltiLoginTestHelper.getMockPlugin(), loginService);
 
         // Mock player.getServer() for PlayerCommandPreprocessEvent
         Server playerServer = mock(Server.class);

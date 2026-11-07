@@ -87,7 +87,14 @@ class PaperProtectionCompatibilityTest {
         SimpleContainer context = mock(SimpleContainer.class);
         when(module.getContext()).thenReturn(context);
         when(context.getBean(LoginService.class)).thenReturn(service);
-        core = spy(new LoginProtectionListener(module, service));
+        player = mock(Player.class);
+        when(player.getUniqueId()).thenReturn(UUID.randomUUID());
+        when(player.isOnline()).thenReturn(true);
+        // Normal mount probes use a connection that was online before this listener was enabled.
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class, CALLS_REAL_METHODS)) {
+            bukkit.when(Bukkit::getOnlinePlayers).thenReturn(java.util.Collections.singletonList(player));
+            core = spy(new LoginProtectionListener(module, service));
+        }
         when(context.getBean(LoginProtectionListener.class)).thenReturn(core);
         doCallRealMethod().when(module).registerVersionedProtections();
         doCallRealMethod().when(module).unregisterVersionedProtections();
@@ -100,8 +107,6 @@ class PaperProtectionCompatibilityTest {
         when(module.createPickItemListener()).thenCallRealMethod();
         when(module.createOpenSignListener()).thenCallRealMethod();
         when(module.createEquipmentSwapListener()).thenCallRealMethod();
-        player = mock(Player.class);
-        when(player.getUniqueId()).thenReturn(UUID.randomUUID());
     }
 
     @AfterEach
@@ -347,7 +352,7 @@ class PaperProtectionCompatibilityTest {
         Event restored = mountEvent(modern, player);
         Bukkit.getPluginManager().callEvent(restored);
         assertThat(((Cancellable) restored).isCancelled()).as("join-tick restore must not delete the vehicle").isFalse();
-        org.mockbukkit.mockbukkit.MockBukkit.getMock().getScheduler().performOneTick();
+        tickWithOnlineConnection(player);
         verify(player).leaveVehicle();
         Event later = mountEvent(modern, player);
         Bukkit.getPluginManager().callEvent(later);
@@ -367,9 +372,123 @@ class PaperProtectionCompatibilityTest {
         when(player.hasMetadata("NPC")).thenReturn(false);
         core.onPlayerJoin(new PlayerJoinEvent(player, "join again"));
         core.onPlayerQuit(new PlayerQuitEvent(player, "quit"));
-        Event afterQuit = mountEvent(modern, player);
+        Player reconnecting = reconnectingPlayer();
+        Event afterQuit = mountEvent(modern, reconnecting);
         Bukkit.getPluginManager().callEvent(afterQuit);
-        assertThat(((Cancellable) afterQuit).isCancelled()).as("quit clears the same join-tick set").isTrue();
+        assertThat(((Cancellable) afterQuit).isCancelled())
+                .as("a new connection restores its vehicle before join, even under the same UUID").isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void restoreBeforeJoinIsAllowedWhileOnlineAndDismountedOneTickLater(boolean modern) {
+        doReturn(modern ? EntityMountEvent.class : null).when(module).eventClass(UltiLogin.MODERN_MOUNT_EVENT);
+        module.registerVersionedProtections();
+        Player reconnecting = reconnectingPlayer();
+        // Both older Paper builds insert this very player in the UUID table BEFORE restoring.
+        assertThat(reconnecting.isOnline()).isTrue();
+        Event restored = mountEvent(modern, reconnecting);
+        Bukkit.getPluginManager().callEvent(restored);
+        assertThat(((Cancellable) restored).isCancelled())
+                .as("pre-join restore must not delete the vehicle even when isOnline is true").isFalse();
+        verify(reconnecting, never()).leaveVehicle();
+
+        core.onPlayerJoin(new PlayerJoinEvent(reconnecting, "join"));
+        Event sameTick = mountEvent(modern, reconnecting);
+        Bukkit.getPluginManager().callEvent(sameTick);
+        assertThat(((Cancellable) sameTick).isCancelled()).isFalse();
+        tickWithOnlineConnection(reconnecting);
+        verify(reconnecting).leaveVehicle();
+        Event later = mountEvent(modern, reconnecting);
+        Bukkit.getPluginManager().callEvent(later);
+        assertThat(((Cancellable) later).isCancelled()).isTrue();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void listenerEnabledWithAnOnlinePlayerStillRefusesOrdinaryUnauthenticatedMount(boolean modern) {
+        doReturn(modern ? EntityMountEvent.class : null).when(module).eventClass(UltiLogin.MODERN_MOUNT_EVENT);
+        module.registerVersionedProtections();
+        assertThat(player.isOnline()).isTrue();
+        Event ordinary = mountEvent(modern, player);
+        Bukkit.getPluginManager().callEvent(ordinary);
+        assertThat(((Cancellable) ordinary).isCancelled()).isTrue();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void staleJoinTaskAndQuitCannotChangeTheSameUuidNewConnectionWindow(boolean modern) {
+        doReturn(modern ? EntityMountEvent.class : null).when(module).eventClass(UltiLogin.MODERN_MOUNT_EVENT);
+        module.registerVersionedProtections();
+        Player reconnecting = reconnectingPlayer();
+        when(player.isInsideVehicle()).thenReturn(true);
+        // CraftPlayer.isOnline() can still be true on the OLD object when the new one owns its UUID.
+        assertThat(player.isOnline()).isTrue();
+        org.bukkit.scheduler.BukkitScheduler scheduler = mock(org.bukkit.scheduler.BukkitScheduler.class);
+        ArgumentCaptor<Runnable> tasks = ArgumentCaptor.forClass(Runnable.class);
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class, CALLS_REAL_METHODS)) {
+            bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+            bukkit.when(() -> Bukkit.getPlayer(player.getUniqueId())).thenReturn(reconnecting);
+            core.onPlayerJoin(new PlayerJoinEvent(player, "old join"));
+            core.onPlayerQuit(new PlayerQuitEvent(player, "old quit"));
+            core.onPlayerJoin(new PlayerJoinEvent(reconnecting, "new join"));
+            verify(scheduler, times(2)).runTaskLater(same(owner), tasks.capture(), eq(1L));
+            tasks.getAllValues().get(0).run();
+            verify(player, never()).leaveVehicle();
+            Event restored = mountEvent(modern, reconnecting);
+            Bukkit.getPluginManager().callEvent(restored);
+            assertThat(((Cancellable) restored).isCancelled()).as("old task cannot close the new window").isFalse();
+            tasks.getAllValues().get(1).run();
+            verify(reconnecting).leaveVehicle();
+            // A late quit for the old connection cannot remove the new connection's protection.
+            core.onPlayerQuit(new PlayerQuitEvent(player, "late old quit"));
+            Event ordinary = mountEvent(modern, reconnecting);
+            Bukkit.getPluginManager().callEvent(ordinary);
+            assertThat(((Cancellable) ordinary).isCancelled()).isTrue();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void joinServiceFailureStillEndsTheRestoreWindow(boolean modern) {
+        doReturn(modern ? EntityMountEvent.class : null).when(module).eventClass(UltiLogin.MODERN_MOUNT_EVENT);
+        module.registerVersionedProtections();
+        Player reconnecting = reconnectingPlayer();
+        doThrow(new IllegalStateException("join lookup failed")).when(service).onPlayerJoin(reconnecting);
+        assertThatThrownBy(() -> core.onPlayerJoin(new PlayerJoinEvent(reconnecting, "join")))
+                .isInstanceOf(IllegalStateException.class).hasMessage("join lookup failed");
+        tickWithOnlineConnection(reconnecting);
+        Event ordinary = mountEvent(modern, reconnecting);
+        Bukkit.getPluginManager().callEvent(ordinary);
+        assertThat(((Cancellable) ordinary).isCancelled()).isTrue();
+        verify(reconnecting).leaveVehicle();
+    }
+
+    @Test
+    void disconnectedBeforeFirstJoinTickIsNotDismounted() {
+        Player reconnecting = reconnectingPlayer();
+        core.onPlayerJoin(new PlayerJoinEvent(reconnecting, "join"));
+        core.onPlayerQuit(new PlayerQuitEvent(reconnecting, "quit before first tick"));
+        when(reconnecting.isOnline()).thenReturn(false);
+        // UUID lookup is authoritative; a lost connection must not be promoted by its queued task.
+        tickWithOnlineConnection(null);
+        verify(reconnecting, never()).leaveVehicle();
+    }
+
+    private Player reconnectingPlayer() {
+        Player reconnecting = mock(Player.class);
+        UUID uuid = player.getUniqueId();
+        when(reconnecting.getUniqueId()).thenReturn(uuid);
+        when(reconnecting.isOnline()).thenReturn(true);
+        when(reconnecting.isInsideVehicle()).thenReturn(true);
+        return reconnecting;
+    }
+
+    private void tickWithOnlineConnection(Player current) {
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class, CALLS_REAL_METHODS)) {
+            bukkit.when(() -> Bukkit.getPlayer(player.getUniqueId())).thenReturn(current);
+            org.mockbukkit.mockbukkit.MockBukkit.getMock().getScheduler().performOneTick();
+        }
     }
 
     @Test
