@@ -5,6 +5,9 @@ import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.service.LoginService;
 import com.ultikits.plugins.compat.login.EquipmentSwapProtectionListener;
+import com.ultikits.plugins.compat.login.MountProtectionListener;
+import com.ultikits.plugins.compat.login.OpenSignProtectionListener;
+import com.ultikits.plugins.compat.login.PickItemProtectionListener;
 
 import org.bukkit.Server;
 import org.bukkit.entity.HumanEntity;
@@ -143,7 +146,8 @@ class LoginProtectionEventCoverageTest {
     private static final List<Class<?>> PROTECTION_LISTENERS =
             Collections.unmodifiableList(Arrays.<Class<?>>asList(
                     LoginProtectionListener.class, LoginProtectionPaperListener.class,
-                    EquipmentSwapProtectionListener.class));
+                    EquipmentSwapProtectionListener.class, MountProtectionListener.class,
+                    PickItemProtectionListener.class, OpenSignProtectionListener.class));
 
     /**
      * Events through which an unauthenticated player would otherwise mutate world, entity or
@@ -582,8 +586,8 @@ class LoginProtectionEventCoverageTest {
                                 + "passing with it removed.", listener.getName())
                         .isNotNull();
                 assertThat(annotation.manualRegister())
-                        .as("%s asks for manual registration, but only the optional equipment listener "
-                                + "is registered by hand, so these handlers would never be wired up",
+                        .as("%s asks for manual registration, but only the versioned compatibility listeners "
+                                + "are registered by hand, so these stable handlers would never be wired up",
                                 listener.getName())
                         .isFalse();
             }
@@ -677,6 +681,9 @@ class LoginProtectionEventCoverageTest {
         private LoginProtectionListener listener;
         private LoginProtectionPaperListener paperListener;
         private EquipmentSwapProtectionListener equipmentListener;
+        private MountProtectionListener mountListener;
+        private PickItemProtectionListener pickListener;
+        private OpenSignProtectionListener signListener;
         private LoginService loginService;
         private Player player;
         private UUID playerUuid;
@@ -703,6 +710,9 @@ class LoginProtectionEventCoverageTest {
             listener = new LoginProtectionListener(UltiLoginTestHelper.getMockPlugin(), loginService);
             paperListener = new LoginProtectionPaperListener(loginService);
             equipmentListener = new EquipmentSwapProtectionListener(loginService);
+            mountListener = new MountProtectionListener(listener);
+            pickListener = new PickItemProtectionListener(loginService);
+            signListener = new OpenSignProtectionListener(loginService);
             playerUuid = UUID.randomUUID();
             player = UltiLoginTestHelper.createMockPlayer("TestPlayer", playerUuid);
         }
@@ -1009,6 +1019,15 @@ class LoginProtectionEventCoverageTest {
             }
             if (declaringClass == EquipmentSwapProtectionListener.class) {
                 return equipmentListener;
+            }
+            if (declaringClass == MountProtectionListener.class) {
+                return mountListener;
+            }
+            if (declaringClass == PickItemProtectionListener.class) {
+                return pickListener;
+            }
+            if (declaringClass == OpenSignProtectionListener.class) {
+                return signListener;
             }
             throw new IllegalStateException("PROTECTION_LISTENERS gained " + declaringClass.getName()
                     + " but this test has no instance of it -- construct one in setUp()");

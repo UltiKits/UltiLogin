@@ -3,6 +3,7 @@ package com.ultikits.plugins.login.listener;
 import com.ultikits.plugins.login.UltiLoginTestHelper;
 import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.service.LoginService;
+import com.ultikits.plugins.compat.login.MountProtectionListener;
 
 import org.bukkit.Location;
 import org.bukkit.World;
@@ -79,7 +80,7 @@ class UnauthenticatedRiderStateTest {
     /** Paper's restore: the mount event, and the mount itself if the event was not cancelled. */
     private boolean restoreMount() {
         EntityMountEvent event = new EntityMountEvent(rider, cart);
-        listener.onEntityMount(event);
+        new MountProtectionListener(listener).onEntityMount(event);
         if (!event.isCancelled()) {
             cart.addPassenger(rider);
         }
@@ -117,7 +118,7 @@ class UnauthenticatedRiderStateTest {
         server.getScheduler().performOneTick();
 
         EntityMountEvent event = new EntityMountEvent(rider, cart);
-        listener.onEntityMount(event);
+        new MountProtectionListener(listener).onEntityMount(event);
 
         assertThat(event.isCancelled()).isTrue();
     }

@@ -8,10 +8,20 @@ import com.ultikits.plugins.login.logging.PasswordCommandMask;
 import com.ultikits.plugins.login.logging.PasswordLogFilterInstaller;
 import com.ultikits.plugins.login.util.Placeholders;
 import com.ultikits.plugins.login.service.LoginService;
+import com.ultikits.plugins.login.listener.LoginProtectionListener;
 import com.ultikits.plugins.compat.login.EquipmentSwapProtectionListener;
+import com.ultikits.plugins.compat.login.MountProtectionListener;
+import com.ultikits.plugins.compat.login.OpenSignProtectionListener;
+import com.ultikits.plugins.compat.login.PickItemProtectionListener;
 import org.bukkit.Bukkit;
+import org.bukkit.event.Cancellable;
+import org.bukkit.event.Event;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
+import org.bukkit.event.entity.EntityEvent;
+import org.bukkit.plugin.Plugin;
+import org.bukkit.plugin.PluginManager;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
@@ -50,6 +60,15 @@ import java.io.IOException;
 @UltiToolsModule(scanBasePackages = {"com.ultikits.plugins.login"})
 public class UltiLogin extends UltiToolsPlugin {
 
+    static final String MODERN_MOUNT_EVENT = "org.bukkit.event.entity.EntityMountEvent";
+    static final String LEGACY_MOUNT_EVENT = "org.spigotmc.event.entity.EntityMountEvent";
+    static final String PICK_ITEM_EVENT = "io.papermc.paper.event.player.PlayerPickItemEvent";
+    static final String OPEN_SIGN_EVENT = "io.papermc.paper.event.player.PlayerOpenSignEvent";
+
+    private Listener mountListener;
+    private Listener pickItemListener;
+    private Listener openSignListener;
+    private boolean versionedProtectionsInitialized;
     private Listener equipmentSwapListener;
     private boolean equipmentSwapProtectionInitialized;
 
@@ -63,6 +82,7 @@ public class UltiLogin extends UltiToolsPlugin {
         warnAboutRemovedConfigKeys();
         warnAboutUnusableLockoutType();
         writeConfigTextInServerLanguage();
+        registerVersionedProtections();
         registerEquipmentSwapProtection();
         return true;
     }
@@ -86,6 +106,7 @@ public class UltiLogin extends UltiToolsPlugin {
     @Override
     protected void onUnregister() {
         try {
+            unregisterVersionedProtections();
             unregisterEquipmentSwapProtection();
         } finally {
             String problem = PasswordLogFilterInstaller.uninstall();
@@ -93,6 +114,97 @@ public class UltiLogin extends UltiToolsPlugin {
                 getLogger().warn(Placeholders.fill(i18n("log_password_filter_removal_failed"), "{REASON}", problem));
             }
         }
+    }
+
+    /**
+     * Select exactly one mount event, then independently register each available Paper hook.
+     * No optional event type appears in a scanned signature or field. Reload never repeats this work.
+     */
+    void registerVersionedProtections() {
+        if (versionedProtectionsInitialized) {
+            return;
+        }
+        PluginManager manager = Bukkit.getPluginManager();
+        Plugin owner = manager.getPlugin("UltiTools");
+        if (eventClass(MODERN_MOUNT_EVENT) != null) {
+            mountListener = createMountListener();
+            manager.registerEvents(mountListener, owner);
+        } else {
+            Class<? extends Event> legacy = eventClass(LEGACY_MOUNT_EVENT);
+            if (legacy != null) {
+                // Both measured mount types extend EntityEvent and implement Cancellable. The old
+                // event is not on the compile classpath; register its actual class, not an annotation
+                // on the new event or a second core bean with an empty join-tick set.
+                LoginProtectionListener protection = getContext().getBean(LoginProtectionListener.class);
+                mountListener = createLegacyMountListener();
+                manager.registerEvent(legacy, mountListener, EventPriority.LOWEST, (listener, event) -> {
+                    if (legacy.isInstance(event)) {
+                        protection.protectMount(((EntityEvent) event).getEntity(), (Cancellable) event);
+                    }
+                }, owner, false);
+            } else {
+                getLogger().warn(i18n("log_mount_hook_unavailable"));
+            }
+        }
+        if (eventClass(PICK_ITEM_EVENT) != null) {
+            pickItemListener = createPickItemListener();
+            manager.registerEvents(pickItemListener, owner);
+        } else {
+            getLogger().warn(i18n("log_pick_item_hook_unavailable"));
+        }
+        if (eventClass(OPEN_SIGN_EVENT) != null) {
+            openSignListener = createOpenSignListener();
+            manager.registerEvents(openSignListener, owner);
+        } else {
+            getLogger().warn(i18n("log_open_sign_hook_unavailable"));
+        }
+        versionedProtectionsInitialized = true;
+    }
+
+    /** Package-private presence seam; never initializes a server event class. */
+    Class<? extends Event> eventClass(String name) {
+        return eventClass(name, UltiLogin.class.getClassLoader());
+    }
+
+    static Class<? extends Event> eventClass(String name, ClassLoader loader) {
+        try {
+            return Class.forName(name, false, loader).asSubclass(Event.class);
+        } catch (ClassNotFoundException | LinkageError absent) {
+            return null;
+        }
+    }
+
+    Listener createMountListener() {
+        return new MountProtectionListener(getContext().getBean(LoginProtectionListener.class));
+    }
+
+    Listener createLegacyMountListener() {
+        return new Listener() { };
+    }
+
+    Listener createPickItemListener() {
+        return new PickItemProtectionListener(getContext().getBean(LoginService.class));
+    }
+
+    Listener createOpenSignListener() {
+        return new OpenSignProtectionListener(getContext().getBean(LoginService.class));
+    }
+
+    /** Unregister only the instances manually owned by this enable, never the shared Bukkit owner. */
+    void unregisterVersionedProtections() {
+        if (mountListener != null) {
+            HandlerList.unregisterAll(mountListener);
+            mountListener = null;
+        }
+        if (pickItemListener != null) {
+            HandlerList.unregisterAll(pickItemListener);
+            pickItemListener = null;
+        }
+        if (openSignListener != null) {
+            HandlerList.unregisterAll(openSignListener);
+            openSignListener = null;
+        }
+        versionedProtectionsInitialized = false;
     }
 
     /**
