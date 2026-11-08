@@ -6,6 +6,8 @@ import com.ultikits.plugins.login.config.LoginConfig;
 import com.ultikits.plugins.login.gui.LoginGUIPage;
 import com.ultikits.plugins.login.gui.RegisterGUIPage;
 import com.ultikits.plugins.login.service.LoginService;
+import com.ultikits.plugins.compat.login.MountProtectionListener;
+import com.ultikits.plugins.compat.login.PickItemProtectionListener;
 
 import org.bukkit.ChatColor;
 import org.bukkit.Server;
@@ -73,10 +75,13 @@ class LoginProtectionListenerTest {
         lenient().when(mockServer.getScheduler()).thenReturn(mockScheduler);
         serverField.set(null, mockServer);
 
-        listener = new LoginProtectionListener(UltiLoginTestHelper.getMockPlugin(), loginService);
-
         playerUuid = UUID.randomUUID();
         player = UltiLoginTestHelper.createMockPlayer("TestPlayer", playerUuid);
+        // This fixture represents an already joined connection, not a pre-join restore.
+        lenient().doReturn(java.util.Collections.singletonList(player)).when(mockServer).getOnlinePlayers();
+        lenient().when(mockServer.getPlayer(playerUuid))
+                .thenAnswer(invocation -> player.isOnline() ? player : null);
+        listener = new LoginProtectionListener(UltiLoginTestHelper.getMockPlugin(), loginService);
 
         // Mock player.getServer() for PlayerCommandPreprocessEvent
         Server playerServer = mock(Server.class);
@@ -160,8 +165,8 @@ class LoginProtectionListenerTest {
             org.bukkit.event.entity.EntityMountEvent playerMount = mock(org.bukkit.event.entity.EntityMountEvent.class);
             when(playerMount.getEntity()).thenReturn(player);
 
-            listener.onEntityMount(npcMount);
-            listener.onEntityMount(playerMount);
+            new MountProtectionListener(listener).onEntityMount(npcMount);
+            new MountProtectionListener(listener).onEntityMount(playerMount);
 
             verify(npcMount, never()).setCancelled(true);
             verify(playerMount).setCancelled(true);
@@ -225,7 +230,7 @@ class LoginProtectionListenerTest {
         @Test
         @DisplayName("the Paper-only handlers leave an NPC alone too")
         void paperHandlersLeaveTheNpcAlone() {
-            LoginProtectionPaperListener paper = new LoginProtectionPaperListener(loginService);
+            PickItemProtectionListener paper = new PickItemProtectionListener(loginService);
             io.papermc.paper.event.player.PlayerPickItemEvent npcPick = mock(io.papermc.paper.event.player.PlayerPickItemEvent.class);
             when(npcPick.getPlayer()).thenReturn(npc);
             io.papermc.paper.event.player.PlayerPickItemEvent playerPick = mock(io.papermc.paper.event.player.PlayerPickItemEvent.class);
@@ -1567,7 +1572,7 @@ class LoginProtectionListenerTest {
             when(loginService.isLoggedIn(playerUuid)).thenReturn(false);
             org.bukkit.event.entity.EntityMountEvent event = new org.bukkit.event.entity.EntityMountEvent(player, cart);
 
-            listener.onEntityMount(event);
+            new MountProtectionListener(listener).onEntityMount(event);
 
             assertThat(event.isCancelled()).isTrue();
         }
@@ -1578,7 +1583,7 @@ class LoginProtectionListenerTest {
             when(loginService.isLoggedIn(playerUuid)).thenReturn(true);
             org.bukkit.event.entity.EntityMountEvent event = new org.bukkit.event.entity.EntityMountEvent(player, cart);
 
-            listener.onEntityMount(event);
+            new MountProtectionListener(listener).onEntityMount(event);
 
             assertThat(event.isCancelled()).isFalse();
         }
@@ -1589,7 +1594,7 @@ class LoginProtectionListenerTest {
             org.bukkit.entity.Zombie zombie = mock(org.bukkit.entity.Zombie.class);
             org.bukkit.event.entity.EntityMountEvent event = new org.bukkit.event.entity.EntityMountEvent(zombie, cart);
 
-            listener.onEntityMount(event);
+            new MountProtectionListener(listener).onEntityMount(event);
 
             assertThat(event.isCancelled()).isFalse();
         }

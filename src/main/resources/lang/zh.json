@@ -1,5 +1,7 @@
 {
   "login_enabled": "UltiLogin 已启用！",
+  "log_runtime_incompatible": "在 Minecraft 1.21 以下版本运行 UltiLogin 需要 UltiTools 6.4.0 或更高版本（服务端：{SERVER}，UltiTools：{FRAMEWORK}）。请更新 UltiTools。",
+  "log_runtime_unknown": "UltiLogin 无法判断运行环境兼容性（服务端：{SERVER}，UltiTools：{FRAMEWORK}）；将跳过版本门禁并继续启动。",
 
   "login_success": "登录成功！欢迎回来！",
   "register_success": "注册成功！欢迎加入服务器！",
@@ -208,7 +210,10 @@
   "login_config_comment_email_max_accounts_per_email": "每个邮箱最多绑定账号数",
   "login_config_comment_email_reward_enabled": "启用绑定邮箱奖励",
   "login_config_comment_email_reward_commands": "绑定奖励命令（%player% 替换为玩家名）",
-  "log_equipment_swap_hook_unavailable": "专用装备槽交换登录保护钩子不可用：此服务器未提供 PlayerSwapWithEquipmentSlotEvent。其他 Paper 登录保护仍然生效；普通右键装备操作仍由核心交互保护阻止。",
+  "log_equipment_swap_hook_unavailable": "专用装备槽交换登录保护钩子不可用：此服务器未提供 PlayerSwapWithEquipmentSlotEvent。其他可用的登录保护仍然生效；普通右键装备操作仍由核心交互保护阻止。",
+  "log_mount_hook_unavailable": "乘骑登录保护钩子不可用：此服务器既没有可用的 org.bukkit.event.entity.EntityMountEvent，也没有可用的 org.spigotmc.event.entity.EntityMountEvent。其他可用的登录保护仍然生效。",
+  "log_pick_item_hook_unavailable": "选取物品登录保护钩子不可用：此服务器未提供可用的 PlayerPickItemEvent，且没有完整覆盖选取物品的旧版等价钩子。其他可用的登录保护仍然生效。",
+  "log_open_sign_hook_unavailable": "告示牌编辑器打开登录保护钩子不可用：此服务器未提供可用的 PlayerOpenSignEvent，且没有完整覆盖打开编辑器的旧版等价钩子。写入告示牌仍由 SignChangeEvent 阻止；其他可用的登录保护仍然生效。",
   "log_account_row_gone": "已存储的账号记录已不存在，未写入任何内容",
   "log_password_filter_unavailable": "无法安装用于遮蔽 /login、/register 等密码命令的服务器日志过滤器（{REASON}）；在安装成功之前，这些命令行会以明文写入控制台和 logs/latest.log。",
   "log_password_filter_removal_failed": "无法移除用于遮蔽密码命令的服务器日志过滤器（{REASON}）。"
