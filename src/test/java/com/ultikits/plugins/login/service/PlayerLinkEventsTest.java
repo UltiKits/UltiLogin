@@ -870,6 +870,47 @@ class PlayerLinkEventsTest {
             verify(dataOperator, times(1)).insert(any(AccountData.class));
         }
 
+        @Test
+        @SuppressWarnings("unchecked")
+        @DisplayName("a rejoin from another address before a late completion: the requesting address is counted and stored")
+        void rejoinFromAnotherAddressCountsTheRequestingAddress() throws Exception {
+            // UltiKits/UltiLogin#74 item 7: the cap holds one account, already registered from the address the
+            // player rejoins from; the address that requested the link has none. Counting the current address
+            // would refuse; counting the requesting one creates the account and stores that address.
+            setAccount(null, null);
+            when(config.getMaxRegisterPerIp()).thenReturn(1);
+            AccountData other = UltiLoginTestHelper.createSampleAccount(UUID.randomUUID(), "Other", "h", "s");
+            other.setRegisterIp("10.9.9.9");
+            List<AccountData> rows = new ArrayList<>(Collections.singletonList(other));
+            List<String> countedAddresses = new ArrayList<>();
+            Query<AccountData> byIp = mock(Query.class);
+            when(mockQuery.where("register_ip")).thenReturn(byIp);
+            when(byIp.eq(any())).thenAnswer(invocation -> {
+                String ip = invocation.getArgument(0);
+                countedAddresses.add(ip);
+                when(byIp.list()).thenAnswer(query -> {
+                    List<AccountData> matching = new ArrayList<>();
+                    for (AccountData row : rows) {
+                        if (ip.equals(row.getRegisterIp())) { matching.add(row); }
+                    }
+                    return matching;
+                });
+                return byIp;
+            });
+            String link = openLink();
+            service.onPlayerQuit(player);
+            when(player.getAddress()).thenReturn(new java.net.InetSocketAddress("10.9.9.9", 25565));
+            service.onPlayerJoin(player);
+            countedAddresses.clear();
+
+            assertThat(deliver(completion("REJOINED", link, LinkProof.WEB_REGISTRATION, true)))
+                    .isEqualTo(CompletionResult.CREATED);
+            assertThat(countedAddresses).as("only the requesting address is counted").containsOnly("127.0.0.1");
+            AccountData row = inserted();
+            assertThat(row.getRegisterIp()).isEqualTo("127.0.0.1");
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+        }
+
         @ParameterizedTest
         @org.junit.jupiter.params.provider.EnumSource(LinkExpiry.Reason.class)
         void gatewayEndRetainsTheAddressLimit(LinkExpiry.Reason reason) throws Exception {
@@ -902,7 +943,9 @@ class PlayerLinkEventsTest {
 
         @Test
         @SuppressWarnings("unchecked")
-        void addressRetentionIsDeadlinePlus24HoursAndCleanupRemovesIt() throws Exception {
+        void addressRetentionIsDeadlinePlus25HoursAndCleanupRemovesIt() throws Exception {
+            // 25 hours: the gateway's 24-hour redelivery window plus one hour for a clock difference
+            // between this server and the gateway (UltiKits/UltiLogin#74 item 6).
             setAccount(null, null);
             String first = openLink();
             advance(100);
@@ -911,7 +954,7 @@ class PlayerLinkEventsTest {
             Map<String, ?> origins = (Map<String, ?>) field("panelLinkOrigins");
             assertThat(origins).hasSize(2);
 
-            advance(86_600); // first deadline + 24h exactly; second still has 100 seconds left.
+            advance(90_200); // first deadline + 25h exactly; second still has 100 seconds left.
             service.cleanupExpiredPanelRequests();
             assertThat(origins).containsKeys(first, second);
             advance(1);
@@ -971,7 +1014,7 @@ class PlayerLinkEventsTest {
         @SuppressWarnings("unchecked")
         void nextCreateReceiptPrunesExpiredOriginsButKeepsItsOwn() throws Exception {
             String first = openLink();
-            advance(86_701);
+            advance(90_301); // local deadline (300 s) + 25 h + 1 s
             String second = openLink();
             assertThat((Map<String, ?>) field("panelLinkOrigins")).containsKey(second).doesNotContainKey(first);
         }
@@ -981,7 +1024,7 @@ class PlayerLinkEventsTest {
             setAccount(null, null);
             String link = openLink();
             service.onPlayerQuit(player);
-            advance(86_701);
+            advance(90_301); // local deadline (300 s) + 25 h + 1 s
             when(config.getMaxRegisterPerIp()).thenReturn(1);
             oneAccountAlreadyFromThisAddress();
 

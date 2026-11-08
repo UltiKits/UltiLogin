@@ -174,9 +174,10 @@ public class LoginService {
     private static final long MIN_LINK_LIFETIME_MILLIS = 60_000L;
     private static final long MAX_LINK_LIFETIME_MILLIS = 600_000L;
 
-    // Keep each creating address through the link's local deadline plus the gateway's 24h redelivery window.
+    // Keep each creating address through the link's local deadline plus the gateway's 24h redelivery window and one
+    // hour of margin for a clock difference with the gateway (UltiKits/UltiLogin#74).
     // Quit, invalidation and local end must not erase it. Pruned every second and on receipt; no load-based eviction.
-    private static final long LINK_ORIGIN_GRACE_MILLIS = 86_400_000L;
+    private static final long LINK_ORIGIN_GRACE_MILLIS = 90_000_000L;
     private final Map<String, PanelLinkOrigin> panelLinkOrigins = new ConcurrentHashMap<>();
 
     private static final class PanelLinkOrigin {
@@ -364,13 +365,20 @@ public class LoginService {
     }
     
     /**
-     * Remove expired time-bearing counters and dormant pair locks on reads and writes.
-     * Pair locks reset their own counts at their recorded deadline, even if another pair is checked.
+     * Remove expired time-bearing counters and dormant locks on reads and writes.
+     * Pair, address and account locks reset their own counts at their recorded deadline, even if
+     * another player is checked (UltiKits/UltiLogin#65, #88).
      * Unlocked UUID and pair counters deliberately have no time-based expiry.
      */
     private void pruneFailureWindows(long now) {
         lockedPairs.forEach((pair, end) ->
                 activeLock(lockedPairs, pair, now, () -> failedAttemptsByPair.remove(pair)));
+        lockedIps.forEach((ip, end) -> activeLock(lockedIps, ip, now, () -> {
+            failedAttempts.remove(ip);
+            failingAccountsByIp.remove(ip);
+        }));
+        lockedUuids.forEach((uuid, end) ->
+                activeLock(lockedUuids, uuid, now, () -> failedAttemptsByUuid.remove(uuid)));
         long duration = config.getLockoutDuration() * 1000L;
         failedAttempts.forEach((ip, value) -> failedAttempts.computeIfPresent(ip,
                 (key, current) -> now - current.lastFailure >= duration ? null : current));

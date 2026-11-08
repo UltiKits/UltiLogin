@@ -8,6 +8,7 @@ import com.ultikits.ultitools.interfaces.Query;
 import org.bukkit.entity.Player;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.lang.reflect.Field;
@@ -279,6 +280,39 @@ class LoginServiceLockoutModesTest {
             assertThat(counts).isEmpty();
 
             when(config.getLockoutType()).thenReturn("BOTH");
+            assertThat(service.getRemainingAttempts(dormant)).isEqualTo(3);
+            fail(dormant, 1);
+            assertThat(service.getRemainingAttempts(dormant)).isEqualTo(2);
+        }
+
+        @ParameterizedTest
+        @CsvSource({"IP, lockedIps, failedAttempts", "UUID, lockedUuids, failedAttemptsByUuid"})
+        @DisplayName("An unrelated check reclaims a dormant address or account lock at its recorded expiry")
+        void unrelatedCheckReclaimsExpiredDormantAddressAndAccountLocks(String mode, String lockField,
+                String countField) throws Exception {
+            // UltiKits/UltiLogin#88: the same retention class #79 closed for pair locks.
+            when(config.getLockoutType()).thenReturn(mode);
+            Player dormant = player("10.0.0.1");
+            fail(dormant, 3);
+            Map<?, ?> locks = protectionState(lockField);
+            Map<?, ?> counts = protectionState(countField);
+            assertThat(locks).hasSize(1);
+            assertThat(counts).hasSize(1);
+
+            Player unrelated = player("10.0.0.2");
+            now.addAndGet(9_999);
+            assertThat(service.isLocked(unrelated)).isFalse();
+            assertThat(locks).hasSize(1);
+
+            now.incrementAndGet();
+            // A check in another mode must reclaim it too.
+            when(config.getLockoutType()).thenReturn("BOTH");
+            assertThat(service.isLocked(unrelated)).isFalse();
+            // Do not revisit dormant before these assertions: that would mask the retention bug.
+            assertThat(locks).isEmpty();
+            assertThat(counts).isEmpty();
+
+            when(config.getLockoutType()).thenReturn(mode);
             assertThat(service.getRemainingAttempts(dormant)).isEqualTo(3);
             fail(dormant, 1);
             assertThat(service.getRemainingAttempts(dormant)).isEqualTo(2);
