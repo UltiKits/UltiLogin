@@ -165,9 +165,11 @@ UltiLogin 2.1.0 不会在更旧的 UltiTools-API 版本上加载。
   their password changed or the link had already ended locally, the requesting address is still checked against
   `max-register-per-ip`; a successful creation records that address and has no game password. Nobody is logged in,
   and a player who is online and not logged in is told to run `/panel` again. Addresses are kept in memory until each
-  link's local deadline (60 seconds to ten minutes after receipt) plus the 24-hour redelivery window, not evicted by
-  newer links. After a restart, that address is unknown: a requested account is created with an empty address and
-  does not count against the limit.
+  link's local deadline (60 seconds to ten minutes after receipt) plus 25 hours (UltiCloud's 24-hour redelivery
+  window and one hour of margin), not evicted by newer links. After a restart, that address is unknown: a requested
+  account is created with an empty address and does not count against the limit. The address is also treated as
+  unknown if UltiCloud reports the sign-in for a different player than the one who requested the link, which a
+  correctly working gateway never does.
 - **A crash between creating the account and UltiTools-API recording the answer makes UltiCloud's redelivery answer
   "account exists".** The account itself is untouched; only the answer UltiCloud receives differs.
 - **An existing account that completes a web sign-in keeps its password hash, salt and identity.** Its last IP, last login
@@ -205,7 +207,7 @@ UltiLogin 2.1.0 不会在更旧的 UltiTools-API 版本上加载。
   不能移动、聊天或执行未放行的命令。
 - **迟到的网页登录可以按请求建号，但不让任何人登录。** 若玩家已退出、其密码已改，或链接已在本地结束，仍会按请求时的地址检查
   `max-register-per-ip`；允许建号时会记录该地址，账号没有游戏密码，但不会让任何人登录；此刻在线且未登录的玩家会被提示重新执行 `/panel`。
-  地址保存在内存中，直到各链接的本地期限（收到链接后 60 秒至十分钟）再加 24 小时重投窗口，不会被新链接挤掉。服务器重启后地址才会未知：
+  地址保存在内存中，直到各链接的本地期限（收到链接后 60 秒至十分钟）再加 25 小时（UltiCloud 的 24 小时重投窗口外加一小时余量），不会被新链接挤掉；若 UltiCloud 报告的完成玩家与请求链接的玩家不同（正常工作的网关不会如此），地址同样视为未知。服务器重启后地址才会未知：
   此时要求创建的账号地址为空，不计入上限。
 - **建号成功后、UltiTools-API 记下回执前服务器崩溃，UltiCloud 重投时会被回执为"账号已存在"。** 账号本身不受影响，只是 UltiCloud 收到的回执不同。
 - **已有账号完成网页登录时，密码哈希、盐和身份保持不变。** 其最后登录 IP、最后登录时间和登录次数会像 `/login` 一样更新。
