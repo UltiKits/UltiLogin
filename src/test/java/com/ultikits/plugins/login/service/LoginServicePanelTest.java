@@ -12,8 +12,6 @@ import com.ultikits.plugins.login.service.PlayerLinkPort.LinkProof;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.Query;
-import com.ultikits.ultitools.utils.SimpleHttpClient;
-import com.ultikits.ultitools.utils.UltiCloudRequests;
 
 import org.bukkit.ChatColor;
 import org.bukkit.Location;
@@ -36,6 +34,11 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -54,6 +57,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -75,9 +80,9 @@ import static org.mockito.Mockito.when;
  * {@code /panel} on the framework's player-link API: what the create carries, the per-address precheck, every
  * failure, the invalidation fences, and the login-timeout pause while a link is pending.
  * <p>
- * Links are created through a fake {@link PlayerLinkPort}; main-thread callbacks run inline. The framework's
- * {@link UltiCloudRequests} and {@link SimpleHttpClient} are statically mocked, and every test ends by proving neither
- * was called: the module makes no HTTP request of its own.
+ * Links are created through a fake {@link PlayerLinkPort}; main-thread callbacks run inline. The port is the module's
+ * only route to UltiCloud: {@link NoHttpOfItsOwn} proves from the compiled classes that the module references no HTTP
+ * client, neither a JDK connection type nor a framework HTTP or cloud utility, so it makes no HTTP request of its own.
  */
 @DisplayName("LoginService /panel creation, fences and timeout pause")
 class LoginServicePanelTest {
@@ -96,8 +101,6 @@ class LoginServicePanelTest {
     private UUID playerUuid;
 
     private MockedStatic<UltiTools> ultiTools;
-    private MockedStatic<SimpleHttpClient> http;
-    private MockedStatic<UltiCloudRequests> cloud;
 
     /** The service's clock, in milliseconds; tests move it with {@link #advance(int)}. */
     private final long[] now = {1_000_000_000L};
@@ -197,20 +200,13 @@ class LoginServicePanelTest {
         doReturn(scheduler).when(server).getScheduler();
 
         ultiTools = mockStatic(UltiTools.class);
-        http = mockStatic(SimpleHttpClient.class);
-        cloud = mockStatic(UltiCloudRequests.class);
     }
 
     @AfterEach
     void tearDown() throws Exception {
         try {
-            // D-04: the module makes no HTTP request to UltiCloud, in any test.
-            http.verifyNoInteractions();
-            cloud.verifyNoInteractions();
-        } finally {
-            cloud.close();
-            http.close();
             ultiTools.close();
+        } finally {
             UltiLoginTestHelper.tearDown();
             UltiLoginTestHelper.tearDownLiveServer();
         }
@@ -1040,6 +1036,61 @@ class LoginServicePanelTest {
             assertThat(en.get(key)).as("en %s asks for a different password", key)
                     .containsAnyOf("different from your UltiKits", "not your UltiKits");
             assertThat(zh.get(key)).as("zh %s", key).contains("UltiCloud", "备用", "不要", "UltiKits");
+        }
+    }
+
+    // ==================== no HTTP of its own ====================
+
+    /**
+     * D-04: the module makes no HTTP request to UltiCloud. Every link goes through {@link PlayerLinkPort}, whose
+     * production implementation calls the framework's player-link API. This scans the module's compiled classes,
+     * so it covers every code path rather than the flows the tests above happen to run.
+     */
+    @Nested
+    @DisplayName("no HTTP request of its own")
+    class NoHttpOfItsOwn {
+
+        /** A JDK connection type or method, or a framework utility whose simple name says HTTP or cloud. */
+        private final Pattern httpReference = Pattern.compile(
+                "java/net/(?:URLConnection|HttpURLConnection|Socket|http/)"
+                        + "|openConnection|openStream"
+                        + "|com/ultikits/ultitools/utils/[A-Za-z0-9_$]*(?:Http|Cloud)");
+
+        private List<Path> moduleClasses() throws Exception {
+            Path root = Paths.get(LoginService.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+            Path module = root.resolve("com/ultikits/plugins/login");
+            try (Stream<Path> files = Files.walk(module)) {
+                return files.filter(path -> path.toString().endsWith(".class")).collect(Collectors.toList());
+            }
+        }
+
+        private String constantPool(Path classFile) throws IOException {
+            return new String(Files.readAllBytes(classFile), StandardCharsets.ISO_8859_1);
+        }
+
+        @Test
+        @DisplayName("the scan reads the module's classes and sees the framework utilities they do use")
+        void scanSeesFrameworkUtilityReferences() throws Exception {
+            List<Path> classes = moduleClasses();
+            assertThat(classes).as("compiled module classes").hasSizeGreaterThan(10);
+            boolean seen = false;
+            for (Path classFile : classes) {
+                seen |= constantPool(classFile).contains("com/ultikits/ultitools/utils/XVersionUtils");
+            }
+            assertThat(seen).as("a framework utility the module is known to use").isTrue();
+        }
+
+        @Test
+        @DisplayName("no module class references an HTTP client or a framework HTTP or cloud utility")
+        void noModuleClassReferencesAnHttpClient() throws Exception {
+            List<String> offenders = new ArrayList<>();
+            for (Path classFile : moduleClasses()) {
+                Matcher matcher = httpReference.matcher(constantPool(classFile));
+                while (matcher.find()) {
+                    offenders.add(classFile.getFileName() + ": " + matcher.group());
+                }
+            }
+            assertThat(offenders).isEmpty();
         }
     }
 }
