@@ -71,14 +71,15 @@ import java.util.stream.Stream;
  * arrow, a call after a comparison, a forwarding call inside an anonymous class), each fix exposing
  * the next, so the lexer was replaced by the compiler's parser instead of being patched again.
  * <p>
- * This file is copied unchanged into every module; only its package line differs.
+ * Module scanners are maintained separately; shared character properties do not imply byte-identical copies.
  */
 final class I18nSourceScanner {
 
     /**
      * Both guards and the framework's {@code check-cjk-scope.sh} detect the same character properties: the Han
      * script, CJK Symbols and Punctuation (U+3000-U+303F) and Halfwidth and Fullwidth Forms (U+FF00-U+FFEF); kana
-     * (U+3040-U+30FF) is out. The Unicode version each one knows follows its toolchain -- the JDK here, PCRE2 on the
+     * (U+3040-U+30FF) is out; halfwidth katakana U+FF65-U+FF9F is in, through the forms range. The Unicode version
+     * each one knows follows its toolchain -- the JDK here, PCRE2 on the
      * CI runner -- so a character added in a newer Unicode version can be matched by one and not yet by the other.
      * Widened from U+4E00 through U+9FFF in 6.3.0 by the maintainer's decision of 2026-09-29 (UltiRemoteBag#44);
      * the Han script includes its extensions, the compatibility ideographs and the radicals.
