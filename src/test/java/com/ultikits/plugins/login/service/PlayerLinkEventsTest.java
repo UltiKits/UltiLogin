@@ -911,6 +911,46 @@ class PlayerLinkEventsTest {
             assertThat(service.isLoggedIn(playerUuid)).isFalse();
         }
 
+        @Test
+        @DisplayName("a late web registration refused by the address limit shows the limit line, not 'run /panel again'")
+        void lateRefusalByTheAddressLimitShowsTheLimitLine() throws Exception {
+            // UltiKits/UltiLogin#74 item 4 (maintainer decision 2026-11-08): running /panel again cannot help a
+            // player whose address is at max-register-per-ip, so the late answer names the limit instead.
+            setAccount(null, null);
+            String link = openLink();
+            service.onPlayerQuit(player);
+            service.onPlayerJoin(player);
+            when(config.getMaxRegisterPerIp()).thenReturn(1);
+            oneAccountAlreadyFromThisAddress();
+
+            assertThat(deliver(completion("LATE-LIMIT", link, LinkProof.WEB_REGISTRATION, true)))
+                    .isEqualTo(CompletionResult.REGISTRATION_REJECTED);
+
+            verify(dataOperator, never()).insert(any(AccountData.class));
+            assertThat(service.isLoggedIn(playerUuid)).isFalse();
+            verify(player, times(1)).sendMessage(ChatColor.RED + CatalogueText.text("zh", "ip_limit_reached"));
+            assertMessage("panel_late_completion", 0);
+        }
+
+        @Test
+        @DisplayName("a redelivered late refusal repeats the limit line, never 'run /panel again'")
+        void redeliveredLateRefusalStaysTheLimitLine() throws Exception {
+            setAccount(null, null);
+            String link = openLink();
+            service.onPlayerQuit(player);
+            service.onPlayerJoin(player);
+            when(config.getMaxRegisterPerIp()).thenReturn(1);
+            oneAccountAlreadyFromThisAddress();
+            LinkCompletion event = completion("LATE-LIMIT-2", link, LinkProof.WEB_REGISTRATION, true);
+
+            assertThat(deliver(event)).isEqualTo(CompletionResult.REGISTRATION_REJECTED);
+            assertThat(deliver(event)).as("a recorded result is answered again without side effects")
+                    .isEqualTo(CompletionResult.REGISTRATION_REJECTED);
+
+            verify(player, times(1)).sendMessage(ChatColor.RED + CatalogueText.text("zh", "ip_limit_reached"));
+            assertMessage("panel_late_completion", 0);
+        }
+
         @ParameterizedTest
         @org.junit.jupiter.params.provider.EnumSource(LinkExpiry.Reason.class)
         void gatewayEndRetainsTheAddressLimit(LinkExpiry.Reason reason) throws Exception {
@@ -1111,6 +1151,32 @@ class PlayerLinkEventsTest {
     @Nested
     @DisplayName("expiry events")
     class Expiry {
+
+        @Test
+        @DisplayName("a link a newer /panel replaced is superseded; the newest one is not")
+        void olderLinkIsSupersededByANewerRequest() throws Exception {
+            // UltiKits/UltiLogin#74 item 3: /panel's delivery callback stays silent for a superseded link.
+            service.onPlayerJoin(player);
+            String older = openLink();
+            String newer = openLink();
+            port.handler.onExpired(new LinkExpiry(older, playerUuid, LinkExpiry.Reason.CANCELLED));
+            runMainThread();
+
+            assertThat(service.isPanelRequestSuperseded(playerUuid, older)).isTrue();
+            assertThat(service.isPanelRequestSuperseded(playerUuid, newer)).isFalse();
+            assertThat(service.isPanelRequestSuperseded(playerUuid, null)).as("a failed result has no link")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("a link dropped by quit or a credential change is not 'superseded'")
+        void droppedLinkIsNotSuperseded() throws Exception {
+            service.onPlayerJoin(player);
+            String link = openLink();
+            service.invalidateSession(playerUuid, false);
+
+            assertThat(service.isPanelRequestSuperseded(playerUuid, link)).isFalse();
+        }
 
         @ParameterizedTest(name = "{0} -> {1}")
         @CsvSource({

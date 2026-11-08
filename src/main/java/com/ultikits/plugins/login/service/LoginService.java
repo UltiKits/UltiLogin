@@ -1861,6 +1861,26 @@ public class LoginService {
         }
     }
 
+    /**
+     * Whether a newer {@code /panel} request of the same player has replaced the link {@code linkId}.
+     * <p>
+     * The gateway cancels a player's older link when it creates a newer one, so a {@code /panel} run quickly twice
+     * can find its own link already ended by the time its result reaches the main thread. That link ends silently:
+     * the newer request answers for itself (UltiKits/UltiLogin#74 item 3). A link dropped because the player quit
+     * or their credentials changed is not superseded (those clear the player's latest request).
+     *
+     * @param playerUuid the player the link was made for
+     * @param linkId     the link id published in the {@link PanelLinkResult}; {@code null} for a failed result
+     * @return true if the player's latest request is a different one
+     */
+    public boolean isPanelRequestSuperseded(UUID playerUuid, String linkId) {
+        if (linkId == null) {
+            return false;
+        }
+        String latest = latestPanelRequest.get(playerUuid);
+        return latest != null && !latest.equals(linkId);
+    }
+
     private static void sendPanelMessage(Player player, String message) {
         if (player.isOnline()) {
             player.sendMessage(ChatColor.translateAlternateColorCodes('&', message));
@@ -1981,7 +2001,8 @@ public class LoginService {
      * account still obeys the creating address's cap and records that address while it is retained. After a restart
      * (or beyond the retention window) the address is unknown: the account has an empty address and skips the cap.
      * Nobody is logged in. A player online under another connection and not logged in is told to run {@code /panel}
-     * again.
+     * again, or, when the address limit refused the account, the {@code /register} limit line ({@code
+     * ip_limit_reached}).
      */
     private PlayerLinkPort.CompletionResult answerLateCompletion(PlayerLinkPort.LinkCompletion completion,
                                                                   AccountData account, Player player) {
@@ -2008,7 +2029,13 @@ public class LoginService {
         }
         record(completion, result);
         if (player != null && player.isOnline() && !isLoggedIn(completion.playerUuid())) {
-            sendPanelMessage(player, i18n("panel_late_completion"));
+            if (result == PlayerLinkPort.CompletionResult.REGISTRATION_REJECTED) {
+                // Running /panel again cannot help an address at max-register-per-ip: say so, as /register and a
+                // current completion do (UltiKits/UltiLogin#74 item 4).
+                player.sendMessage(ChatColor.RED + i18n("ip_limit_reached"));
+            } else {
+                sendPanelMessage(player, i18n("panel_late_completion"));
+            }
         }
         return result;
     }

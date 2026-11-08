@@ -207,6 +207,42 @@ class PanelCommandTest {
             verify(player, times(2)).sendMessage(anyString());
         }
 
+        @Test
+        @DisplayName("a link a newer /panel replaced before delivery ends silently: no link, no error")
+        void supersededLinkEndsSilently() {
+            // UltiKits/UltiLogin#74 item 3 (maintainer decision 2026-11-08): the newer /panel answers for itself,
+            // so the older one must not add "Failed to generate panel link" next to the working link.
+            Runnable task = captureResultDeliveryTask(
+                    new LoginService.PanelLinkResult(true, "https://panel.example/link", null, "link-old"));
+            when(loginService.isPanelRequestCurrent(eq(playerUuid), eq("link-old"), anyLong())).thenReturn(false);
+            when(loginService.isPanelRequestSuperseded(playerUuid, "link-old")).thenReturn(true);
+
+            Player.Spigot spigot = mock(Player.Spigot.class);
+            when(player.spigot()).thenReturn(spigot);
+
+            task.run();
+
+            verify(spigot, never()).sendMessage(any(BaseComponent.class));
+            verify(loginService, never()).announcePanelPause(any());
+            // Only openPanel()'s own "generating" message.
+            verify(player, times(1)).sendMessage(anyString());
+            verify(player, never()).sendMessage(
+                    ChatColor.translateAlternateColorCodes('&', CatalogueText.text("zh", "panel_error")));
+        }
+
+        @Test
+        @DisplayName("a failed request is still reported even when a newer /panel exists")
+        void failureIsReportedEvenWithANewerRequest() {
+            Runnable task = captureResultDeliveryTask(new LoginService.PanelLinkResult(false, null, "limited", null,
+                    LoginService.PanelLinkResult.Failure.RATE_LIMITED));
+            lenient().when(loginService.isPanelRequestSuperseded(any(), any())).thenReturn(true);
+
+            task.run();
+
+            verify(player).sendMessage(ChatColor.translateAlternateColorCodes('&',
+                    CatalogueText.text("zh", "panel_create_rate_limited")));
+        }
+
         @org.junit.jupiter.params.ParameterizedTest(name = "{0} -> {1}")
         @org.junit.jupiter.params.provider.CsvSource({
                 "LINK_ERROR,    panel_link_error",

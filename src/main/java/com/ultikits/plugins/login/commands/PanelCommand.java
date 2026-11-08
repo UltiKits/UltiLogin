@@ -95,6 +95,12 @@ public class PanelCommand extends BaseCommandExecutor {
                     // The countdown has been paused since the request existed; say so now that the
                     // player actually holds a link. The outcome arrives as an event, nothing polls.
                     loginService.announcePanelPause(player);
+                } else if (result.isSuccess()
+                        && loginService.isPanelRequestSuperseded(player.getUniqueId(), result.getLinkId())) {
+                    // A newer /panel replaced this link before it reached the player (the gateway cancels the
+                    // older link): the newer request answers for itself, so this one ends silently
+                    // (UltiKits/UltiLogin#74 item 3).
+                    return;
                 } else {
                     player.sendMessage(ChatColor.translateAlternateColorCodes('&', failureMessage(result)));
                 }

@@ -22,6 +22,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- When a second `/panel` replaces a link before the first one reached the player, the older link now ends silently
+  instead of printing "Failed to generate panel link" next to the working link. A web registration that finishes after
+  its link ended and is refused by `max-register-per-ip` now shows the address-limit message instead of asking the
+  player to run `/panel` again (UltiKits/UltiLogin#74).
+- 连续两次执行 `/panel` 时，若较早的链接在送达玩家前已被新链接取代，现在会静默结束，不再在可用链接旁显示“生成面板链接失败”。
+  链接结束后才完成、并因 `max-register-per-ip` 被拒绝的网页注册，现在显示 IP 注册上限提示，而不是让玩家重新执行 `/panel`
+  （UltiKits/UltiLogin#74）。
 - Declining a web sign-in with "Not me" now uses neutral wording and asks the player to run `/panel` again. The bind
   and replace pages' "Cancel" buttons give the same declined message; the unused old refusal text is no longer shipped.
 - 在网页登录页点击“不是我”时，现在使用中性的拒绝提示，并说明需重新执行 `/panel`。绑定页和替换页的“取消”按钮也显示同一条提示；不再随模块提供无人读取的旧拒绝文字。
