@@ -5,10 +5,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 本文件记录本项目的所有重要更改，格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)。
 
-## [Unreleased]
+## [2.1.0] - 2026-11-09
 
 ### Added
 
+- On Minecraft versions below 1.21 the module now needs UltiTools-API 6.4.0 or later. With an older UltiTools-API it
+  refuses to start before any of its commands, listeners or tasks is registered and logs "UltiLogin needs UltiTools 6.4.0
+  or later on Minecraft versions below 1.21 (server: …, UltiTools: …). Please update UltiTools."; the core plugin keeps
+  running. On Minecraft 1.21 or later the requirement stays UltiTools-API 6.3.1 or later (UltiKits/UltiTools-Reborn#655).
+- 在 Minecraft 1.21 以下版本上，本模块现在需要 UltiTools-API 6.4.0 或更高版本。UltiTools-API 较旧时，模块会在注册任何命令、监听器或任务之前
+  拒绝启动，并记录“在 Minecraft 1.21 以下版本运行 UltiLogin 需要 UltiTools 6.4.0 或更高版本（服务端：…，UltiTools：…）。请更新 UltiTools。”；
+  核心插件照常运行。在 Minecraft 1.21 及以上版本，要求仍为 UltiTools-API 6.3.1 或更高版本（UltiKits/UltiTools-Reborn#655）。
+- The project is published under the MIT licence.
+- 本项目以 MIT 许可证发布。
 - On UltiTools-API 6.3.1 the module registers `/login`, `/l`, `/register`, `/reg`, `/changepassword`, `/changepw`,
   `/cpw`, `/setpassword`, `/setpw`, `/recover`, `/logadmin`, `/loginadmin` and `/regs` with the framework's
   sensitive-command registry when it is enabled, so their arguments are replaced with `***` in everything the
@@ -74,6 +83,25 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   use `/login`.
 - UltiLogin 2.0.0 的 `/panel` 请求路径（对 UltiCloud 的 HTTP 请求、三秒轮询、登录提示中服主／玩家的区分、四种拒绝原因以及凭据被拒绝的提示）已移除，且没有
   兼容桥接：UltiLogin 2.0.0 的 `/panel` 在 UltiTools-API 6.3.1 上不能使用，请更新到此版本。玩家仍可使用 `/login`。
+
+### Fixed
+
+- On a Paper version that lacks an event one of the login protections uses, the other protections are still registered.
+  The mount guard falls back to the older mount event; the item-pick, sign-opening and equipment-slot-swap guards are each
+  skipped with one console warning naming the missing hook when the server has no equivalent event. Before, one missing
+  event could stop the remaining Paper-specific protections from registering (UltiKits/UltiLogin#83).
+- 在缺少某个登录保护所用事件的 Paper 版本上，其余保护仍会注册。骑乘保护会改用旧的骑乘事件；服务端没有等价事件时，拾取方块、打开告示牌和装备栏交换保护
+  会各自跳过，并在控制台给出一条指明缺失钩子的警告。此前缺少一个事件可能导致其余 Paper 专属保护都无法注册（UltiKits/UltiLogin#83）。
+- A player who is not logged in and slides sideways off a block edge is now put back at the centre of the block column
+  they stood in, at the lowest height where their bounding box does not collide with the real block shapes (full blocks
+  and slabs alike); when no such height exists the player stays where they were (UltiKits/UltiLogin#74).
+- 未登录玩家从方块边缘横向滑落时，现在会被放回原所在方块列的中心，高度取其碰撞箱不与实际方块形状（完整方块与台阶均按实际形状）相交的最低位置；
+  找不到这样的高度时玩家留在原处（UltiKits/UltiLogin#74）。
+- Expired failed-login locks (per address, per account and per address-and-account pair) of players who never return
+  are now cleared by the regular failed-login housekeeping instead of staying in memory until shutdown
+  (UltiKits/UltiLogin#65, UltiKits/UltiLogin#88).
+- 从未再回来的玩家留下的已过期登录失败锁定（按地址、按账号、按地址与账号组合）现在会在常规的登录失败清理中移除，不再一直留在内存中直到关服
+  （UltiKits/UltiLogin#65、UltiKits/UltiLogin#88）。
 
 ## [2.0.0] - 2026-10-21
 
