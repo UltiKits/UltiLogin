@@ -187,7 +187,7 @@ UltiLogin 2.1.0 不会在更旧的 UltiTools-API 版本上加载。
   name to an UltiKits account on the web. On an offline-mode server where players share a public IP, someone else
   joining under a name that is not linked yet, from that IP, within that window, could link it to their own account.
   On such a server turn sessions off (`session-enabled: false`) or link your name early.
-- **Remote-console password reset records depend on the framework version.** With UltiTools-API 6.4.0 or later,
+- **Remote-console password reset records depend on the framework version.** As of UltiTools-API 6.4.0,
   UltiLogin's sensitive-command registration makes the framework record `logadmin reset <player> <password>` as
   `logadmin ***`: in its `[Remote command] > ...` echo, blocked/failure lines (console and `logs/latest.log`),
   the `target` in its remote-action audit log (`plugins/UltiTools/security/action.log.<n>`), and the panel log stream.
@@ -219,7 +219,7 @@ UltiLogin 2.1.0 不会在更旧的 UltiTools-API 版本上加载。
   重进的玩家无需密码即被登录，随后可在网页上把该名字关联到 UltiKits 账号。在玩家共用公网 IP 的离线模式服务器上，他人若在这段
   时间内从该 IP 以尚未关联的名字进入，就可能把它关联到自己的账号。此类服务器请关闭会话（`session-enabled: false`），或尽早关联
   自己的名字。
-- **远程控制台密码重置的记录方式取决于框架版本。** 在 UltiTools-API 6.4.0 或更高版本上，UltiLogin 的敏感命令登记会让框架把
+- **远程控制台密码重置的记录方式取决于框架版本。** 自 UltiTools-API 6.4.0 起，UltiLogin 的敏感命令登记会让框架把
   `logadmin reset <玩家> <密码>` 记录为 `logadmin ***`：覆盖 `[Remote command] > ...` 回显、拦截／失败行
   （控制台与 `logs/latest.log`）、远程操作审计日志（`plugins/UltiTools/security/action.log.<n>`）中的 `target`，以及面板日志流。
   在 UltiTools-API 6.3.x 上，这些记录仍会包含明文命令：请升级框架，或改为在游戏内重置密码。这不会改变下文所述的密码重置回复
@@ -417,7 +417,7 @@ masked. Two cases the filter cannot cover are listed under "Known limitations" a
 Since UltiTools-API 6.3.1 the module also registers `/login`, `/l`, `/register`, `/reg`, `/changepassword`, `/changepw`,
 `/cpw`, `/setpassword`, `/setpw`, `/recover`, `/logadmin`, `/loginadmin` and `/regs` with the framework, which replaces
 their arguments with `***` in everything it sends to UltiCloud (the panel log stream, error reports, chat).
-With UltiTools-API 6.4.0 or later, that same registration also masks the framework's own remote-command echo,
+As of UltiTools-API 6.4.0, that same registration also masks the framework's own remote-command echo,
 blocked/failure lines and remote-action audit targets as `logadmin ***` for a reset; 6.3.x leaves those records
 in plain text. Player-command lines in the local console and log files still use the module's own `******` mask,
 and `/regs` issued by a player stays readable locally. The command's own reply is unchanged (see "Known limitations").
@@ -432,7 +432,7 @@ UltiLogin 启用期间会在服务器日志（Log4j 根日志器）上挂一个�
 
 从 UltiTools-API 6.3.1 起，模块还会把 `/login`、`/l`、`/register`、`/reg`、`/changepassword`、`/changepw`、`/cpw`、
 `/setpassword`、`/setpw`、`/recover`、`/logadmin`、`/loginadmin` 和 `/regs` 登记到框架，框架发往 UltiCloud 的所有内容
-（面板日志流、错误报告、聊天）中，这些命令的参数都会被替换为 `***`。在 UltiTools-API 6.4.0 或更高版本上，同一份登记也会遮蔽框架自身的
+（面板日志流、错误报告、聊天）中，这些命令的参数都会被替换为 `***`。自 UltiTools-API 6.4.0 起，同一份登记也会遮蔽框架自身的
 远程命令回显、拦截／失败行与远程操作审计日志的目标字段，重置命令显示为 `logadmin ***`；6.3.x 的这些记录仍为明文。
 玩家命令在本地控制台与日志文件中仍使用模块自己的 `******` 遮蔽，玩家执行的 `/regs` 在本地照常可见。命令自身的回复不变（见“已知限制”）。
 

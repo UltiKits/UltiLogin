@@ -373,7 +373,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `******` (`Steve issued server command: /login ******`), in any letter case and with any namespace prefix; other
   commands are logged unchanged, and the filter is removed when the module is unloaded. The filter itself does not
   cover the framework's remote-command records or the reply to `logadmin reset` run from the console
-  (UltiKits/UltiLogin#57). With UltiTools-API 6.4.0 or later, the module's existing sensitive-command registration
+  (UltiKits/UltiLogin#57). As of UltiTools-API 6.4.0, the module's existing sensitive-command registration
   makes the framework record a remote reset as `logadmin ***` in its echo, blocked/failure lines, remote-action audit
   target and panel log stream (UltiKits/UltiTools-Reborn#868); 6.3.x still records the command in plain text.
   Update the framework or reset passwords in game. The command's own reply is unchanged; see README Known limitations.
@@ -382,7 +382,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   （含所有别名）过去会连同密码一起被记录。现在模块启用期间，服务器 Log4j 根日志器上的过滤器会把这些命令的参数替换为 `******`
   （`Steve issued server command: /login ******`），不区分大小写、带任何命名空间前缀均可；其他命令照常记录，模块卸载时过滤器随之
   移除。过滤器本身不覆盖框架的远程命令记录，也不覆盖在控制台执行 `logadmin reset` 时的回复（UltiKits/UltiLogin#57）。
-  在 UltiTools-API 6.4.0 或更高版本上，模块已有的敏感命令登记会让框架把远程重置记录为 `logadmin ***`，覆盖回显、拦截／失败行、
+  自 UltiTools-API 6.4.0 起，模块已有的敏感命令登记会让框架把远程重置记录为 `logadmin ***`，覆盖回显、拦截／失败行、
   远程操作审计日志的目标字段与面板日志流（UltiKits/UltiTools-Reborn#868）；6.3.x 仍记录明文命令，请升级框架或在游戏内重置密码。
   命令自身的回复不变，详见 README 的“已知限制”。
 - The failed-login count now follows what `security.lockout-type` locks. With `UUID` it is kept per account, so
